@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://vertice-bot1-production.up.railway.app/api/:path*"
+    }
+  ]
+}
