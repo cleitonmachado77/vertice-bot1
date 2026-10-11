@@ -249,7 +249,27 @@ a.nav-pill { display: inline-flex; align-items: center; text-decoration: none; }
   text-decoration: none;
   transition: background 0.2s ease;
 }
-.list button:hover, .person:hover { background: rgba(199, 226, 236, 0.28); }
+.conv-row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
+}
+.conv-row > button[data-id] {
+  border-bottom: 0;
+  width: auto;
+  flex: 1;
+}
+.conv-remove {
+  width: auto;
+  flex: 0 0 auto;
+  border: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: var(--danger);
+  padding: 0 8px;
+  font-size: 0.85rem;
+}
+.list button:hover, .person:hover, .conv-row:hover { background: rgba(199, 226, 236, 0.28); }
 .list button.active { background: rgba(199, 226, 236, 0.55); }
 
 .pill {

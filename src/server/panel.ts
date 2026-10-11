@@ -13,6 +13,7 @@ import {
   listMessages,
   setHumanHandoff,
 } from './store.js';
+import { hideConversation } from './conversation-visibility.js';
 import { recordOutbound } from './thread.js';
 
 function requireUser(ctx: Ctx): boolean {
@@ -131,6 +132,17 @@ export function registerPanelRoutes(): void {
   route('GET', '/api/conversations', async (ctx) => {
     if (!requireUser(ctx)) return;
     json(ctx.res, 200, { items: await listConversations() });
+  });
+
+  route('DELETE', '/api/conversations/:id', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    const conversation = await getConversation(ctx.params.id);
+    if (!conversation) {
+      json(ctx.res, 404, { error: 'Conversa não encontrada' });
+      return;
+    }
+    await hideConversation(ctx.params.id);
+    json(ctx.res, 200, { ok: true });
   });
 
   route('GET', '/api/conversations/:id/messages', async (ctx) => {

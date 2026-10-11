@@ -180,6 +180,7 @@ async function migrate(): Promise<void> {
   await run(
     `UPDATE messages SET origin = 'whatsapp' WHERE direction = 'OUTBOUND' AND origin = 'contact'`,
   );
+  await run(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hidden INTEGER NOT NULL DEFAULT 0`);
 }
 
 async function seedSettings(): Promise<void> {

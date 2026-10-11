@@ -103,23 +103,46 @@ function drawList(items) {
   return items
     .map(
       (item) => `
-      <button type="button" data-id="${escapeHtml(item.id)}" class="${item.id === selected ? 'active' : ''}">
-        <span><strong>${escapeHtml(item.contact_name || item.contact_phone || 'Contato')}</strong><br>
-        <span class="muted">${escapeHtml(item.preview || 'Sem mensagens')}</span></span>
-        <span class="muted">${escapeHtml(formatWhen(item.last_message_at))}</span>
-      </button>`,
+      <div class="conv-row">
+        <button type="button" data-id="${escapeHtml(item.id)}" class="${item.id === selected ? 'active' : ''}">
+          <span><strong>${escapeHtml(item.contact_name || item.contact_phone || 'Contato')}</strong><br>
+          <span class="muted">${escapeHtml(item.preview || 'Sem mensagens')}</span></span>
+          <span class="muted">${escapeHtml(formatWhen(item.last_message_at))}</span>
+        </button>
+        <button type="button" class="conv-remove" data-remove="${escapeHtml(item.id)}" aria-label="Apagar conversa">Apagar</button>
+      </div>`,
     )
     .join('');
 }
 
 function bindList(root) {
-  root.querySelectorAll('#conv-list button').forEach((button) => {
+  root.querySelectorAll('#conv-list button[data-id]').forEach((button) => {
     button.addEventListener('click', () => openConversation(button.dataset.id));
+  });
+  root.querySelectorAll('#conv-list button[data-remove]').forEach((button) => {
+    button.addEventListener('click', () => removeConversation(button.dataset.remove));
   });
 }
 
+async function removeConversation(id) {
+  if (!window.confirm('Apagar esta conversa da lista?')) return;
+  try {
+    await api(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (selected === id) {
+      selected = '';
+      shownId = '';
+      painted = '';
+      const thread = document.querySelector('#thread');
+      if (thread) thread.innerHTML = '<p class="muted">Escolha uma conversa.</p>';
+    }
+    document.querySelector(`#conv-list button[data-remove="${CSS.escape(id)}"]`)?.closest('.conv-row')?.remove();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function markSelected(id) {
-  document.querySelectorAll('#conv-list button').forEach((button) => {
+  document.querySelectorAll('#conv-list button[data-id]').forEach((button) => {
     button.classList.toggle('active', button.dataset.id === id);
   });
 }

@@ -1,3 +1,4 @@
+import { unhideConversation } from './conversation-visibility.js';
 import { many, one, run } from './db.js';
 
 const now = () => new Date().toISOString();
@@ -173,6 +174,7 @@ export async function listConversations(): Promise<ConversationRecord[]> {
               conversations.updated_at, COALESCE(contacts.human_handoff, 0) AS human_handoff
        FROM conversations
        LEFT JOIN contacts ON contacts.id = conversations.contact_id
+       WHERE conversations.hidden = 0
        ORDER BY ${personKey}, conversations.last_message_at DESC
      ) people
      ORDER BY last_message_at DESC`,
@@ -202,19 +204,11 @@ export async function upsertMessage(input: {
   origin?: string;
   raw: unknown;
 }): Promise<void> {
-  await run(
+  const inserted = await one<{ id: string }>(
     `INSERT INTO messages(id, conversation_id, direction, type, text, media_url, created_at, raw_json, origin)
      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     ON CONFLICT(id) DO UPDATE SET
-       text = excluded.text,
-       direction = excluded.direction,
-       type = excluded.type,
-       media_url = excluded.media_url,
-       raw_json = excluded.raw_json,
-       origin = CASE
-         WHEN messages.origin IN ('manual', 'agent', 'scheduled') THEN messages.origin
-         ELSE excluded.origin
-       END`,
+     ON CONFLICT(id) DO NOTHING
+     RETURNING id`,
     [
       input.id,
       input.conversationId,
@@ -223,6 +217,32 @@ export async function upsertMessage(input: {
       input.text,
       input.mediaUrl || '',
       input.createdAt,
+      JSON.stringify(input.raw),
+      input.origin || 'contact',
+    ],
+  );
+  if (inserted) {
+    await unhideConversation(input.conversationId);
+    return;
+  }
+  await run(
+    `UPDATE messages SET
+       text = $2,
+       direction = $3,
+       type = $4,
+       media_url = $5,
+       raw_json = $6,
+       origin = CASE
+         WHEN origin IN ('manual', 'agent', 'scheduled') THEN origin
+         ELSE $7
+       END
+     WHERE id = $1`,
+    [
+      input.id,
+      input.text,
+      input.direction,
+      input.type,
+      input.mediaUrl || '',
       JSON.stringify(input.raw),
       input.origin || 'contact',
     ],
@@ -301,7 +321,9 @@ export async function dashboardCounts() {
   const contacts = await one<{ total: number }>('SELECT COUNT(*)::int AS total FROM contacts');
   const conversations = await one<{ total: number }>(
     `SELECT COUNT(*)::int AS total FROM (
-       SELECT DISTINCT COALESCE(NULLIF(contact_id, ''), NULLIF(contact_phone, ''), id) AS person FROM conversations
+       SELECT DISTINCT COALESCE(NULLIF(contact_id, ''), NULLIF(contact_phone, ''), id) AS person
+       FROM conversations
+       WHERE hidden = 0
      ) people`,
   );
   const events = await one<{ total: number }>('SELECT COUNT(*)::int AS total FROM events');
