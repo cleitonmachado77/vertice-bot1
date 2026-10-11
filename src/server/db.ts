@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import pg from 'pg';
+import { databaseConnectionString } from './database-url.js';
 import { env } from './env.js';
 
 const cache = new Map<string, string>();
@@ -52,7 +53,7 @@ export async function initDatabase(): Promise<void> {
 
 function getPool(): pg.Pool {
   if (pool) return pool;
-  const connectionString = env('DATABASE_URL');
+  const connectionString = databaseConnectionString(env('DATABASE_URL'));
   if (!connectionString) throw new Error('DATABASE_URL não configurada');
   pool = new pg.Pool({
     connectionString,
