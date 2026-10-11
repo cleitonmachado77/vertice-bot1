@@ -1,5 +1,6 @@
 import { mapContact, mapConversation, mapMessage } from './map.js';
 import { nevoaList } from './nevoa.js';
+import { answerInbound } from './reply.js';
 import { insertContactIfMissing, upsertContact, upsertConversation } from './store.js';
 import { attachLocalThread, saveSyncedMessage } from './thread.js';
 
@@ -15,7 +16,8 @@ export async function syncContactsAndConversations(): Promise<{ contacts: number
   for (const row of conversations) {
     const mapped = mapConversation(row);
     if (!mapped.id) continue;
-    await upsertConversation({ ...mapped, raw: row });
+    const changed = await upsertConversation({ ...mapped, raw: row });
+    if (changed) await syncConversationMessages(mapped.id);
     if (mapped.contactId) {
       await attachLocalThread(mapped.id, mapped.contactId);
       await insertContactIfMissing({
@@ -34,7 +36,15 @@ export async function syncConversationMessages(conversationId: string): Promise<
   for (const row of items) {
     const mapped = mapMessage(row);
     if (!mapped.id) continue;
-    await saveSyncedMessage({ ...mapped, conversationId, raw: row });
+    const saved = await saveSyncedMessage({ ...mapped, conversationId, raw: row });
+    if (saved?.direction === 'INBOUND') {
+      await answerInbound({
+        messageId: saved.id,
+        conversationId,
+        text: saved.text,
+        createdAt: saved.createdAt,
+      });
+    }
   }
   return items.length;
 }

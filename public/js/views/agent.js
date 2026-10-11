@@ -5,7 +5,8 @@ export async function renderAgent(root) {
   const agent = await api('/api/agent');
   root.innerHTML = `
     <div class="top"><div><p class="kicker">Modelo</p><h1>Agente</h1><p class="muted">Modelo, chave e o prompt geral. Cada contato pode ter o próprio prompt e as próprias instruções.</p></div></div>
-    <form class="card stack" id="agent-form" style="padding: 18px;">
+    <div class="split-board">
+    <form class="card stack" id="agent-form">
       <div class="grid-2">
         <div><label>Nome</label><input name="name" value="${escapeHtml(agent.name)}" /></div>
         <div><label>Modelo</label><input name="model" value="${escapeHtml(agent.model)}" /></div>
@@ -22,17 +23,18 @@ export async function renderAgent(root) {
       </div>
       <label>Mensagem reserva</label>
       <textarea name="fallback">${escapeHtml(agent.fallback)}</textarea>
-      <p class="muted">No inbox, a IA responde cada conversa até você marcar Assumir conversa.</p>
+      <p class="muted">No inbox, cada conversa fica em IA até você passar a chave para Humano.</p>
       <label class="check"><input name="active" type="checkbox" ${agent.active ? 'checked' : ''}/> Agente ativo</label>
       <button class="btn" type="submit">Salvar agente</button>
     </form>
-    <form class="card stack" id="preview-form" style="padding: 18px;">
+    <form class="card stack" id="preview-form">
       <h2>Testar prompt</h2>
       <p class="muted">Isso não envia nada no WhatsApp.</p>
       <textarea name="text" placeholder="Olá, vocês atendem hoje?"></textarea>
       <button class="btn-ghost" type="submit">Gerar resposta</button>
       <pre id="preview-result">A resposta aparece aqui.</pre>
-    </form>`;
+    </form>
+    </div>`;
 
   document.querySelector('#agent-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -50,6 +52,7 @@ export async function renderAgent(root) {
           history: Number(form.get('history')),
           fallback: form.get('fallback'),
           active: form.get('active') === 'on',
+          autoReply: form.get('active') === 'on',
         },
       });
       toast('Agente salvo');

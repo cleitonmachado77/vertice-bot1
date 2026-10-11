@@ -18,6 +18,7 @@ const routes = {
 };
 
 const app = document.querySelector('#app');
+let drawnKey = '';
 
 window.addEventListener('hashchange', () => {
   draw().catch((error) => showError(error));
@@ -25,78 +26,123 @@ window.addEventListener('hashchange', () => {
 
 draw().catch((error) => showError(error));
 
-async function draw() {
-  stopInbox();
-  stopContacts();
-  stopOverview();
-  const me = await api('/api/me');
+function currentRoute() {
   const raw = location.hash.replace('#/', '') || 'overview';
   const contactId = raw.startsWith('contacts/') ? decodeURIComponent(raw.slice('contacts/'.length)) : '';
   const inboxFocus = raw === 'inbox' ? '' : raw.startsWith('inbox/') ? decodeURIComponent(raw.slice('inbox/'.length)) : null;
   const name = contactId ? 'contacts' : inboxFocus !== null ? 'inbox' : raw;
+  return { contactId, inboxFocus, name, key: `${name}|${contactId}|${inboxFocus ?? ''}` };
+}
+
+function stopViews() {
+  stopInbox();
+  stopContacts();
+  stopOverview();
+}
+
+async function draw() {
+  const me = await api('/api/me');
+  const current = currentRoute();
   if (!me.authenticated) {
+    stopViews();
+    drawnKey = '';
     renderLogin();
     return;
   }
-  const route = routes[name] || routes.overview;
-  app.innerHTML = shell(name);
-  document.querySelector('#menu').addEventListener('click', () => {
-    document.querySelector('.topbar').classList.toggle('open');
-  });
-  document.querySelector('#logout').addEventListener('click', async () => {
-    await api('/api/logout', { method: 'POST', body: {} });
-    location.hash = '#/login';
-    renderLogin();
-  });
+  if (drawnKey === current.key && document.querySelector('#view')) return;
+  stopViews();
+  drawnKey = current.key;
+  const route = routes[current.name] || routes.overview;
+  if (!document.querySelector('.shell')) {
+    app.innerHTML = shell(current.name, route.title);
+    const frame = document.querySelector('.shell');
+    if (sessionStorage.getItem('nav-collapsed') === '1') frame.classList.add('collapsed');
+    bindChrome(frame);
+  } else {
+    syncChrome(current.name, route.title);
+  }
   const view = document.querySelector('#view');
-  if (contactId) await renderContact(view, contactId);
-  else if (name === 'inbox') await renderInbox(view, inboxFocus || '');
+  if (current.contactId) await renderContact(view, current.contactId);
+  else if (current.name === 'inbox') await renderInbox(view, current.inboxFocus || '');
   else await route.render(view);
 }
 
-function shell(active) {
+function bindChrome(frame) {
+  document.querySelector('#menu').addEventListener('click', () => {
+    frame.classList.toggle('nav-open');
+  });
+  document.querySelector('#backdrop').addEventListener('click', () => {
+    frame.classList.remove('nav-open');
+  });
+  document.querySelector('#collapse').addEventListener('click', () => {
+    const collapsed = frame.classList.toggle('collapsed');
+    sessionStorage.setItem('nav-collapsed', collapsed ? '1' : '0');
+  });
+  const leave = async () => {
+    await api('/api/logout', { method: 'POST', body: {} });
+    drawnKey = '';
+    location.hash = '#/login';
+    renderLogin();
+  };
+  document.querySelector('#logout').addEventListener('click', leave);
+  document.querySelector('#logout-top').addEventListener('click', leave);
+}
+
+function syncChrome(active, title) {
+  document.querySelector('.shell')?.classList.toggle('is-inbox', active === 'inbox');
+  const heading = document.querySelector('.page-title');
+  if (heading) heading.textContent = title;
+  document.querySelectorAll('.side-nav a').forEach((link) => {
+    link.classList.toggle('active', link.getAttribute('href') === `#/${active}`);
+  });
+}
+
+function shell(active, title) {
   const links = Object.entries(routes)
     .map(
       ([key, route]) =>
-        `<a class="${key === active ? 'active' : ''}" href="#/${key}">${escapeHtml(route.title)}</a>`,
+        `<a class="${key === active ? 'active' : ''}" href="#/${key}">${icon(key)}<span>${escapeHtml(route.title)}</span></a>`,
     )
     .join('');
   return `
-    <div class="shell">
-      <header class="topbar">
-        <a class="brand" href="#/overview">${mark()}<strong>Vertice</strong></a>
-        <button class="nav-toggle" id="menu" type="button" aria-label="Abrir menu"><span></span><span></span></button>
-        <nav>
-          ${links}
-          <button class="nav-pill" id="logout" type="button">Sair</button>
-        </nav>
-      </header>
-      <main class="main" id="view"></main>
+    <div class="shell${active === 'inbox' ? ' is-inbox' : ''}">
+      <aside class="sidebar">
+        <div class="side-brand">
+          <a class="brand" href="#/overview">${mark()}<strong>Vértice</strong></a>
+          <button class="icon-btn" id="collapse" type="button" aria-label="Recolher menu">${icon('collapse')}</button>
+        </div>
+        <nav class="side-nav">${links}</nav>
+        <div class="side-foot">
+          <span class="avatar">VI</span>
+          <div class="side-user"><strong>Vértice</strong><span>Painel</span></div>
+          <button class="icon-btn" id="logout" type="button" aria-label="Sair">${icon('logout')}</button>
+        </div>
+      </aside>
+      <div class="backdrop" id="backdrop"></div>
+      <div class="workspace">
+        <header class="topbar">
+          <button class="icon-btn nav-toggle" id="menu" type="button" aria-label="Abrir menu">${icon('menu')}</button>
+          <h2 class="page-title">${escapeHtml(title)}</h2>
+          <button class="btn-ghost" id="logout-top" type="button">Sair</button>
+        </header>
+        <main class="main" id="view"></main>
+      </div>
     </div>`;
 }
 
 function renderLogin() {
+  drawnKey = '';
   app.innerHTML = `
     <section class="gate">
-      <header class="topbar">
-        <a class="brand" href="#/overview">${mark()}<strong>Vertice</strong></a>
-        <a class="nav-pill" href="#password">Entrar</a>
-      </header>
-      <div class="gate-body">
-        <div class="gate-copy">
-          <h1>Acesse o próximo nível da operação.</h1>
-          <p class="lede">O painel da Vértice acompanha contatos, respostas e disparos em tempo real para decidir com mais clareza.</p>
-          <p class="trust">Painel do WhatsApp da Vértice Inovação</p>
-        </div>
-        <form class="gate-form" id="login-form">
-          <h2>Entrar</h2>
-          <p class="muted">Use a senha do painel para continuar.</p>
-          <label for="password">Senha do painel</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" required />
-          <p class="muted" id="login-error"></p>
-          <button class="btn" type="submit">Entrar</button>
-        </form>
-      </div>
+      <form class="gate-card" id="login-form">
+        ${mark()}
+        <h1>Entrar</h1>
+        <p class="muted">Painel da Vértice Inovação. Use a senha para acompanhar conversas, contatos e disparos.</p>
+        <label for="password">Senha do painel</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <p class="login-error" id="login-error"></p>
+        <button class="btn" type="submit">Entrar</button>
+      </form>
     </section>`;
   document.querySelector('#login-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -116,5 +162,26 @@ function showError(error) {
 }
 
 function mark() {
-  return '<svg class="mark" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8" fill="#fff"/><path d="M9 1.2a7.8 7.8 0 0 0 0 15.6 6.2 6.2 0 0 1 0-15.6z" fill="#0a0a0a"/></svg>';
+  return '<svg class="mark" width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="10" fill="#111827"/><path d="M9 22.5 16 8.5l7 14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+
+function icon(name) {
+  const paths = {
+    overview:
+      '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    agent:
+      '<path d="M12 3v2"/><circle cx="12" cy="13" r="7"/><path d="M9 13h.01M15 13h.01M9.5 16.5c.8.7 1.6 1 2.5 1s1.7-.3 2.5-1"/>',
+    contacts:
+      '<path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a3 3 0 0 1 0 5.75"/>',
+    inbox:
+      '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    integrations:
+      '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    events:
+      '<path d="M12 8v4l2.5 2.5"/><circle cx="12" cy="12" r="9"/>',
+    menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    collapse: '<path d="M15 6l-6 6 6 6"/>',
+    logout: '<path d="M9 6H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/><path d="M14 16l4-4-4-4"/><path d="M18 12H9"/>',
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 }

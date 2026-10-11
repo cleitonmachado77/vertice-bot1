@@ -74,7 +74,7 @@ export async function saveSyncedMessage(input: {
   text: string;
   createdAt: string;
   raw: unknown;
-}): Promise<void> {
+}): Promise<{ id: string; direction: 'INBOUND' | 'OUTBOUND'; text: string; createdAt: string } | null> {
   const direction = input.direction.toUpperCase() === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND';
   if (direction === 'OUTBOUND' && input.text.trim()) {
     const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
@@ -85,7 +85,7 @@ export async function saveSyncedMessage(input: {
        LIMIT 1`,
       [input.conversationId, input.text, since],
     );
-    if (twin) return;
+    if (twin) return null;
   }
   await upsertMessage({
     id: input.id,
@@ -97,4 +97,5 @@ export async function saveSyncedMessage(input: {
     origin: direction === 'INBOUND' ? 'contact' : 'whatsapp',
     raw: input.raw,
   });
+  return { id: input.id, direction, text: input.text, createdAt: input.createdAt };
 }

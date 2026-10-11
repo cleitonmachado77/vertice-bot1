@@ -3,6 +3,19 @@ import { many, one, run } from './db.js';
 
 const now = () => new Date().toISOString();
 
+function hasLetters(value: string): boolean {
+  return /\p{L}/u.test(value);
+}
+
+function preferNamed(current: string, incoming: string): string {
+  if (hasLetters(current) && !hasLetters(incoming)) return current;
+  return incoming;
+}
+
+function sameText(current: string | null | undefined, next: string): boolean {
+  return String(current || '') === String(next || '');
+}
+
 export type ContactRecord = {
   id: string;
   name: string;
@@ -53,30 +66,37 @@ export async function upsertContact(input: {
   blocked: boolean;
   raw: unknown;
 }): Promise<void> {
+  const existing = await one<{ name: string; phone: string; email: string; tags_json: string; blocked: number }>(
+    'SELECT name, phone, email, tags_json, blocked FROM contacts WHERE id = $1',
+    [input.id],
+  );
+  const name = existing ? preferNamed(existing.name, input.name) : input.name;
+  const phone = existing && input.phone === '' ? existing.phone : input.phone;
+  const email = existing && input.email === '' ? existing.email : input.email;
+  const tags = JSON.stringify(input.tags);
+  const blocked = input.blocked ? 1 : 0;
+  if (
+    existing &&
+    existing.name === name &&
+    existing.phone === phone &&
+    existing.email === email &&
+    existing.tags_json === tags &&
+    Number(existing.blocked) === blocked
+  ) {
+    return;
+  }
   await run(
     `INSERT INTO contacts(id, name, phone, email, tags_json, blocked, raw_json, updated_at)
      VALUES($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT(id) DO UPDATE SET
-       name = CASE
-         WHEN contacts.name ~ '[[:alpha:]]' AND excluded.name !~ '[[:alpha:]]' THEN contacts.name
-         ELSE excluded.name
-       END,
-       phone = CASE WHEN excluded.phone = '' THEN contacts.phone ELSE excluded.phone END,
-       email = CASE WHEN excluded.email = '' THEN contacts.email ELSE excluded.email END,
+       name = excluded.name,
+       phone = excluded.phone,
+       email = excluded.email,
        tags_json = excluded.tags_json,
        blocked = excluded.blocked,
        raw_json = excluded.raw_json,
        updated_at = excluded.updated_at`,
-    [
-      input.id,
-      input.name,
-      input.phone,
-      input.email,
-      JSON.stringify(input.tags),
-      input.blocked ? 1 : 0,
-      JSON.stringify(input.raw),
-      now(),
-    ],
+    [input.id, name, phone, email, tags, blocked, JSON.stringify(input.raw), now()],
   );
 }
 
@@ -85,7 +105,18 @@ export async function listContacts(search = ''): Promise<ContactRecord[]> {
   return many<ContactRecord>(
     `SELECT id, name, phone, email, notes, prompt, instructions, bot_enabled, human_handoff, blocked, tags_json, roteiro_id,
             updated_at,
-            (SELECT COUNT(*)::int FROM contact_messages m WHERE m.contact_id = contacts.id) AS message_count
+            (SELECT COUNT(*)::int
+             FROM messages msg
+             JOIN conversations conv ON conv.id = msg.conversation_id
+             WHERE conv.hidden = 0
+               AND (
+                 conv.contact_id = contacts.id
+                 OR (
+                   regexp_replace(contacts.phone, '[^0-9]', '', 'g') <> ''
+                   AND right(regexp_replace(conv.contact_phone, '[^0-9]', '', 'g'), 11)
+                       = right(regexp_replace(contacts.phone, '[^0-9]', '', 'g'), 11)
+                 )
+               )) AS message_count
      FROM contacts
      WHERE name ILIKE $1 OR phone ILIKE $1 OR notes ILIKE $1
      ORDER BY updated_at DESC`,
@@ -129,17 +160,40 @@ export async function upsertConversation(input: {
   lastMessageAt: string;
   channelId: string;
   raw: unknown;
-}): Promise<void> {
+}): Promise<boolean> {
+  const existing = await one<{
+    contact_id: string;
+    contact_name: string;
+    contact_phone: string;
+    status: string;
+    preview: string;
+    last_message_at: string;
+    channel_id: string;
+  }>(
+    `SELECT contact_id, contact_name, contact_phone, status, preview, last_message_at, channel_id
+     FROM conversations WHERE id = $1`,
+    [input.id],
+  );
+  const contactName = existing ? preferNamed(existing.contact_name, input.contactName) : input.contactName;
+  if (
+    existing &&
+    sameText(existing.contact_id, input.contactId) &&
+    existing.contact_name === contactName &&
+    sameText(existing.contact_phone, input.contactPhone) &&
+    sameText(existing.status, input.status) &&
+    sameText(existing.preview, input.preview) &&
+    sameText(existing.last_message_at, input.lastMessageAt) &&
+    sameText(existing.channel_id, input.channelId)
+  ) {
+    return false;
+  }
   await run(
     `INSERT INTO conversations(
        id, contact_id, contact_name, contact_phone, status, preview, last_message_at, channel_id, raw_json, updated_at
      ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT(id) DO UPDATE SET
        contact_id = excluded.contact_id,
-       contact_name = CASE
-         WHEN conversations.contact_name ~ '[[:alpha:]]' AND excluded.contact_name !~ '[[:alpha:]]' THEN conversations.contact_name
-         ELSE excluded.contact_name
-       END,
+       contact_name = excluded.contact_name,
        contact_phone = excluded.contact_phone,
        status = excluded.status,
        preview = excluded.preview,
@@ -150,7 +204,7 @@ export async function upsertConversation(input: {
     [
       input.id,
       input.contactId,
-      input.contactName,
+      contactName,
       input.contactPhone,
       input.status,
       input.preview,
@@ -160,6 +214,7 @@ export async function upsertConversation(input: {
       now(),
     ],
   );
+  return true;
 }
 
 const personKey = `COALESCE(NULLIF(conversations.contact_id, ''), NULLIF(conversations.contact_phone, ''), conversations.id)`;
@@ -203,7 +258,7 @@ export async function upsertMessage(input: {
   createdAt: string;
   origin?: string;
   raw: unknown;
-}): Promise<void> {
+}): Promise<boolean> {
   const inserted = await one<{ id: string }>(
     `INSERT INTO messages(id, conversation_id, direction, type, text, media_url, created_at, raw_json, origin)
      VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -223,7 +278,7 @@ export async function upsertMessage(input: {
   );
   if (inserted) {
     await unhideConversation(input.conversationId);
-    return;
+    return true;
   }
   await run(
     `UPDATE messages SET
@@ -247,6 +302,7 @@ export async function upsertMessage(input: {
       input.origin || 'contact',
     ],
   );
+  return false;
 }
 
 const samePerson = `

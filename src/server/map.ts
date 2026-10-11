@@ -72,7 +72,7 @@ export function mapMessage(row: Record<string, unknown>) {
     direction: String(row.direction || 'INBOUND').toUpperCase(),
     type: String(row.type || 'text'),
     text: messageText(row),
-    createdAt: String(row.timestamp || row.createdAt || row.at || new Date().toISOString()),
+    createdAt: String(row.timestamp || row.createdAt || row.sentAt || row.at || new Date().toISOString()),
     raw: row,
   };
 }

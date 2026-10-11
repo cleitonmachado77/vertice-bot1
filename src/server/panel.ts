@@ -100,10 +100,10 @@ export function registerPanelRoutes(): void {
     const apiKey = text(input.apiKey);
     if (apiKey && !apiKey.includes('••••')) await setSetting('agent_api_key', apiKey);
     await setSetting('agent_temperature', String(clamp(Number(input.temperature ?? 0.4), 0, 2)));
-    await setSetting('agent_active', input.active === false ? '0' : '1');
-    if (typeof input.autoReply === 'boolean') {
-      await setSetting('agent_auto_reply', input.autoReply ? '1' : '0');
-    }
+    const active = input.active !== false;
+    await setSetting('agent_active', active ? '1' : '0');
+    const autoReply = typeof input.autoReply === 'boolean' ? input.autoReply : active;
+    await setSetting('agent_auto_reply', autoReply ? '1' : '0');
     await setSetting('agent_fallback', text(input.fallback));
     await setSetting('agent_history', String(clamp(Number(input.history ?? 8), 1, 30)));
     json(ctx.res, 200, agentPayload(true));

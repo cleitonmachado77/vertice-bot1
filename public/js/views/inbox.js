@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { escapeHtml, formatWhen, toast } from '../ui.js';
+import { escapeHtml, formatClock, initials, toast } from '../ui.js';
 
 const ORIGIN = {
   contact: 'Contato',
@@ -35,19 +35,20 @@ export async function renderInbox(root, focus = '') {
   stopInbox();
   const data = await api('/api/conversations');
   root.innerHTML = `
-    <div class="top">
-      <div>
-        <p class="kicker">Conversas</p>
-        <h1>Inbox</h1>
-        <p class="muted">A conversa aberta acompanha a Névoa sozinha. Sem assumir, a IA responde.</p>
-      </div>
-    </div>
     <section class="split">
-      <div class="card list" id="conv-list" style="padding: 8px 14px;">${drawList(data.items)}</div>
-      <div class="card thread" id="thread" style="padding: 16px;"><p class="muted">Escolha uma conversa.</p></div>
+      <aside class="wa-list">
+        <div class="wa-list-head">
+          <h2>Conversas</h2>
+          <input id="conv-search" type="search" placeholder="Pesquisar conversa" />
+        </div>
+        <div class="wa-scroll" id="conv-list">${drawList(data.items)}</div>
+      </aside>
+      <div class="thread" id="thread">${emptyThread()}</div>
     </section>`;
   listPainted = listKey(data.items);
+  document.querySelector('#conv-search').addEventListener('input', applySearch);
   bindList(root);
+  syncThreadMode();
   if (focus.startsWith('c/')) await openContact(focus.slice(2));
   else if (focus) await openConversation(focus);
   else if (selected) await openConversation(selected);
@@ -74,6 +75,7 @@ async function beat(root, token) {
     if (listEl) {
       listEl.innerHTML = drawList(list.items);
       bindList(root);
+      applySearch();
     }
   }
   if (!selected) return;
@@ -101,18 +103,52 @@ function listKey(items) {
 function drawList(items) {
   if (!items.length) return '<p class="muted">Nenhuma conversa ainda.</p>';
   return items
-    .map(
-      (item) => `
+    .map((item) => {
+      const name = item.contact_name || item.contact_phone || 'Contato';
+      return `
       <div class="conv-row">
         <button type="button" data-id="${escapeHtml(item.id)}" class="${item.id === selected ? 'active' : ''}">
-          <span><strong>${escapeHtml(item.contact_name || item.contact_phone || 'Contato')}</strong><br>
-          <span class="muted">${escapeHtml(item.preview || 'Sem mensagens')}</span></span>
-          <span class="muted">${escapeHtml(formatWhen(item.last_message_at))}</span>
+          <span class="avatar" style="background:${avatarColor(name)}">${escapeHtml(initials(name))}</span>
+          <span class="wa-copy">
+            <span class="wa-line"><strong>${escapeHtml(name)}</strong><time>${escapeHtml(formatClock(item.last_message_at))}</time></span>
+            <span class="wa-preview">${escapeHtml(item.preview || 'Sem mensagens')}</span>
+          </span>
         </button>
-        <button type="button" class="conv-remove" data-remove="${escapeHtml(item.id)}" aria-label="Apagar conversa">Apagar</button>
-      </div>`,
-    )
+        <button type="button" class="conv-remove" data-remove="${escapeHtml(item.id)}" aria-label="Apagar conversa">${trashIcon()}</button>
+      </div>`;
+    })
     .join('');
+}
+
+function applySearch() {
+  const query = String(document.querySelector('#conv-search')?.value || '').trim().toLowerCase();
+  document.querySelectorAll('#conv-list .conv-row').forEach((row) => {
+    row.hidden = Boolean(query) && !row.textContent.toLowerCase().includes(query);
+  });
+}
+
+function syncThreadMode() {
+  document.querySelector('.shell')?.classList.toggle('has-thread', Boolean(selected));
+}
+
+function emptyThread() {
+  return `
+    <div class="wa-empty">
+      <svg class="mark" width="56" height="56" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="10" fill="#111827"/><path d="M9 22.5 16 8.5l7 14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <h2>Vértice</h2>
+      <p>Selecione uma conversa para ler e responder no WhatsApp.</p>
+    </div>`;
+}
+
+function avatarColor(name) {
+  const palette = ['#111827', '#1f2937', '#374151', '#047857', '#0f766e', '#1e3a5f'];
+  let index = 0;
+  for (const char of String(name)) index = (index + char.charCodeAt(0)) % palette.length;
+  return palette[index];
+}
+
+function trashIcon() {
+  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M8 7l1 13h6l1-13"/></svg>';
 }
 
 function bindList(root) {
@@ -133,7 +169,8 @@ async function removeConversation(id) {
       shownId = '';
       painted = '';
       const thread = document.querySelector('#thread');
-      if (thread) thread.innerHTML = '<p class="muted">Escolha uma conversa.</p>';
+      if (thread) thread.innerHTML = emptyThread();
+      syncThreadMode();
     }
     document.querySelector(`#conv-list button[data-remove="${CSS.escape(id)}"]`)?.closest('.conv-row')?.remove();
   } catch (error) {
@@ -156,7 +193,9 @@ async function openContact(contactId) {
   const contact = detail.contact;
   selected = '';
   painted = '';
-  document.querySelector('#thread').innerHTML = threadShell(contact.name, contact.phone, '<p class="muted">Nenhuma mensagem ainda.</p>');
+  document.querySelector('#thread').innerHTML = threadShell(contact.name, contact.phone, '<div class="bubbles"><p class="muted">Nenhuma mensagem ainda.</p></div>');
+  bindBack();
+  syncThreadMode();
   bindComposer(async (text) => {
     const sent = await api(`/api/contacts/${encodeURIComponent(contactId)}/send`, { method: 'POST', body: { text } });
     await openConversation(sent.conversationId);
@@ -167,6 +206,7 @@ async function openConversation(id) {
   selected = id;
   painted = '';
   markSelected(id);
+  syncThreadMode();
   const data = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
   showThread(id, data);
   lastPull = 0;
@@ -199,66 +239,105 @@ function showThread(id, data) {
   if (scroller) scroller.scrollTop = scroller.scrollHeight;
   bindComposer((text) => api(`/api/conversations/${encodeURIComponent(id)}/send`, { method: 'POST', body: { text } }));
   bindHandoff(id);
+  bindBack();
+  syncThreadMode();
   shownId = id;
   painted = signature;
 }
 
 function bubbleHtml(items) {
   return items
-    .map((item) => {
-      const label = item.failed ? 'Não enviou' : item.pending ? 'Enviando' : ORIGIN[item.origin] || (item.direction === 'OUTBOUND' ? 'WhatsApp' : 'Contato');
+    .map((item, index) => {
+      const outbound = item.direction === 'OUTBOUND';
+      const previous = items[index - 1];
+      const follow = previous && previous.direction === item.direction;
+      const label = item.failed ? 'Não enviou' : item.pending ? 'Enviando' : ORIGIN[item.origin] || (outbound ? 'WhatsApp' : 'Contato');
       const body = item.text || (item.media_url ? item.media_url : `[${item.type}]`);
+      const ticks = item.failed ? '!' : item.pending ? '✓' : '✓✓';
       return `
-        <div class="bubble ${item.direction === 'OUTBOUND' ? 'out' : ''}">
-          <div class="who">${escapeHtml(label)}</div>
+        <div class="bubble${outbound ? ' out' : ''}${follow ? ' follow' : ''}${item.pending ? ' pending' : ''}${item.failed ? ' failed' : ''}">
+          ${outbound && !follow ? `<div class="who">${escapeHtml(label)}</div>` : ''}
           ${escapeHtml(body)}
-          <div class="muted">${escapeHtml(formatWhen(item.created_at))}</div>
+          <div class="meta"><span>${escapeHtml(formatClock(item.created_at))}</span>${outbound ? `<span class="ticks">${ticks}</span>` : ''}</div>
         </div>`;
     })
     .join('');
 }
 
 function threadShell(name, phone, body, human) {
-  const state = human
-    ? 'Você responde. A IA está pausada nesta conversa.'
-    : 'A IA responde esta conversa.';
+  const state = human ? 'Você responde. A IA está pausada nesta conversa.' : 'A IA responde esta conversa.';
+  const title = name || 'Conversa';
   return `
-    <div class="row" style="justify-content: space-between; align-items: center;">
-      <div>
-        <strong>${escapeHtml(name || 'Conversa')}</strong>
-        <p class="muted">${escapeHtml(phone || '')}</p>
+    <header class="wa-head">
+      <button class="icon-btn back" id="back-list" type="button" aria-label="Voltar às conversas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <span class="avatar" style="background:${avatarColor(title)};color:#fff">${escapeHtml(initials(title))}</span>
+      <div class="who-block">
+        <strong>${escapeHtml(title)}</strong>
+        <p class="muted">${escapeHtml(phone || '')}${phone ? ' · ' : ''}<span id="handoff-state">${state}</span></p>
       </div>
-      <label class="check"><input id="handoff" type="checkbox" ${human ? 'checked' : ''}/> Assumir conversa</label>
-    </div>
-    <p class="muted" id="handoff-state">${state}</p>
+      <div class="mode" role="group" aria-label="Quem responde">
+        <button type="button" data-mode="ia" aria-pressed="${human ? 'false' : 'true'}">IA</button>
+        <button type="button" data-mode="humano" aria-pressed="${human ? 'true' : 'false'}">Humano</button>
+      </div>
+    </header>
     ${body}
     <form class="composer" id="send-form">
-      <input name="text" placeholder="Escrever no WhatsApp" required />
-      <button class="btn" type="submit">Enviar</button>
+      <input name="text" placeholder="Mensagem" autocomplete="off" required />
+      <button class="btn" type="submit" aria-label="Enviar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
     </form>`;
 }
 
+function bindBack() {
+  document.querySelector('#back-list')?.addEventListener('click', () => {
+    selected = '';
+    shownId = '';
+    painted = '';
+    const thread = document.querySelector('#thread');
+    if (thread) thread.innerHTML = emptyThread();
+    markSelected('');
+    syncThreadMode();
+  });
+}
+
 function bindHandoff(conversationId) {
-  const input = document.querySelector('#handoff');
-  if (!input) return;
-  input.addEventListener('change', async () => {
-    const human = input.checked;
-    const state = document.querySelector('#handoff-state');
+  const group = document.querySelector('.mode');
+  if (!group) return;
+  group.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-mode]');
+    if (!button || button.getAttribute('aria-pressed') === 'true' || group.dataset.busy === '1') return;
+    const human = button.dataset.mode === 'humano';
+    const previous = !human;
+    paintMode(group, human);
+    group.dataset.busy = '1';
     try {
       await api(`/api/conversations/${encodeURIComponent(conversationId)}/handoff`, {
         method: 'PUT',
         body: { human },
       });
+      if (snapshot.conversation) snapshot.conversation.human_handoff = human ? 1 : 0;
+      const state = document.querySelector('#handoff-state');
       if (state) {
         state.textContent = human
           ? 'Você responde. A IA está pausada nesta conversa.'
           : 'A IA responde esta conversa.';
       }
     } catch (error) {
-      input.checked = !human;
+      paintMode(group, previous);
       toast(error.message);
+    } finally {
+      delete group.dataset.busy;
     }
   });
+}
+
+function paintMode(group, human) {
+  for (const button of group.querySelectorAll('button[data-mode]')) {
+    button.setAttribute('aria-pressed', String((button.dataset.mode === 'humano') === human));
+  }
 }
 
 function mergePending(id, items) {

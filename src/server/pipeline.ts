@@ -1,18 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { getSetting } from './db.js';
 import { mapContact, mapConversation, inboundContent, unwrapEnvelope } from './map.js';
-import { draftReply } from './agent.js';
 import { zonedNow } from './clock.js';
 import { attachCollectedResponse } from './plans.js';
 import {
   getContact,
   hasEvent,
   insertEvent,
-  recentMessages,
   upsertContact,
   upsertConversation,
   upsertMessage,
 } from './store.js';
+import { answerInbound } from './reply.js';
 import { recordOutbound } from './thread.js';
 
 export type Decision = {
@@ -116,7 +115,18 @@ export async function processInbound(raw: unknown, deliveryId = ''): Promise<Dec
     return await finish(id, event, ignore(id, event, 'Mensagem não suportada pelo WhatsApp', conversationId, phone, channelId), data);
   }
 
-  return { pending: true, id, event, data, conversationId, phone, channelId, text: content.prompt, contact } as unknown as Decision;
+  return {
+    pending: true,
+    id,
+    event,
+    data,
+    conversationId,
+    phone,
+    channelId,
+    text: content.prompt,
+    messageId: String((messageRaw.id as string) || `${id}:in`),
+    contact,
+  } as unknown as Decision;
 }
 
 type Pending = {
@@ -128,6 +138,7 @@ type Pending = {
   phone: string;
   channelId: string;
   text: string;
+  messageId: string;
   contact: { id: string; name: string } | null;
 };
 
@@ -136,54 +147,35 @@ export function isPending(value: Decision | Pending): value is Pending {
 }
 
 export async function completeInbound(pending: Pending): Promise<Decision> {
-  const limit = Number(getSetting('agent_history') || '8');
-  const history = (pending.conversationId ? await recentMessages(pending.conversationId, limit) : []).filter(
-    (item, index, all) => !(index === all.length - 1 && item.direction === 'INBOUND' && item.text === pending.text),
-  );
-  const local = pending.contact?.id ? await getContact(pending.contact.id) : undefined;
-  const draft = await draftReply({
-    contactName: local?.name || pending.contact?.name || '',
-    contactPhone: pending.phone,
-    notes: local?.notes || '',
-    instructions: local?.instructions || '',
-    prompt: local?.prompt || '',
-    history: history.map((item) => ({ direction: item.direction, text: item.text })),
-    inbound: pending.text,
-    hasText: Boolean(pending.text.trim()),
-    allowReply: true,
+  const answer = await answerInbound({
+    messageId: pending.messageId,
+    conversationId: pending.conversationId,
+    text: pending.text,
+    phone: pending.phone,
+    channelId: pending.channelId,
+    contactId: pending.contact?.id,
+    contactName: pending.contact?.name,
   });
-
-  if (!draft.text || !pending.phone) {
-    const reason = draft.detail || (pending.phone ? 'Sem resposta' : 'Contato sem telefone');
+  if (!answer.sent) {
     return await finish(
       pending.id,
       pending.event,
-      ignore(pending.id, pending.event, reason, pending.conversationId, pending.phone, pending.channelId),
+      ignore(pending.id, pending.event, answer.detail, pending.conversationId, pending.phone, pending.channelId),
       pending.data,
     );
   }
-
   const decision: Decision = {
     ok: true,
     action: 'reply',
-    reason: draft.detail,
+    reason: answer.detail,
     conversationId: pending.conversationId,
-    phone: pending.phone,
-    channelIntegrationId: pending.channelId,
-    text: draft.text,
-    source: draft.source,
-    nevoa: {
-      method: 'POST',
-      path: '/messages',
-      body: {
-        phone: pending.phone,
-        type: 'TEXT',
-        text: draft.text,
-        ...(pending.channelId ? { channelIntegrationId: pending.channelId } : {}),
-      },
-    },
+    phone: answer.phone,
+    channelIntegrationId: answer.channelId,
+    text: answer.text,
+    source: answer.source,
+    nevoa: null,
   };
-  return await finish(pending.id, pending.event, decision, pending.data);
+  return await finish(pending.id, pending.event, decision, pending.data, false);
 }
 
 function ignore(
@@ -207,7 +199,13 @@ function ignore(
   };
 }
 
-async function finish(id: string, event: string, decision: Decision, payload: unknown): Promise<Decision> {
+async function finish(
+  id: string,
+  event: string,
+  decision: Decision,
+  payload: unknown,
+  record = true,
+): Promise<Decision> {
   if (!(await hasEvent(id))) {
     await insertEvent({
       id,
@@ -218,7 +216,7 @@ async function finish(id: string, event: string, decision: Decision, payload: un
       result: { action: decision.action, source: decision.source, text: decision.text },
     });
   }
-  if (decision.action === 'reply' && decision.conversationId && decision.text) {
+  if (record && decision.action === 'reply' && decision.conversationId && decision.text) {
     await recordOutbound({
       conversationId: decision.conversationId,
       text: decision.text,
