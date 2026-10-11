@@ -50,7 +50,7 @@ function recent(conversations) {
   const items = conversations
     .map(
       (item) => `
-        <a class="person" href="#/inbox">
+        <a class="person" href="#/inbox/${encodeURIComponent(item.id)}">
           <span><strong>${escapeHtml(item.contact_name || item.contact_phone || 'Conversa')}</strong><br>
           <span class="muted">${escapeHtml(item.preview || 'Sem prévia')}</span></span>
           <span class="muted">${escapeHtml(formatWhen(item.last_message_at))}</span>

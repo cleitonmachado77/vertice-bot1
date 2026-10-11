@@ -161,14 +161,21 @@ export async function upsertConversation(input: {
   );
 }
 
+const personKey = `COALESCE(NULLIF(conversations.contact_id, ''), NULLIF(conversations.contact_phone, ''), conversations.id)`;
+
 export async function listConversations(): Promise<ConversationRecord[]> {
   return many<ConversationRecord>(
-    `SELECT conversations.id, conversations.contact_id, conversations.contact_name, conversations.contact_phone,
-            conversations.status, conversations.preview, conversations.last_message_at, conversations.channel_id,
-            conversations.updated_at, COALESCE(contacts.human_handoff, 0) AS human_handoff
-     FROM conversations
-     LEFT JOIN contacts ON contacts.id = conversations.contact_id
-     ORDER BY conversations.last_message_at DESC`,
+    `SELECT id, contact_id, contact_name, contact_phone, status, preview, last_message_at, channel_id, updated_at, human_handoff
+     FROM (
+       SELECT DISTINCT ON (${personKey})
+              conversations.id, conversations.contact_id, conversations.contact_name, conversations.contact_phone,
+              conversations.status, conversations.preview, conversations.last_message_at, conversations.channel_id,
+              conversations.updated_at, COALESCE(contacts.human_handoff, 0) AS human_handoff
+       FROM conversations
+       LEFT JOIN contacts ON contacts.id = conversations.contact_id
+       ORDER BY ${personKey}, conversations.last_message_at DESC
+     ) people
+     ORDER BY last_message_at DESC`,
   );
 }
 
@@ -222,10 +229,17 @@ export async function upsertMessage(input: {
   );
 }
 
+const samePerson = `
+  SELECT id FROM conversations
+  WHERE id = $1
+     OR (contact_id <> '' AND contact_id = (SELECT contact_id FROM conversations WHERE id = $1))
+     OR (contact_phone <> '' AND contact_phone = (SELECT contact_phone FROM conversations WHERE id = $1))
+`;
+
 export async function listMessages(conversationId: string): Promise<MessageRecord[]> {
   return many<MessageRecord>(
     `SELECT id, conversation_id, direction, type, text, media_url, created_at, origin
-     FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
+     FROM messages WHERE conversation_id IN (${samePerson}) ORDER BY created_at ASC`,
     [conversationId],
   );
 }
@@ -233,7 +247,7 @@ export async function listMessages(conversationId: string): Promise<MessageRecor
 export async function recentMessages(conversationId: string, limit: number): Promise<MessageRecord[]> {
   const rows = await many<MessageRecord>(
     `SELECT id, conversation_id, direction, type, text, media_url, created_at, origin
-     FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2`,
+     FROM messages WHERE conversation_id IN (${samePerson}) ORDER BY created_at DESC LIMIT $2`,
     [conversationId, limit],
   );
   return rows.reverse();
@@ -285,7 +299,11 @@ export async function listEvents(limit = 80) {
 
 export async function dashboardCounts() {
   const contacts = await one<{ total: number }>('SELECT COUNT(*)::int AS total FROM contacts');
-  const conversations = await one<{ total: number }>('SELECT COUNT(*)::int AS total FROM conversations');
+  const conversations = await one<{ total: number }>(
+    `SELECT COUNT(*)::int AS total FROM (
+       SELECT DISTINCT COALESCE(NULLIF(contact_id, ''), NULLIF(contact_phone, ''), id) AS person FROM conversations
+     ) people`,
+  );
   const events = await one<{ total: number }>('SELECT COUNT(*)::int AS total FROM events');
   return {
     contacts: contacts?.total ?? 0,
