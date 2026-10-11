@@ -2,8 +2,8 @@ import { closeDatabase, initDatabase } from './db.js';
 import { loadEnv } from './env.js';
 import { runDueDispatches } from './dispatch.js';
 
-// Serviço de disparo do Railway: start command `npm run dispatch`
-// e Cron Schedule `*/5 * * * *` (UTC). Envia quem já chegou no horário e encerra.
+// Execução avulsa. O painel no Railway já chama o mesmo disparo a cada 5 minutos.
+// Não crie outro cron com este comando: a mensagem sairia duas vezes.
 
 loadEnv();
 

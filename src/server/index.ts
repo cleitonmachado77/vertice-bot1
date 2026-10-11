@@ -5,6 +5,7 @@ import { registerContactRoutes } from './contact-routes.js';
 import { registerHookRoutes } from './hooks.js';
 import { registerPanelRoutes } from './panel.js';
 import { startLiveSync } from './live-sync.js';
+import { startScheduler } from './scheduler.js';
 
 loadEnv();
 await initDatabase();
@@ -15,4 +16,5 @@ registerHookRoutes();
 const port = Number(env('PORT', '8787'));
 listen(port);
 startLiveSync();
+startScheduler();
 console.log(`Vertice Bot em http://localhost:${port}`);
