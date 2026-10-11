@@ -52,10 +52,10 @@ function templateItems(payload: unknown): { id: string; name: string; body: stri
     .filter((item) => item.id);
 }
 
-function variablesFor(body: string, name: string): Record<string, string> {
-  const variables: Record<string, string> = {};
-  if (/\{\{\s*1\s*\}\}/.test(body)) variables['1'] = name;
-  return variables;
+function variablesFor(body: string, name: string): string[] {
+  const marks = body.match(/\{\{\s*\d+\s*\}\}/g) || [];
+  const count = new Set(marks.map((mark) => mark.replace(/\D/g, ''))).size;
+  return Array.from({ length: count }, () => name);
 }
 
 export function registerContactRoutes(): void {
@@ -150,7 +150,6 @@ export function registerContactRoutes(): void {
       const sent = (await sendWhatsappTemplate({
         templateId: template.id,
         phone: contact.phone,
-        name: contact.name || contact.phone,
         variables: variablesFor(template.body, contact.name || contact.phone),
         channelIntegrationId: channelId,
       })) as {

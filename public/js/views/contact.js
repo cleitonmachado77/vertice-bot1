@@ -34,19 +34,20 @@ export async function renderContact(root, id) {
         <a class="btn-ghost" href="#/contacts">Voltar</a>
       </div>
     </div>
-    <section class="card stack" id="start-card" style="padding: 18px;">
-      <h2>Iniciar conversa</h2>
-      <p class="muted">Número novo recebe primeiro um template aprovado na Névoa. Depois a conversa segue no inbox.</p>
-      ${
-        options
-          ? `<label>Template</label><select id="template">${options}</select><button class="btn" id="start" type="button">Enviar template</button>`
-          : pending
-            ? `<p class="muted">O template ${pending} está em revisão na Meta. O cadastro e os envios programados já podem ser salvos. O botão de iniciar a conversa aparece quando a Meta aprovar.</p>`
-            : '<p class="muted">Nenhum template ativo neste WhatsApp. O cadastro e os envios programados já podem ser salvos; o primeiro contato só sai quando a Meta aprovar um modelo e ele aparecer na Névoa.</p>'
-      }
-    </section>
-    <form class="stack" id="plan-form">
-      <section class="card stack" style="padding: 18px;">
+    <form class="split-board" id="plan-form">
+      <div class="split-board-side">
+      <section class="card stack" id="start-card">
+        <h2>Iniciar conversa</h2>
+        <p class="muted">Número novo recebe primeiro um template aprovado na Névoa. Depois a conversa segue no inbox.</p>
+        ${
+          options
+            ? `<label>Template</label><select id="template">${options}</select><button class="btn" id="start" type="button">Enviar template</button>`
+            : pending
+              ? `<p class="muted">O template ${pending} está em revisão na Meta. O cadastro e os envios programados já podem ser salvos. O botão de iniciar a conversa aparece quando a Meta aprovar.</p>`
+              : '<p class="muted">Nenhum template ativo neste WhatsApp. O cadastro e os envios programados já podem ser salvos; o primeiro contato só sai quando a Meta aprovar um modelo e ele aparecer na Névoa.</p>'
+        }
+      </section>
+      <section class="card stack">
         <h2>Dados e agente</h2>
         <div class="grid-2">
           <div><label>Nome</label><input name="name" value="${escapeHtml(name)}" placeholder="Maria Souza" /></div>
@@ -62,8 +63,11 @@ export async function renderContact(root, id) {
         <label>Notas internas</label>
         <textarea name="notes">${escapeHtml(contact.notes || '')}</textarea>
         <label class="check"><input name="botEnabled" type="checkbox" ${contact.bot_enabled ? 'checked' : ''}/> Agente pode responder este contato</label>
+        <button class="btn" type="submit">Salvar contato</button>
       </section>
-      <section class="card stack" style="padding: 18px;">
+      </div>
+      <div class="split-board-side">
+      <section class="card stack">
         <div class="row" style="justify-content: space-between;">
           <h2>Mensagens programadas</h2>
           <button class="btn-ghost" id="add-message" type="button">Adicionar mensagem</button>
@@ -71,12 +75,12 @@ export async function renderContact(root, id) {
         <p class="muted">O horário é o de Brasília. A resposta do contato, em texto, áudio, vídeo ou foto, fica ligada à mensagem do dia.</p>
         <div class="stack" id="messages">${data.messages.map(messageCard).join('')}</div>
       </section>
-      <button class="btn" type="submit">Salvar contato</button>
-    </form>
-    <section class="card" style="padding: 18px;">
-      <h2>Envios de hoje</h2>
-      <div class="list">${drawDispatches(data.dispatches)}</div>
-    </section>`;
+      <section class="card">
+        <h2>Envios de hoje</h2>
+        <div class="list">${drawDispatches(data.dispatches)}</div>
+      </section>
+      </div>
+    </form>`;
 
   const list = document.querySelector('#messages');
   list.querySelectorAll('.plan-message').forEach(bindMessage);

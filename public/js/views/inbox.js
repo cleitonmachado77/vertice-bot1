@@ -216,7 +216,7 @@ function showThread(id, data) {
   if (selected !== id) return;
   if (data) snapshot = { items: data.items || [], conversation: data.conversation || snapshot.conversation };
   const items = mergePending(id, snapshot.items);
-  const signature = items.map((item) => `${item.id}:${item.text}:${item.origin}:${item.pending ? 'p' : ''}:${item.failed ? 'f' : ''}`).join('|');
+  const signature = items.map((item) => `${item.id}:${item.text}:${item.origin}:${item.delivery_status || ''}:${item.pending ? 'p' : ''}:${item.failed ? 'f' : ''}`).join('|');
   const box = document.querySelector('.bubbles');
   const sameThread = shownId === id && box && document.querySelector('#send-form');
   if (sameThread && signature === painted) return;
@@ -251,17 +251,27 @@ function bubbleHtml(items) {
       const outbound = item.direction === 'OUTBOUND';
       const previous = items[index - 1];
       const follow = previous && previous.direction === item.direction;
-      const label = item.failed ? 'Não enviou' : item.pending ? 'Enviando' : ORIGIN[item.origin] || (outbound ? 'WhatsApp' : 'Contato');
+      const refused = item.delivery_status === 'failed';
+      const failed = item.failed || refused;
+      const label = failed ? 'Não enviou' : item.pending ? 'Enviando' : ORIGIN[item.origin] || (outbound ? 'WhatsApp' : 'Contato');
       const body = item.text || (item.media_url ? item.media_url : `[${item.type}]`);
-      const ticks = item.failed ? '!' : item.pending ? '✓' : '✓✓';
+      const ticks = failed ? '!' : item.pending ? '✓' : '✓✓';
+      const reason = refused ? deliveryReason(item.delivery_code) : '';
       return `
-        <div class="bubble${outbound ? ' out' : ''}${follow ? ' follow' : ''}${item.pending ? ' pending' : ''}${item.failed ? ' failed' : ''}">
+        <div class="bubble${outbound ? ' out' : ''}${follow ? ' follow' : ''}${item.pending ? ' pending' : ''}${failed ? ' failed' : ''}">
           ${outbound && !follow ? `<div class="who">${escapeHtml(label)}</div>` : ''}
           ${escapeHtml(body)}
           <div class="meta"><span>${escapeHtml(formatClock(item.created_at))}</span>${outbound ? `<span class="ticks">${ticks}</span>` : ''}</div>
+          ${reason ? `<div class="meta">${escapeHtml(reason)}</div>` : ''}
         </div>`;
     })
     .join('');
+}
+
+function deliveryReason(code) {
+  if (String(code) === '131042') return 'A Meta recusou: a conta do WhatsApp ainda não tem moeda de cobrança.';
+  if (String(code) === '131049') return 'A Meta segurou esta mensagem de marketing para limitar o volume neste número.';
+  return 'A Meta recusou este envio.';
 }
 
 function threadShell(name, phone, body, human) {

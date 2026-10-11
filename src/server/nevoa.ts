@@ -6,10 +6,7 @@ export class NevoaError extends Error {
   payload: unknown;
 
   constructor(status: number, payload: unknown) {
-    const message =
-      payload && typeof payload === 'object' && 'message' in payload
-        ? String((payload as { message: unknown }).message)
-        : `Névoa respondeu ${status}`;
+    const message = describeNevoaError(payload, status);
     super(message);
     this.status = status;
     this.payload = payload;
@@ -104,15 +101,23 @@ export async function listTemplates(channelIntegrationId: string): Promise<unkno
 export async function sendWhatsappTemplate(input: {
   templateId: string;
   phone: string;
-  name: string;
-  variables: Record<string, string>;
+  variables: string[];
   channelIntegrationId?: string;
 }): Promise<unknown> {
   return nevoaRequest('POST', '/messages/template', {
     templateId: input.templateId,
     phone: input.phone,
-    name: input.name,
     variables: input.variables,
     ...(input.channelIntegrationId ? { channelIntegrationId: input.channelIntegrationId } : {}),
   });
+}
+
+function describeNevoaError(payload: unknown, status: number): string {
+  if (!payload || typeof payload !== 'object') return `Névoa respondeu ${status}`;
+  const record = payload as { message?: unknown; error?: { code?: number; message?: unknown } };
+  if (record.error?.code === 132000) return 'A quantidade de variáveis não confere com o template aprovado.';
+  if (typeof record.error?.message === 'string' && record.error.message) return record.error.message;
+  if (typeof record.message === 'string' && record.message) return record.message;
+  if (Array.isArray(record.message)) return record.message.map(String).join(' ');
+  return `Névoa respondeu ${status}`;
 }

@@ -55,6 +55,8 @@ export type MessageRecord = {
   media_url: string;
   created_at: string;
   origin: string;
+  delivery_status: string;
+  delivery_code: string;
 };
 
 export async function upsertContact(input: {
@@ -305,6 +307,10 @@ export async function upsertMessage(input: {
   return false;
 }
 
+const deliveryColumns = `
+  COALESCE(raw_json::jsonb #>> '{delivery,status}', raw_json::jsonb ->> 'status', '') AS delivery_status,
+  COALESCE(raw_json::jsonb #>> '{delivery,errors,0,code}', '') AS delivery_code`;
+
 const samePerson = `
   SELECT id FROM conversations
   WHERE id = $1
@@ -314,7 +320,7 @@ const samePerson = `
 
 export async function listMessages(conversationId: string): Promise<MessageRecord[]> {
   return many<MessageRecord>(
-    `SELECT id, conversation_id, direction, type, text, media_url, created_at, origin
+    `SELECT id, conversation_id, direction, type, text, media_url, created_at, origin, ${deliveryColumns}
      FROM messages WHERE conversation_id IN (${samePerson}) ORDER BY created_at ASC`,
     [conversationId],
   );
@@ -322,7 +328,7 @@ export async function listMessages(conversationId: string): Promise<MessageRecor
 
 export async function recentMessages(conversationId: string, limit: number): Promise<MessageRecord[]> {
   const rows = await many<MessageRecord>(
-    `SELECT id, conversation_id, direction, type, text, media_url, created_at, origin
+    `SELECT id, conversation_id, direction, type, text, media_url, created_at, origin, ${deliveryColumns}
      FROM messages WHERE conversation_id IN (${samePerson}) ORDER BY created_at DESC LIMIT $2`,
     [conversationId, limit],
   );

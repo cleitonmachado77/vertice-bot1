@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { one, run } from './db.js';
+import { many, one, run } from './db.js';
 import { upsertMessage } from './store.js';
 
 const now = () => new Date().toISOString();
@@ -78,14 +78,21 @@ export async function saveSyncedMessage(input: {
   const direction = input.direction.toUpperCase() === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND';
   if (direction === 'OUTBOUND' && input.text.trim()) {
     const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    const twin = await one<{ id: string }>(
-      `SELECT id FROM messages
-       WHERE conversation_id = $1 AND direction = 'OUTBOUND' AND text = $2
-         AND origin IN ('manual', 'agent', 'scheduled') AND created_at >= $3
-       LIMIT 1`,
-      [input.conversationId, input.text, since],
+    const recent = await many<{ id: string; text: string }>(
+      `SELECT id, text FROM messages
+       WHERE conversation_id = $1 AND direction = 'OUTBOUND'
+         AND origin IN ('manual', 'agent', 'scheduled') AND created_at >= $2`,
+      [input.conversationId, since],
     );
-    if (twin) return null;
+    const incoming = input.text.trim();
+    const twin = recent.find((item) => {
+      const saved = item.text.trim();
+      return saved === incoming || incoming.startsWith(saved) || saved.startsWith(incoming);
+    });
+    if (twin) {
+      await run('UPDATE messages SET raw_json = $2 WHERE id = $1', [twin.id, JSON.stringify(input.raw)]);
+      return null;
+    }
   }
   await upsertMessage({
     id: input.id,
