@@ -70,7 +70,8 @@ async function refresh(token) {
 }
 
 function countsSig(data) {
-  return [data.counts.contacts, data.counts.conversations, data.counts.events, data.agent.autoReply ? 1 : 0].join('|');
+  const messages = data.counts.messages ?? data.counts.events ?? 0;
+  return [data.counts.contacts, data.counts.conversations, messages, data.agent.autoReply ? 1 : 0].join('|');
 }
 
 function conversationsSig(conversations) {
@@ -80,10 +81,11 @@ function conversationsSig(conversations) {
 }
 
 function stats(data) {
+  const messages = data.counts.messages ?? data.counts.events ?? 0;
   return `
     <article class="stat"><span class="muted">Contatos</span><b>${data.counts.contacts}</b><span class="hint">Cadastrados</span></article>
     <article class="stat"><span class="muted">Conversas</span><b>${data.counts.conversations}</b><span class="hint">Na operação</span></article>
-    <article class="stat"><span class="muted">Eventos</span><b>${data.counts.events}</b><span class="hint">Registrados</span></article>
+    <article class="stat"><span class="muted">Mensagens</span><b>${messages}</b><span class="hint">Na operação</span></article>
     <article class="stat"><span class="muted">Resposta automática</span><b>${data.agent.autoReply ? 'Ligada' : 'Desligada'}</b><span class="hint">Estado do agente</span></article>`;
 }
 

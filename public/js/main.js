@@ -178,16 +178,18 @@ function renderLogin() {
   drawnKey = '';
   app.innerHTML = `
     <section class="gate">
+      <div class="gate-glow" aria-hidden="true"></div>
       <div class="gate-form-panel">
         <form class="gate-form" id="login-form">
           <div class="gate-form-head">
             <img class="gate-logo" src="/logo-vertice.png" alt="Vértice Bot" />
-            <p class="gate-kicker">Painel operacional</p>
-            <h1>Entrar</h1>
+            <p class="gate-kicker">Vértice Bot</p>
+            <h1>Acesso ao painel</h1>
+            <p class="gate-lead">Entre com a senha operacional para continuar.</p>
           </div>
 
           <div class="gate-form-body">
-            <label class="gate-label" for="password">Senha do painel</label>
+            <label class="gate-label" for="password">Senha</label>
             <div class="gate-field">
               <span class="gate-field-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -211,16 +213,12 @@ function renderLogin() {
               </button>
             </div>
             <p class="login-error" id="login-error"></p>
-            <button class="gate-submit" type="submit">Acessar painel</button>
+            <button class="gate-submit" type="submit">Entrar</button>
           </div>
 
           <p class="gate-foot">Vértice Inovação · acesso restrito</p>
         </form>
       </div>
-
-      <aside class="gate-visual" aria-hidden="true">
-        <img class="gate-visual-image" src="/login1.png" alt="" />
-      </aside>
     </section>`;
 
   const passwordInput = document.querySelector('#password');

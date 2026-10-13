@@ -432,7 +432,9 @@ export async function listEvents(limit = 80) {
 }
 
 export async function dashboardCounts() {
-  const contacts = await one<{ total: number }>('SELECT COUNT(*)::int AS total FROM contacts');
+  const contacts = await one<{ total: number }>(
+    'SELECT COUNT(*)::int AS total FROM contacts WHERE hidden = 0',
+  );
   const conversations = await one<{ total: number }>(
     `SELECT COUNT(*)::int AS total FROM (
        SELECT DISTINCT COALESCE(NULLIF(contact_id, ''), NULLIF(contact_phone, ''), id) AS person
@@ -440,10 +442,16 @@ export async function dashboardCounts() {
        WHERE hidden = 0
      ) people`,
   );
-  const events = await one<{ total: number }>('SELECT COUNT(*)::int AS total FROM events');
+  const messages = await one<{ total: number }>(
+    `SELECT COUNT(*)::int AS total
+     FROM messages msg
+     JOIN conversations conv ON conv.id = msg.conversation_id
+     WHERE conv.hidden = 0`,
+  );
   return {
     contacts: contacts?.total ?? 0,
     conversations: conversations?.total ?? 0,
-    events: events?.total ?? 0,
+    messages: messages?.total ?? 0,
+    events: messages?.total ?? 0,
   };
 }
