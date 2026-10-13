@@ -45,19 +45,6 @@ export async function draftQuestionnaireReply(input: {
   });
   const questions = input.context.questionnaire.questions;
   const alreadySaved = input.context.answers;
-  const startIntent = isStartOrContinueIntent(media.summary || input.inbound);
-  const wantsList = startIntent || asksForQuestions(media.summary || input.inbound) || alreadySaved.length === 0;
-
-  // Abertura do ciclo: usuário só confirmou continuidade → envia o questionário agora.
-  if (wantsList && alreadySaved.length === 0 && (startIntent || asksForQuestions(media.summary || input.inbound))) {
-    return {
-      text: presentQuestionnaire(questions, input.contactName),
-      source: 'model',
-      detail: 'questionário apresentado',
-      completed: false,
-    };
-  }
-
   const already = formatAnswers(questions, alreadySaved);
   const pending = input.context.missing.map(
     (item, index) =>
@@ -65,20 +52,28 @@ export async function draftQuestionnaireReply(input: {
   );
 
   const system = [
-    'Você supervisiona a coleta de respostas de um questionário no WhatsApp.',
-    'Fale em português do Brasil, de forma curta e humana.',
-    'O usuário pode responder em texto livre, áudio, imagem ou vídeo.',
-    'Trate áudio transcrito, descrição de imagem e vídeo recebido como respostas válidas.',
-    'REGRA OBRIGATÓRIA: se ainda não houver respostas salvas e o usuário disser que quer continuar, confirmar, ok, sim, ou pedir as perguntas, sua reply DEVE listar TODAS as perguntas numeradas.',
-    'Nunca diga apenas "vamos continuar o questionário" sem enviar as perguntas.',
-    'Frases como "vamos continuar", "ok", "sim", "pode ser" NÃO são respostas das perguntas — nesse caso answers deve ser [].',
-    'Extraia respostas reais da mensagem atual. Se estiverem incompletas, confirme o que entendeu e peça o que falta, listando as faltantes.',
-    'Quando todas as perguntas tiverem resposta válida, agradeça e encerre a coleta.',
-    'Não invente respostas. Não mencione que você é um modelo.',
+    'Você é um atendente humano da Vértice acompanhando um questionário no WhatsApp.',
+    'Fale em português do Brasil, de forma natural, curta e personalizada.',
+    '',
+    'Sua função é INTERPRETAR a mensagem do usuário e decidir a melhor ação. Não use regras rígidas de palavras-chave.',
+    'Exemplos do que a pessoa pode fazer (e você decide caso a caso):',
+    '- Confirmar que quer continuar → apresente o questionário completo, numerado.',
+    '- Pedir só uma pergunta (“qual é a terceira?”) → responda só essa, com o texto da pergunta.',
+    '- Enviar respostas (texto, áudio, imagem ou vídeo) → extraia e salve o que for resposta real.',
+    '- Mandar resposta incompleta → confirme o que entendeu e peça o que falta.',
+    '- Fazer pergunta fora do questionário → responda de forma útil e, se ainda faltarem respostas, reconduza com delicadeza.',
+    '',
+    'Importante:',
+    '- Só preencha "answers" quando a mensagem realmente contiver conteúdo de resposta às perguntas.',
+    '- Se a mensagem for só intenção, dúvida ou conversa (sem resposta às perguntas), deixe "answers": [].',
+    '- Quando for apresentar o questionário, inclua TODAS as perguntas numeradas na "reply".',
+    '- Quando for lembrar o que falta, liste só as faltantes.',
+    '- Aceite texto, áudio (já transcrito), imagem (já descrita) e vídeo.',
+    '- Não invente respostas. Não mencione que você é um modelo.',
     '',
     `Questionário: ${input.context.questionnaire.name}`,
     `Contato: ${input.contactName || 'não informado'}`,
-    'Perguntas:',
+    'Perguntas do questionário:',
     questions
       .map((item, index) => `${index + 1}. id=${item.id} | aceita=${item.expected_type} | ${item.body}`)
       .join('\n'),
@@ -89,13 +84,13 @@ export async function draftQuestionnaireReply(input: {
     'Ainda faltam:',
     pending.join('\n') || '(nenhuma)',
     '',
-    'Responda APENAS com JSON válido neste formato:',
-    '{"reply":"texto para o usuário","answers":[{"questionId":"id","text":"conteúdo entendido da resposta","type":"text|audio|image|video"}],"complete":false}',
+    'Responda APENAS com JSON válido:',
+    '{"reply":"mensagem natural para o usuário","answers":[{"questionId":"id","text":"conteúdo da resposta","type":"text|audio|image|video"}],"complete":false}',
   ].join('\n');
 
   const history = input.history
     .filter((item) => item.text.trim())
-    .slice(-6)
+    .slice(-8)
     .map((item) => ({
       role: item.direction === 'OUTBOUND' ? 'assistant' : 'user',
       content: item.text,
@@ -106,9 +101,10 @@ export async function draftQuestionnaireReply(input: {
     media.mediaUrl ? `URL da mídia: ${media.mediaUrl}` : '',
     media.caption ? `Legenda original: ${media.caption}` : '',
     media.transcript ? `Conteúdo entendido/transcrito: ${media.transcript}` : '',
-    `Resumo para coleta: ${media.summary || input.inbound}`,
-    startIntent ? 'Intenção detectada: iniciar/continuar (NÃO salve como resposta; liste as perguntas).' : '',
-    media.understood ? 'Interpretação: ok' : 'Interpretação: parcial — mesmo assim tente coletar se a mídia for a resposta.',
+    `Mensagem do usuário: ${media.summary || input.inbound}`,
+    media.understood
+      ? 'Interpretação da mídia: ok'
+      : 'Interpretação da mídia: parcial — use o contexto e decida o melhor próximo passo.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -119,19 +115,18 @@ export async function draftQuestionnaireReply(input: {
       ...history,
       { role: 'user', content: userContent },
     ];
-    const raw = await completeChat(messages, { temperature: 0.2, timeoutMs: 40_000 });
-    let extracted = parseExtracted(raw, questions, media);
+    const raw = await completeChat(messages, { temperature: 0.35, timeoutMs: 40_000 });
+    const extracted = parseExtracted(raw, media);
 
-    if (startIntent) {
-      extracted = { ...extracted, answers: [] };
-    } else if (!extracted.answers.length) {
-      extracted = {
-        ...extracted,
-        answers: autoAssignMedia(input.context.missing, media),
-      };
-    }
+    // Mídia sem texto: se o modelo não mapeou, tenta associar à próxima pergunta faltante.
+    const provisional =
+      extracted.answers.length > 0
+        ? extracted.answers
+        : media.type !== 'text' && media.mediaUrl
+          ? autoAssignMedia(input.context.missing, media)
+          : [];
 
-    const accepted = filterAccepted(extracted.answers, questions, media);
+    const accepted = filterAccepted(provisional, questions, media);
     const answers = accepted.length
       ? await upsertAnswers(
           input.context.cycle.id,
@@ -148,12 +143,9 @@ export async function draftQuestionnaireReply(input: {
     const complete = missing.length === 0;
     if (complete) await markCycleCompleted(input.context.cycle.id);
 
-    let reply = extracted.reply.trim() || defaultReply(questions, answers, missing, complete, media);
-    if (!complete && answers.length === 0 && !replyListsQuestions(reply, questions)) {
-      reply = presentQuestionnaire(questions, input.contactName);
-    } else if (!complete && missing.length && answers.length > 0 && !replyListsQuestions(reply, missing)) {
-      reply = `${reply.replace(/\s+$/, '')}\n\nAinda falta:\n${formatQuestionList(missing)}`;
-    }
+    const reply =
+      extracted.reply.trim() ||
+      defaultReply(questions, answers, missing, complete, media, input.contactName);
 
     return {
       text: reply.slice(0, 1500),
@@ -163,101 +155,39 @@ export async function draftQuestionnaireReply(input: {
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Falha no modelo';
-    if (startIntent || alreadySaved.length === 0) {
-      return {
-        text: presentQuestionnaire(questions, input.contactName),
-        source: 'fallback',
-        detail,
-        completed: false,
-      };
-    }
-    const auto = filterAccepted(autoAssignMedia(input.context.missing, media), questions, media);
-    if (auto.length) {
-      const answers = await upsertAnswers(
-        input.context.cycle.id,
-        auto.map((item) => ({
-          questionId: item.questionId,
-          text: item.text,
-          type: item.type,
-          mediaUrl: item.type === 'text' ? '' : media.mediaUrl || input.mediaUrl,
-        })),
-      );
-      const missing = missingQuestions(questions, answers);
-      const complete = missing.length === 0;
-      if (complete) await markCycleCompleted(input.context.cycle.id);
-      return {
-        text: defaultReply(questions, answers, missing, complete, media),
-        source: 'fallback',
-        detail,
-        completed: complete,
-      };
+    if (media.type !== 'text' && media.mediaUrl) {
+      const auto = filterAccepted(autoAssignMedia(input.context.missing, media), questions, media);
+      if (auto.length) {
+        const answers = await upsertAnswers(
+          input.context.cycle.id,
+          auto.map((item) => ({
+            questionId: item.questionId,
+            text: item.text,
+            type: item.type,
+            mediaUrl: media.mediaUrl || input.mediaUrl,
+          })),
+        );
+        const missing = missingQuestions(questions, answers);
+        const complete = missing.length === 0;
+        if (complete) await markCycleCompleted(input.context.cycle.id);
+        return {
+          text: defaultReply(questions, answers, missing, complete, media, input.contactName),
+          source: 'fallback',
+          detail,
+          completed: complete,
+        };
+      }
     }
     if (fallback) return { text: fallback, source: 'fallback', detail, completed: false };
     return { text: '', source: 'none', detail, completed: false };
   }
 }
 
-function presentQuestionnaire(questions: QuestionnaireQuestion[], contactName: string): string {
-  const hello = contactName?.trim() ? `Perfeito, ${contactName.trim().split(/\s+/)[0]}!` : 'Perfeito!';
-  return [
-    `${hello} Segue o questionário. Pode responder por texto, áudio, imagem ou vídeo.`,
-    formatQuestionList(questions),
-  ].join('\n\n');
-}
-
-function formatQuestionList(questions: QuestionnaireQuestion[]): string {
-  return questions.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
-}
-
-function replyListsQuestions(reply: string, questions: QuestionnaireQuestion[]): boolean {
-  const normalized = reply.toLowerCase();
-  const hits = questions.filter((item) => {
-    const body = item.body.trim().toLowerCase();
-    if (body.length < 8) return normalized.includes(body);
-    return normalized.includes(body.slice(0, Math.min(24, body.length)));
-  }).length;
-  return hits >= Math.min(2, questions.length) || (questions.length === 1 && hits === 1);
-}
-
-function isStartOrContinueIntent(value: string): boolean {
-  const text = value
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!text || text.length > 80) return false;
-  return (
-    /^(vamos\s+)?continuar\b/.test(text) ||
-    /^(pode\s+)?continuar\b/.test(text) ||
-    /^(ok|okay|certo|beleza|blz|sim|pode|vamos|segue|seguimos|iniciar|comecar|começar)\b/.test(text) ||
-    /^(quero|pode|vamos)\s+(continuar|seguir|comecar|começar|iniciar)\b/.test(text) ||
-    text === 'vamos continuar' ||
-    text === 'pode continuar' ||
-    text === 'quero continuar'
-  );
-}
-
-function asksForQuestions(value: string): boolean {
-  const text = value.toLowerCase();
-  return (
-    text.includes('perguntas') ||
-    text.includes('questionario') ||
-    text.includes('questionário') ||
-    text.includes('o que preciso') ||
-    text.includes('quais sao') ||
-    text.includes('quais são')
-  );
-}
-
-function parseExtracted(
-  raw: string,
-  questions: QuestionnaireQuestion[],
-  media: MediaUnderstanding,
-): Extracted {
+function parseExtracted(raw: string, media: MediaUnderstanding): Extracted {
   const jsonText = extractJson(raw);
-  if (!jsonText) return heuristicExtract(raw);
+  if (!jsonText) {
+    return { reply: stripJsonNoise(raw), answers: [], complete: false };
+  }
   try {
     const data = JSON.parse(jsonText) as {
       reply?: unknown;
@@ -268,39 +198,29 @@ function parseExtracted(
       ? data.answers
           .map((item) => {
             const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-            const type = normalizeMediaType(String(row.type || media.type || 'text'));
-            const text = String(row.text || '').trim() || media.summary;
             return {
               questionId: String(row.questionId || ''),
-              text,
-              type,
+              text: String(row.text || '').trim(),
+              type: normalizeMediaType(String(row.type || media.type || 'text')),
             };
           })
-          .filter((item) => item.questionId && item.text && !isStartOrContinueIntent(item.text))
+          .filter((item) => item.questionId && item.text)
       : [];
     return {
-      reply: String(data.reply || '').trim(),
+      reply: String(data.reply || '').trim() || stripJsonNoise(raw),
       answers,
       complete: Boolean(data.complete),
     };
   } catch {
-    return heuristicExtract(raw);
+    return { reply: stripJsonNoise(raw), answers: [], complete: false };
   }
 }
 
-function heuristicExtract(raw: string): Extracted {
-  const reply = raw.replace(/```json[\s\S]*```/i, '').replace(/\{[\s\S]*\}/, '').trim();
-  return { reply, answers: [], complete: false };
-}
-
 function autoAssignMedia(candidates: QuestionnaireQuestion[], media: MediaUnderstanding): ExtractedAnswer[] {
-  if (!media.summary && !media.mediaUrl) return [];
-  if (media.type === 'text' && isStartOrContinueIntent(media.summary)) return [];
-  // Texto livre só entra automático se sobrar exatamente uma pergunta.
-  if (media.type === 'text' && candidates.length !== 1) return [];
-
+  if (!media.mediaUrl && !media.summary) return [];
+  if (media.type === 'text') return [];
   const eligible = candidates.filter((question) => typeFits(question.expected_type, media.type));
-  const target = eligible[0] || (media.type !== 'text' ? candidates[0] : undefined);
+  const target = eligible[0] || candidates[0];
   if (!target) return [];
   return [
     {
@@ -327,7 +247,6 @@ function filterAccepted(
       const question = byId.get(answer.questionId);
       if (!question) return false;
       if (!answer.text.trim() && !media.mediaUrl) return false;
-      if (isStartOrContinueIntent(answer.text)) return false;
       return typeFits(question.expected_type, answer.type);
     });
 }
@@ -378,9 +297,15 @@ function defaultReply(
   missing: QuestionnaireQuestion[],
   complete: boolean,
   media: MediaUnderstanding,
+  contactName: string,
 ): string {
   if (complete) return 'Obrigado! Recebi todas as respostas do questionário.';
-  if (!answers.length) return presentQuestionnaire(questions, '');
+  if (!answers.length) {
+    const name = contactName?.trim().split(/\s+/)[0] || '';
+    const hello = name ? `Certo, ${name}!` : 'Certo!';
+    const list = questions.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
+    return `${hello} Segue o questionário:\n${list}`;
+  }
   const thanks =
     media.type === 'audio'
       ? 'Ouvi seu áudio.'
@@ -389,7 +314,12 @@ function defaultReply(
         : media.type === 'video'
           ? 'Recebi o vídeo.'
           : 'Recebi sua mensagem.';
-  return `${thanks} Ainda falta:\n${formatQuestionList(missing)}`;
+  const pending = missing.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
+  return `${thanks} Ainda falta:\n${pending}`;
+}
+
+function stripJsonNoise(raw: string): string {
+  return raw.replace(/```json[\s\S]*```/i, '').replace(/\{[\s\S]*\}/, '').trim();
 }
 
 function extractJson(raw: string): string {
