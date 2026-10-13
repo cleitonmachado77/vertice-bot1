@@ -85,7 +85,7 @@ export async function understandInbound(input: {
       transcript: caption,
       caption,
       mediaUrl,
-      understood: true,
+      understood: Boolean(caption),
     };
   }
 

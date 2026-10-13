@@ -1,15 +1,17 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 import { databaseConnectionString } from './database-url.js';
 import { env } from './env.js';
 
 const cache = new Map<string, string>();
+const transactionStorage = new AsyncLocalStorage<pg.PoolClient>();
 let pool: pg.Pool | undefined;
 
 export async function many<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-  const result = await getPool().query(sql, params);
+  const result = await query(sql, params);
   return result.rows as T[];
 }
 
@@ -19,7 +21,28 @@ export async function one<T>(sql: string, params: unknown[] = []): Promise<T | u
 }
 
 export async function run(sql: string, params: unknown[] = []): Promise<void> {
-  await getPool().query(sql, params);
+  await query(sql, params);
+}
+
+export async function withTransaction<T>(work: () => Promise<T>): Promise<T> {
+  if (transactionStorage.getStore()) return work();
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const value = await transactionStorage.run(client, work);
+    await client.query('COMMIT');
+    return value;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function query(sql: string, params: unknown[]): Promise<pg.QueryResult> {
+  const client = transactionStorage.getStore();
+  return client ? client.query(sql, params) : getPool().query(sql, params);
 }
 
 /** Impede dois workers (web + cron Railway) de dispararem ao mesmo tempo. */
@@ -220,6 +243,72 @@ const SCHEMA = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS questionnaire_revisions (
+    id TEXT PRIMARY KEY,
+    questionnaire_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    greeting TEXT NOT NULL DEFAULT '',
+    frequency TEXT NOT NULL,
+    weekday INTEGER NOT NULL,
+    send_time TEXT NOT NULL,
+    template_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(questionnaire_id, version)
+  );
+  CREATE TABLE IF NOT EXISTS questionnaire_revision_questions (
+    revision_id TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    expected_type TEXT NOT NULL,
+    export_field TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL,
+    PRIMARY KEY(revision_id, question_id)
+  );
+  CREATE TABLE IF NOT EXISTS conversation_questionnaire_context (
+    conversation_id TEXT PRIMARY KEY,
+    active_cycle_id TEXT NOT NULL DEFAULT '',
+    candidate_cycle_ids_json TEXT NOT NULL DEFAULT '[]',
+    awaiting_selection INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS inbound_jobs (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL UNIQUE,
+    message_id TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    locked_at TIMESTAMPTZ,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS outbound_outbox (
+    id TEXT PRIMARY KEY,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    template_id TEXT NOT NULL DEFAULT '',
+    variables_json TEXT NOT NULL DEFAULT '[]',
+    channel_id TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    contact_id TEXT NOT NULL DEFAULT '',
+    cycle_id TEXT NOT NULL DEFAULT '',
+    origin TEXT NOT NULL DEFAULT 'agent',
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    locked_at TIMESTAMPTZ,
+    error TEXT NOT NULL DEFAULT '',
+    response_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
   CREATE INDEX IF NOT EXISTS idx_questionnaire_questions ON questionnaire_questions(questionnaire_id, sort_order);
@@ -228,6 +317,8 @@ const SCHEMA = `
     ON questionnaire_cycles(questionnaire_id, contact_id, occurrence_date);
   CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_answers_question
     ON questionnaire_answers(cycle_id, question_id);
+  CREATE INDEX IF NOT EXISTS idx_inbound_jobs_due ON inbound_jobs(status, available_at);
+  CREATE INDEX IF NOT EXISTS idx_outbound_outbox_due ON outbound_outbox(status, available_at);
 `;
 
 const DEFAULT_PROMPT = `Você é o assistente de WhatsApp da Vértice Inovação.
@@ -305,6 +396,87 @@ async function migrate(): Promise<void> {
   await run(
     `ALTER TABLE questionnaire_questions ADD COLUMN IF NOT EXISTS export_field TEXT NOT NULL DEFAULT ''`,
   );
+  await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS template_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`);
+  await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS deleted_at TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS last_prompted_at TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS last_inbound_at TEXT NOT NULL DEFAULT ''`);
+  await run(
+    `UPDATE questionnaires
+     SET template_id = COALESCE(NULLIF(template_id, ''), (SELECT value FROM settings WHERE key = 'questionnaire_template_id'), '')
+     WHERE template_id = ''`,
+  );
+  await backfillQuestionnaireRevisions();
+  await ensureQuestionnaireConstraints();
+}
+
+async function backfillQuestionnaireRevisions(): Promise<void> {
+  await run(
+    `INSERT INTO questionnaire_revisions(
+       id, questionnaire_id, version, name, greeting, frequency, weekday, send_time, template_id, created_at
+     )
+     SELECT q.id || ':v' || q.version, q.id, q.version, q.name, q.greeting,
+            q.frequency, q.weekday, q.send_time, q.template_id, q.updated_at
+     FROM questionnaires q
+     ON CONFLICT(questionnaire_id, version) DO NOTHING`,
+  );
+  await run(
+    `INSERT INTO questionnaire_revision_questions(
+       revision_id, question_id, body, expected_type, export_field, sort_order
+     )
+     SELECT rev.id, qq.id, qq.body, qq.expected_type,
+            COALESCE(qq.export_field, ''), qq.sort_order
+     FROM questionnaire_questions qq
+     JOIN questionnaires q ON q.id = qq.questionnaire_id
+     JOIN questionnaire_revisions rev
+       ON rev.questionnaire_id = q.id AND rev.version = q.version
+     ON CONFLICT(revision_id, question_id) DO NOTHING`,
+  );
+  await run(
+    `UPDATE questionnaire_cycles cyc
+     SET revision_id = rev.id
+     FROM questionnaires q
+     JOIN questionnaire_revisions rev
+       ON rev.questionnaire_id = q.id AND rev.version = q.version
+     WHERE q.id = cyc.questionnaire_id AND cyc.revision_id = ''`,
+  );
+}
+
+async function ensureQuestionnaireConstraints(): Promise<void> {
+  const constraints = [
+    {
+      name: 'fk_questionnaire_revision_questionnaire',
+      table: 'questionnaire_revisions',
+      clause: 'FOREIGN KEY (questionnaire_id) REFERENCES questionnaires(id) ON DELETE RESTRICT',
+    },
+    {
+      name: 'fk_revision_question_revision',
+      table: 'questionnaire_revision_questions',
+      clause: 'FOREIGN KEY (revision_id) REFERENCES questionnaire_revisions(id) ON DELETE CASCADE',
+    },
+    {
+      name: 'fk_questionnaire_cycle_revision',
+      table: 'questionnaire_cycles',
+      clause: 'FOREIGN KEY (revision_id) REFERENCES questionnaire_revisions(id) ON DELETE RESTRICT',
+    },
+    {
+      name: 'fk_questionnaire_answer_cycle',
+      table: 'questionnaire_answers',
+      clause: 'FOREIGN KEY (cycle_id) REFERENCES questionnaire_cycles(id) ON DELETE CASCADE',
+    },
+  ];
+  for (const constraint of constraints) {
+    await run(
+      `DO $$
+       BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '${constraint.name}') THEN
+           ALTER TABLE ${constraint.table}
+           ADD CONSTRAINT ${constraint.name} ${constraint.clause} NOT VALID;
+         END IF;
+       END $$`,
+    );
+  }
 }
 
 async function seedSettings(): Promise<void> {

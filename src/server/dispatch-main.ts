@@ -7,7 +7,7 @@ import { runDueDispatches } from './dispatch.js';
  *
  * Railway:
  * 1. Serviço web: start `npm start` e ENABLE_INTERNAL_SCHEDULER=0
- * 2. Cron Job: schedule `*/5 * * * *` e start `npm run dispatch`
+ * 2. Cron Job: agendamento a cada cinco minutos e start `npm run dispatch`
  *
  * O lock no Postgres evita envio duplicado se o scheduler interno ainda estiver ligado.
  */

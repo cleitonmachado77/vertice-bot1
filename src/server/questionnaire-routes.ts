@@ -5,6 +5,8 @@ import { getSetting, setSetting, many } from './db.js';
 import { runDueDispatches } from './dispatch.js';
 import { asList } from './map.js';
 import { listTemplates } from './nevoa.js';
+import { retryInboundJob } from './inbound-jobs.js';
+import { retryOutbound } from './outbound-outbox.js';
 import { listCollectedData, listDueQuestionnaireSends } from './questionnaire-cycles.js';
 import { buildRfqExport } from './rfq-export.js';
 import { RFQ_FIELDS } from './rfq-fields.js';
@@ -151,6 +153,43 @@ export function registerQuestionnaireRoutes(): void {
     }
   });
 
+  route('GET', '/api/questionnaires/operations', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    const queue = await many<{ kind: string; status: string; total: number }>(
+      `SELECT 'inbound' AS kind, status, COUNT(*)::int AS total
+       FROM inbound_jobs GROUP BY status
+       UNION ALL
+       SELECT 'outbound' AS kind, status, COUNT(*)::int AS total
+       FROM outbound_outbox GROUP BY status
+       ORDER BY kind, status`,
+    );
+    const failures = await many<{
+      id: string;
+      kind: string;
+      status: string;
+      error: string;
+      updated_at: string;
+    }>(
+      `SELECT id, 'inbound' AS kind, status, last_error AS error, updated_at::text
+       FROM inbound_jobs WHERE status IN ('dead', 'retry')
+       UNION ALL
+       SELECT id, 'outbound' AS kind, status, error, updated_at::text
+       FROM outbound_outbox WHERE status IN ('dead', 'retry', 'uncertain')
+       ORDER BY updated_at DESC LIMIT 30`,
+    );
+    json(ctx.res, 200, { queue, failures });
+  });
+
+  route('POST', '/api/questionnaires/inbound-jobs/:id/retry', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    json(ctx.res, 200, { ok: await retryInboundJob(ctx.params.id) });
+  });
+
+  route('POST', '/api/questionnaires/outbound-jobs/:id/retry', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    json(ctx.res, 200, { ok: await retryOutbound(ctx.params.id) });
+  });
+
   route('POST', '/api/questionnaires', async (ctx) => {
     if (!requireUser(ctx)) return;
     try {
@@ -215,6 +254,7 @@ async function saveFrom(ctx: Ctx, id = '') {
     frequency: text(input.frequency, 'daily'),
     weekday: Number(input.weekday ?? 1),
     sendTime: text(input.sendTime, '09:00'),
+    templateId: text(input.templateId),
     active: input.active !== false,
     contactIds,
     questions: questions.map((item) => {

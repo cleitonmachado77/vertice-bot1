@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
     "start": "tsx src/server/index.ts",
-    "dispatch": "tsx src/server/dispatch-main.ts"
+    "dispatch": "tsx src/server/dispatch-main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
@@ -13,6 +15,8 @@
     "tsx": "^4.20.6"
   },
   "devDependencies": {
-    "@types/node": "^24.7.0"
+    "@types/node": "^24.7.0",
+    "@types/pg": "^8.23.1",
+    "typescript": "^7.0.2"
   }
 }

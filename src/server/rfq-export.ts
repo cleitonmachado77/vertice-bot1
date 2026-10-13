@@ -39,7 +39,7 @@ type CycleRow = {
 };
 
 export async function buildRfqExport(questionnaireId: string): Promise<RfqExportResult> {
-  const questionnaire = await getQuestionnaire(questionnaireId);
+  const questionnaire = await getQuestionnaire(questionnaireId, true);
   if (!questionnaire) throw new Error('Questionário não encontrado');
 
   const mappedKeys = new Set(
@@ -108,13 +108,14 @@ async function loadCycleRows(questionnaireId: string): Promise<RfqExportRow[]> {
   const data = await many<CycleRow>(
     `SELECT cyc.id AS cycle_id, cyc.occurrence_date, cyc.status,
             COALESCE(ct.name, '') AS contact_name, COALESCE(ct.phone, '') AS contact_phone,
-            qq.id AS question_id, COALESCE(qq.export_field, '') AS export_field,
+            qq.question_id, COALESCE(qq.export_field, '') AS export_field,
             COALESCE(ans.answer_text, '') AS answer_text
      FROM questionnaire_cycles cyc
      JOIN contacts ct ON ct.id = cyc.contact_id
-     JOIN questionnaire_questions qq ON qq.questionnaire_id = cyc.questionnaire_id
+     JOIN questionnaire_revisions rev ON rev.id = cyc.revision_id
+     JOIN questionnaire_revision_questions qq ON qq.revision_id = rev.id
      LEFT JOIN questionnaire_answers ans
-       ON ans.cycle_id = cyc.id AND ans.question_id = qq.id
+       ON ans.cycle_id = cyc.id AND ans.question_id = qq.question_id
      WHERE cyc.questionnaire_id = $1
      ORDER BY cyc.occurrence_date, ct.name, qq.sort_order`,
     [questionnaireId],

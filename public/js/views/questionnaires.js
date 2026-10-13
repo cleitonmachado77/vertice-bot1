@@ -64,7 +64,7 @@ async function renderModels(root, token = getNavToken()) {
   const contactItems = contacts.items || [];
 
   const item = editing || {};
-  const selectedTemplateId = data.templateId || templates.selectedId || '';
+  const selectedTemplateId = item.template_id || data.templateId || templates.selectedId || '';
   root.innerHTML = `
     <div class="q-board">
       <form class="card stack" id="questionnaire-form" data-greeting="${escapeHtml(item.greeting || '')}">
@@ -142,9 +142,10 @@ async function renderModels(root, token = getNavToken()) {
 async function renderData(root, token = getNavToken()) {
   const keepFilter = root.dataset.filterId || '';
   if (!root.querySelector('#data-filter')) root.innerHTML = panelLoading('Carregando dados…');
-  const [questionnaires, data] = await Promise.all([
+  const [questionnaires, data, operations] = await Promise.all([
     api('/api/questionnaires'),
     api('/api/questionnaires/data'),
+    api('/api/questionnaires/operations').catch(() => ({ queue: [], failures: [] })),
   ]);
   if (!isNavActive(token)) return;
   rfqFields = questionnaires.rfqFields || data.rfqFields || rfqFields;
@@ -157,7 +158,19 @@ async function renderData(root, token = getNavToken()) {
   const completed = new Set(
     items.filter((item) => item.cycle_status === 'completed').map((item) => item.cycle_id),
   ).size;
-  const options = (questionnaires.items || [])
+  const activeQuestionnaires = questionnaires.items || [];
+  const activeIds = new Set(activeQuestionnaires.map((item) => item.id));
+  const archivedQuestionnaires = Array.from(
+    new Map(
+      all
+        .filter((item) => item.questionnaire_id && !activeIds.has(item.questionnaire_id))
+        .map((item) => [
+          item.questionnaire_id,
+          { id: item.questionnaire_id, name: `${item.questionnaire_name || 'Questionário'} (arquivado)` },
+        ]),
+    ).values(),
+  );
+  const options = [...activeQuestionnaires, ...archivedQuestionnaires]
     .map(
       (item) =>
         `<option value="${escapeHtml(item.id)}" ${item.id === filterId ? 'selected' : ''}>${escapeHtml(item.name)}</option>`,
@@ -198,6 +211,8 @@ async function renderData(root, token = getNavToken()) {
           }">Baixar planilha</button>
         </div>
       </section>
+
+      ${operationsPanel(operations)}
 
       <section class="card stack data-results">
         ${
@@ -258,6 +273,56 @@ async function renderData(root, token = getNavToken()) {
       toast(error.message);
     }
   });
+  root.querySelectorAll('[data-retry-job]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const kind = button.dataset.jobKind;
+      const path =
+        kind === 'inbound'
+          ? `/api/questionnaires/inbound-jobs/${encodeURIComponent(button.dataset.retryJob)}/retry`
+          : `/api/questionnaires/outbound-jobs/${encodeURIComponent(button.dataset.retryJob)}/retry`;
+      try {
+        const result = await api(path, { method: 'POST', body: {} });
+        toast(result.ok ? 'Processamento recolocado na fila' : 'Job não pode ser reenviado');
+        await renderData(root, token);
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+  });
+}
+
+function operationsPanel(operations) {
+  const failures = operations.failures || [];
+  const pending = (operations.queue || [])
+    .filter((item) => ['pending', 'processing', 'retry'].includes(item.status))
+    .reduce((total, item) => total + Number(item.total || 0), 0);
+  if (!failures.length && !pending) return '';
+  return `
+    <section class="card stack">
+      <div class="card-head">
+        <h2>Operação das filas</h2>
+        <p class="muted">${pending} processamento(s) pendente(s). Envios incertos não são repetidos automaticamente.</p>
+      </div>
+      ${
+        failures.length
+          ? `<div class="stack">${failures
+              .map(
+                (item) => `<div class="row" style="justify-content: space-between;">
+                  <div>
+                    <strong>${escapeHtml(item.kind === 'inbound' ? 'Entrada' : 'Saída')} · ${escapeHtml(item.status)}</strong>
+                    <div class="muted">${escapeHtml(item.error || '')}</div>
+                  </div>
+                  ${
+                    item.status === 'uncertain'
+                      ? '<span class="pill off">Revisão manual necessária</span>'
+                      : `<button class="btn-ghost" type="button" data-retry-job="${escapeHtml(item.id)}" data-job-kind="${escapeHtml(item.kind)}">Tentar novamente</button>`
+                  }
+                </div>`,
+              )
+              .join('')}</div>`
+          : ''
+      }
+    </section>`;
 }
 
 function dataRow(item) {
@@ -458,25 +523,20 @@ async function save(event, id) {
   }));
   const contactIds = [...form.querySelectorAll('[name=contactIds]:checked')].map((input) => input.value);
   try {
-    await Promise.all([
-      api('/api/questionnaires/settings', {
-        method: 'PUT',
-        body: { templateId: String(data.get('templateId') || '') },
-      }),
-      api(id ? `/api/questionnaires/${encodeURIComponent(id)}` : '/api/questionnaires', {
-        method: id ? 'PUT' : 'POST',
-        body: {
-          name: data.get('name'),
-          greeting: form.dataset.greeting || '',
-          frequency: data.get('frequency'),
-          weekday: Number(data.get('weekday') || 1),
-          sendTime: data.get('sendTime'),
-          active: data.get('active') === 'on',
-          contactIds,
-          questions,
-        },
-      }),
-    ]);
+    await api(id ? `/api/questionnaires/${encodeURIComponent(id)}` : '/api/questionnaires', {
+      method: id ? 'PUT' : 'POST',
+      body: {
+        name: data.get('name'),
+        greeting: form.dataset.greeting || '',
+        frequency: data.get('frequency'),
+        weekday: Number(data.get('weekday') || 1),
+        sendTime: data.get('sendTime'),
+        templateId: String(data.get('templateId') || ''),
+        active: data.get('active') === 'on',
+        contactIds,
+        questions,
+      },
+    });
     editingId = '';
     toast(id ? 'Questionário salvo' : 'Questionário criado');
     await renderQuestionnaires(document.querySelector('#view'));

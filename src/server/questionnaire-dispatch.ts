@@ -1,26 +1,24 @@
 import { getSetting } from './db.js';
 import { minutesFromClock, zonedNow } from './clock.js';
 import { asList } from './map.js';
-import { moveContact } from './local-contact.js';
-import { NevoaError, listTemplates, sendWhatsappTemplate, sendWhatsappText } from './nevoa.js';
+import { NevoaError, listTemplates } from './nevoa.js';
+import { enqueueOutbound } from './outbound-outbox.js';
 import {
   claimCycleForSend,
+  getQuestionnaireForCycle,
   listCycleAnswers,
   listDueQuestionnaireSends,
   markCycleCompleted,
   markCycleFailed,
-  markCycleNotified,
   missingQuestions,
   recoverStuckSendingCycles,
 } from './questionnaire-cycles.js';
 import {
   QUESTIONNAIRE_FIRST_CONTACT_PHRASE,
-  getQuestionnaire,
   type Questionnaire,
   type QuestionnaireQuestion,
 } from './questionnaires.js';
-import { ensureConversation, hasOpenCustomerWindow, recordOutbound } from './thread.js';
-import { upsertConversation } from './store.js';
+import { hasOpenCustomerWindow } from './thread.js';
 
 export type QuestionnaireDispatchRun = {
   date: string;
@@ -59,18 +57,25 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
     return result;
   }
 
-  let template: FirstContactTemplate | undefined;
-  let templateError = '';
-  const ensureTemplate = async (): Promise<FirstContactTemplate | undefined> => {
-    if (template) return template;
-    if (templateError) return undefined;
+  const templateCache = new Map<string, FirstContactTemplate | undefined>();
+  const templateErrors = new Map<string, string>();
+  const ensureTemplate = async (configuredId: string): Promise<FirstContactTemplate | undefined> => {
+    if (templateCache.has(configuredId)) return templateCache.get(configuredId);
     try {
-      template = await resolveFirstContactTemplate(channelId);
-      if (!template) templateError = 'Nenhum template Meta APPROVED disponível para o primeiro envio';
+      const template = await resolveFirstContactTemplate(channelId, configuredId);
+      templateCache.set(configuredId, template);
+      if (!template) {
+        templateErrors.set(configuredId, 'Nenhum template Meta APPROVED disponível para o primeiro envio');
+      }
+      return template;
     } catch (error) {
-      templateError = error instanceof Error ? error.message : 'Falha ao listar templates';
+      templateErrors.set(
+        configuredId,
+        error instanceof Error ? error.message : 'Falha ao listar templates',
+      );
+      templateCache.set(configuredId, undefined);
+      return undefined;
     }
-    return template;
   };
 
   const due = await listDueQuestionnaireSends(clock.weekday);
@@ -82,8 +87,6 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
       detail: 'Nenhum questionário ativo com contato atribuído para hoje',
     });
   }
-
-  const questionnaireCache = new Map<string, Questionnaire | undefined>();
 
   for (const item of due) {
     if (clock.minutes < minutesFromClock(item.send_time)) {
@@ -98,11 +101,7 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
     }
 
     try {
-      let questionnaire = questionnaireCache.get(item.questionnaire_id);
-      if (!questionnaireCache.has(item.questionnaire_id)) {
-        questionnaire = await getQuestionnaire(item.questionnaire_id);
-        questionnaireCache.set(item.questionnaire_id, questionnaire);
-      }
+      const questionnaire = await getQuestionnaireForCycle(cycle);
       if (!questionnaire?.questions.length) {
         await markCycleFailed(cycle.id, 'Questionário sem perguntas');
         result.failed += 1;
@@ -127,7 +126,6 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
       const windowOpen = await hasOpenCustomerWindow(item.contact_id, item.phone);
       // Com respostas parciais, só pede o que falta (texto). Template completo atrapalharia.
       const preferSessionText = windowOpen || alreadyStarted;
-      let sessionTextFailed = false;
 
       if (preferSessionText) {
         const text = buildSessionKickoffText(
@@ -135,99 +133,73 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
           item.name || item.phone,
           alreadyStarted ? missing : undefined,
         );
-        try {
-          const sent = (await sendWhatsappText({
-            phone: item.phone,
-            text,
-            channelIntegrationId: channelId,
-          })) as {
-            conversation?: { id?: string; status?: string };
-            contact?: { id?: string };
-          };
-          await finalizeOutbound({
-            sent,
-            item,
-            channelId,
+        await enqueueOutbound({
+          dedupeKey: `questionnaire:${cycle.id}:kickoff`,
+          kind: 'text',
+          phone: item.phone,
+          text,
+          channelId,
+          contactId: item.contact_id,
+          cycleId: cycle.id,
+          origin: 'scheduled',
+          raw: {
+            source: alreadyStarted ? 'questionnaire-session-remaining' : 'questionnaire-session',
+            questionnaireId: item.questionnaire_id,
             cycleId: cycle.id,
-            preview: text,
-            originRaw: {
-              source: alreadyStarted ? 'questionnaire-session-remaining' : 'questionnaire-session',
-              questionnaireId: item.questionnaire_id,
-              cycleId: cycle.id,
-            },
-            conversationStatus: String(sent.conversation?.status || 'OPEN'),
-          });
-          result.sent += 1;
-          result.items.push({
-            phone: item.phone,
-            status: 'notified',
-            detail: alreadyStarted
-              ? `${item.questionnaire_name} (já tinha respostas → só faltantes)`
-              : `${item.questionnaire_name} (janela aberta → texto)`,
-          });
-          continue;
-        } catch (error) {
-          sessionTextFailed = true;
-          const detail = error instanceof NevoaError ? error.message : 'Falha ao enviar texto na janela';
-          console.warn(`questionário: texto falhou (${item.phone}): ${detail}`);
-          if (alreadyStarted) {
-            // Já engajou: marca notificado sem template para o agente continuar na próxima mensagem.
-            await markCycleNotified(cycle.id);
-            result.skipped += 1;
-            result.items.push({
-              phone: item.phone,
-              status: 'skipped',
-              detail: `${item.questionnaire_name} (respostas parciais; texto falhou, sem reenviar template)`,
-            });
-            continue;
-          }
-        }
+          },
+        });
+        result.sent += 1;
+        result.items.push({
+          phone: item.phone,
+          status: 'queued',
+          detail: alreadyStarted
+            ? `${item.questionnaire_name} (já tinha respostas → só faltantes)`
+            : `${item.questionnaire_name} (janela aberta → texto)`,
+        });
+        continue;
       }
 
-      const resolved = await ensureTemplate();
+      const resolved = await ensureTemplate(questionnaire.template_id || '');
       if (!resolved) {
-        await markCycleFailed(cycle.id, templateError || 'Template indisponível');
+        const templateError =
+          templateErrors.get(questionnaire.template_id || '') || 'Template indisponível';
+        await markCycleFailed(cycle.id, templateError);
         result.failed += 1;
         result.items.push({
           phone: item.phone,
           status: 'failed',
-          detail: templateError || 'Template indisponível',
+          detail: templateError,
         });
         continue;
       }
 
       const variables = variablesFor(resolved.body, item.name || item.phone);
-      const sent = (await sendWhatsappTemplate({
-        templateId: resolved.id,
-        phone: item.phone,
-        variables,
-        channelIntegrationId: channelId,
-      })) as {
-        conversation?: { id?: string; status?: string };
-        contact?: { id?: string };
-      };
       const preview =
         resolved.body.replace(/\{\{\s*1\s*\}\}/g, item.name || item.phone) ||
-        item.greeting ||
+        questionnaire.greeting ||
         resolved.name;
-
-      await finalizeOutbound({
-        sent,
-        item,
+      await enqueueOutbound({
+        dedupeKey: `questionnaire:${cycle.id}:kickoff`,
+        kind: 'template',
+        variables,
+        templateId: resolved.id,
+        phone: item.phone,
+        text: preview,
         channelId,
+        contactId: item.contact_id,
         cycleId: cycle.id,
-        preview,
-        originRaw: { source: 'questionnaire-template', questionnaireId: item.questionnaire_id, cycleId: cycle.id },
-        conversationStatus: String(sent.conversation?.status || 'TEMPLATE_OPEN'),
+        origin: 'scheduled',
+        raw: {
+          source: 'questionnaire-template',
+          questionnaireId: item.questionnaire_id,
+          cycleId: cycle.id,
+        },
       });
       result.sent += 1;
-      const mode = sessionTextFailed
-        ? 'texto falhou → template'
-        : 'janela fechada → template';
       result.items.push({
         phone: item.phone,
-        status: 'notified',
-        detail: `${item.questionnaire_name} (${mode})`,
+        status: 'queued',
+        detail: `${item.questionnaire_name} (janela fechada → template)`,
       });
     } catch (error) {
       const detail = error instanceof NevoaError ? error.message : 'Falha ao enviar questionário';
@@ -238,49 +210,6 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
   }
 
   return result;
-}
-
-async function finalizeOutbound(input: {
-  sent: { conversation?: { id?: string; status?: string }; contact?: { id?: string } };
-  item: { contact_id: string; name: string; phone: string };
-  channelId: string;
-  cycleId: string;
-  preview: string;
-  originRaw: unknown;
-  conversationStatus: string;
-}): Promise<void> {
-  const remoteId = String(input.sent.contact?.id || '');
-  if (remoteId && remoteId !== input.item.contact_id) {
-    await moveContact(input.item.contact_id, remoteId);
-  }
-  const contactId = remoteId || input.item.contact_id;
-  const conversationId =
-    String(input.sent.conversation?.id || '') ||
-    (await ensureConversation({
-      contactId,
-      name: input.item.name,
-      phone: input.item.phone,
-      channelId: input.channelId,
-    }));
-
-  await upsertConversation({
-    id: conversationId,
-    contactId,
-    contactName: input.item.name,
-    contactPhone: input.item.phone,
-    status: input.conversationStatus,
-    preview: input.preview,
-    lastMessageAt: new Date().toISOString(),
-    channelId: input.channelId,
-    raw: input.sent,
-  });
-  await recordOutbound({
-    conversationId,
-    text: input.preview,
-    origin: 'scheduled',
-    raw: input.originRaw,
-  });
-  await markCycleNotified(input.cycleId);
 }
 
 function buildSessionKickoffText(
@@ -302,8 +231,11 @@ function buildSessionKickoffText(
   return [intro, '', ...lines, '', 'Pode responder por texto, áudio, imagem ou vídeo.'].join('\n').trim();
 }
 
-async function resolveFirstContactTemplate(channelId: string): Promise<FirstContactTemplate | undefined> {
-  const configured = getSetting('questionnaire_template_id');
+async function resolveFirstContactTemplate(
+  channelId: string,
+  questionnaireTemplateId = '',
+): Promise<FirstContactTemplate | undefined> {
+  const configured = questionnaireTemplateId || getSetting('questionnaire_template_id');
   const templates = asList(await listTemplates(channelId))
     .map((row) => ({
       id: String(row.id || ''),

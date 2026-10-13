@@ -1,14 +1,14 @@
 import { getSetting } from './db.js';
+import { env } from './env.js';
 import { headerValue, verifyNevoaSignature } from './hmac.js';
 import { json, route } from './http.js';
-import { NevoaError, sendWhatsappText } from './nevoa.js';
-import { handleInbound } from './pipeline.js';
+import { enqueueInboundJob } from './inbound-jobs.js';
 
 export function registerHookRoutes(): void {
   route('POST', '/api/webhooks/nevoa', async (ctx) => {
     const valid = verifyNevoaSignature(
       ctx.rawBody,
-      getSetting('nevoa_webhook_secret'),
+      getSetting('nevoa_webhook_secret') || env('NEVOA_WEBHOOK_SECRET'),
       headerValue(ctx.req.headers, 'x-nevoa-signature'),
       headerValue(ctx.req.headers, 'x-nevoa-timestamp'),
     );
@@ -17,16 +17,10 @@ export function registerHookRoutes(): void {
       return;
     }
 
-    const decision = await handleInbound(ctx.body, headerValue(ctx.req.headers, 'x-nevoa-delivery-id'));
-    if (decision.action === 'reply' && decision.nevoa) {
-      try {
-        await sendWhatsappText(decision.nevoa.body);
-      } catch (error) {
-        const message = error instanceof NevoaError ? error.message : 'Falha ao enviar';
-        json(ctx.res, 200, { ...decision, sendError: message });
-        return;
-      }
-    }
-    json(ctx.res, 200, decision);
+    const queued = await enqueueInboundJob(
+      ctx.body,
+      headerValue(ctx.req.headers, 'x-nevoa-delivery-id'),
+    );
+    json(ctx.res, 200, { ok: true, queued: !queued.duplicate, duplicate: queued.duplicate });
   });
 }

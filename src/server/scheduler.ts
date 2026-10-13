@@ -32,7 +32,12 @@ export function startScheduler(): void {
               : ''),
         );
         for (const item of result.items.slice(0, 20)) {
-          if (item.status === 'failed' || item.status === 'notified' || item.status === 'sent') {
+          if (
+            item.status === 'failed' ||
+            item.status === 'notified' ||
+            item.status === 'sent' ||
+            item.status === 'queued'
+          ) {
             console.log(`agendamentos item: ${item.phone} → ${item.status} (${item.detail})`);
           }
         }
