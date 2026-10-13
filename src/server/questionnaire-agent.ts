@@ -44,7 +44,21 @@ export async function draftQuestionnaireReply(input: {
     mediaUrl: input.mediaUrl,
   });
   const questions = input.context.questionnaire.questions;
-  const already = formatAnswers(questions, input.context.answers);
+  const alreadySaved = input.context.answers;
+  const startIntent = isStartOrContinueIntent(media.summary || input.inbound);
+  const wantsList = startIntent || asksForQuestions(media.summary || input.inbound) || alreadySaved.length === 0;
+
+  // Abertura do ciclo: usuário só confirmou continuidade → envia o questionário agora.
+  if (wantsList && alreadySaved.length === 0 && (startIntent || asksForQuestions(media.summary || input.inbound))) {
+    return {
+      text: presentQuestionnaire(questions, input.contactName),
+      source: 'model',
+      detail: 'questionário apresentado',
+      completed: false,
+    };
+  }
+
+  const already = formatAnswers(questions, alreadySaved);
   const pending = input.context.missing.map(
     (item, index) =>
       `${index + 1}. [${item.id}] ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`,
@@ -55,8 +69,10 @@ export async function draftQuestionnaireReply(input: {
     'Fale em português do Brasil, de forma curta e humana.',
     'O usuário pode responder em texto livre, áudio, imagem ou vídeo.',
     'Trate áudio transcrito, descrição de imagem e vídeo recebido como respostas válidas.',
-    'Se o usuário perguntar quais são as perguntas, liste todas.',
-    'Extraia respostas da mensagem atual. Se estiverem incompletas, confirme o que entendeu e peça o que falta.',
+    'REGRA OBRIGATÓRIA: se ainda não houver respostas salvas e o usuário disser que quer continuar, confirmar, ok, sim, ou pedir as perguntas, sua reply DEVE listar TODAS as perguntas numeradas.',
+    'Nunca diga apenas "vamos continuar o questionário" sem enviar as perguntas.',
+    'Frases como "vamos continuar", "ok", "sim", "pode ser" NÃO são respostas das perguntas — nesse caso answers deve ser [].',
+    'Extraia respostas reais da mensagem atual. Se estiverem incompletas, confirme o que entendeu e peça o que falta, listando as faltantes.',
     'Quando todas as perguntas tiverem resposta válida, agradeça e encerre a coleta.',
     'Não invente respostas. Não mencione que você é um modelo.',
     '',
@@ -64,10 +80,7 @@ export async function draftQuestionnaireReply(input: {
     `Contato: ${input.contactName || 'não informado'}`,
     'Perguntas:',
     questions
-      .map(
-        (item, index) =>
-          `${index + 1}. id=${item.id} | aceita=${item.expected_type} | ${item.body}`,
-      )
+      .map((item, index) => `${index + 1}. id=${item.id} | aceita=${item.expected_type} | ${item.body}`)
       .join('\n'),
     '',
     'Respostas já salvas:',
@@ -94,6 +107,7 @@ export async function draftQuestionnaireReply(input: {
     media.caption ? `Legenda original: ${media.caption}` : '',
     media.transcript ? `Conteúdo entendido/transcrito: ${media.transcript}` : '',
     `Resumo para coleta: ${media.summary || input.inbound}`,
+    startIntent ? 'Intenção detectada: iniciar/continuar (NÃO salve como resposta; liste as perguntas).' : '',
     media.understood ? 'Interpretação: ok' : 'Interpretação: parcial — mesmo assim tente coletar se a mídia for a resposta.',
   ]
     .filter(Boolean)
@@ -107,7 +121,10 @@ export async function draftQuestionnaireReply(input: {
     ];
     const raw = await completeChat(messages, { temperature: 0.2, timeoutMs: 40_000 });
     let extracted = parseExtracted(raw, questions, media);
-    if (!extracted.answers.length) {
+
+    if (startIntent) {
+      extracted = { ...extracted, answers: [] };
+    } else if (!extracted.answers.length) {
       extracted = {
         ...extracted,
         answers: autoAssignMedia(input.context.missing, media),
@@ -125,13 +142,19 @@ export async function draftQuestionnaireReply(input: {
             mediaUrl: item.type === 'text' ? '' : media.mediaUrl || input.mediaUrl,
           })),
         )
-      : input.context.answers;
+      : alreadySaved;
 
     const missing = missingQuestions(questions, answers);
     const complete = missing.length === 0;
     if (complete) await markCycleCompleted(input.context.cycle.id);
 
-    const reply = extracted.reply.trim() || defaultReply(questions, answers, missing, complete, media);
+    let reply = extracted.reply.trim() || defaultReply(questions, answers, missing, complete, media);
+    if (!complete && answers.length === 0 && !replyListsQuestions(reply, questions)) {
+      reply = presentQuestionnaire(questions, input.contactName);
+    } else if (!complete && missing.length && answers.length > 0 && !replyListsQuestions(reply, missing)) {
+      reply = `${reply.replace(/\s+$/, '')}\n\nAinda falta:\n${formatQuestionList(missing)}`;
+    }
+
     return {
       text: reply.slice(0, 1500),
       source: 'model',
@@ -140,6 +163,14 @@ export async function draftQuestionnaireReply(input: {
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Falha no modelo';
+    if (startIntent || alreadySaved.length === 0) {
+      return {
+        text: presentQuestionnaire(questions, input.contactName),
+        source: 'fallback',
+        detail,
+        completed: false,
+      };
+    }
     const auto = filterAccepted(autoAssignMedia(input.context.missing, media), questions, media);
     if (auto.length) {
       const answers = await upsertAnswers(
@@ -166,13 +197,67 @@ export async function draftQuestionnaireReply(input: {
   }
 }
 
+function presentQuestionnaire(questions: QuestionnaireQuestion[], contactName: string): string {
+  const hello = contactName?.trim() ? `Perfeito, ${contactName.trim().split(/\s+/)[0]}!` : 'Perfeito!';
+  return [
+    `${hello} Segue o questionário. Pode responder por texto, áudio, imagem ou vídeo.`,
+    formatQuestionList(questions),
+  ].join('\n\n');
+}
+
+function formatQuestionList(questions: QuestionnaireQuestion[]): string {
+  return questions.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
+}
+
+function replyListsQuestions(reply: string, questions: QuestionnaireQuestion[]): boolean {
+  const normalized = reply.toLowerCase();
+  const hits = questions.filter((item) => {
+    const body = item.body.trim().toLowerCase();
+    if (body.length < 8) return normalized.includes(body);
+    return normalized.includes(body.slice(0, Math.min(24, body.length)));
+  }).length;
+  return hits >= Math.min(2, questions.length) || (questions.length === 1 && hits === 1);
+}
+
+function isStartOrContinueIntent(value: string): boolean {
+  const text = value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text || text.length > 80) return false;
+  return (
+    /^(vamos\s+)?continuar\b/.test(text) ||
+    /^(pode\s+)?continuar\b/.test(text) ||
+    /^(ok|okay|certo|beleza|blz|sim|pode|vamos|segue|seguimos|iniciar|comecar|começar)\b/.test(text) ||
+    /^(quero|pode|vamos)\s+(continuar|seguir|comecar|começar|iniciar)\b/.test(text) ||
+    text === 'vamos continuar' ||
+    text === 'pode continuar' ||
+    text === 'quero continuar'
+  );
+}
+
+function asksForQuestions(value: string): boolean {
+  const text = value.toLowerCase();
+  return (
+    text.includes('perguntas') ||
+    text.includes('questionario') ||
+    text.includes('questionário') ||
+    text.includes('o que preciso') ||
+    text.includes('quais sao') ||
+    text.includes('quais são')
+  );
+}
+
 function parseExtracted(
   raw: string,
   questions: QuestionnaireQuestion[],
   media: MediaUnderstanding,
 ): Extracted {
   const jsonText = extractJson(raw);
-  if (!jsonText) return heuristicExtract(questions, media, raw);
+  if (!jsonText) return heuristicExtract(raw);
   try {
     const data = JSON.parse(jsonText) as {
       reply?: unknown;
@@ -191,7 +276,7 @@ function parseExtracted(
               type,
             };
           })
-          .filter((item) => item.questionId && item.text)
+          .filter((item) => item.questionId && item.text && !isStartOrContinueIntent(item.text))
       : [];
     return {
       reply: String(data.reply || '').trim(),
@@ -199,29 +284,24 @@ function parseExtracted(
       complete: Boolean(data.complete),
     };
   } catch {
-    return heuristicExtract(questions, media, raw);
+    return heuristicExtract(raw);
   }
 }
 
-function heuristicExtract(
-  _questions: QuestionnaireQuestion[],
-  _media: MediaUnderstanding,
-  raw: string,
-): Extracted {
+function heuristicExtract(raw: string): Extracted {
   const reply = raw.replace(/```json[\s\S]*```/i, '').replace(/\{[\s\S]*\}/, '').trim();
   return { reply, answers: [], complete: false };
 }
 
 function autoAssignMedia(candidates: QuestionnaireQuestion[], media: MediaUnderstanding): ExtractedAnswer[] {
   if (!media.summary && !media.mediaUrl) return [];
+  if (media.type === 'text' && isStartOrContinueIntent(media.summary)) return [];
+  // Texto livre só entra automático se sobrar exatamente uma pergunta.
+  if (media.type === 'text' && candidates.length !== 1) return [];
+
   const eligible = candidates.filter((question) => typeFits(question.expected_type, media.type));
   const target = eligible[0] || (media.type !== 'text' ? candidates[0] : undefined);
-  if (!target) {
-    if (candidates.length === 1 && media.summary) {
-      return [{ questionId: candidates[0].id, text: media.summary, type: media.type }];
-    }
-    return [];
-  }
+  if (!target) return [];
   return [
     {
       questionId: target.id,
@@ -247,6 +327,7 @@ function filterAccepted(
       const question = byId.get(answer.questionId);
       if (!question) return false;
       if (!answer.text.trim() && !media.mediaUrl) return false;
+      if (isStartOrContinueIntent(answer.text)) return false;
       return typeFits(question.expected_type, answer.type);
     });
 }
@@ -254,7 +335,6 @@ function filterAccepted(
 function typeFits(expected: string, actual: string): boolean {
   if (!expected || expected === 'any') return true;
   if (expected === actual) return true;
-  // Áudio transcrito pode preencher pergunta de texto.
   if (expected === 'text' && actual === 'audio') return true;
   return false;
 }
@@ -300,10 +380,7 @@ function defaultReply(
   media: MediaUnderstanding,
 ): string {
   if (complete) return 'Obrigado! Recebi todas as respostas do questionário.';
-  if (!answers.length) {
-    const list = questions.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
-    return `Pode me enviar as respostas deste acompanhamento? Pode ser por texto, áudio, imagem ou vídeo.\n${list}`;
-  }
+  if (!answers.length) return presentQuestionnaire(questions, '');
   const thanks =
     media.type === 'audio'
       ? 'Ouvi seu áudio.'
@@ -312,8 +389,7 @@ function defaultReply(
         : media.type === 'video'
           ? 'Recebi o vídeo.'
           : 'Recebi sua mensagem.';
-  const pending = missing.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
-  return `${thanks} Pode confirmar se está correto e me enviar o que ainda falta?\n${pending}`;
+  return `${thanks} Ainda falta:\n${formatQuestionList(missing)}`;
 }
 
 function extractJson(raw: string): string {
