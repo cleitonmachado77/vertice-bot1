@@ -72,9 +72,17 @@ export async function saveSyncedMessage(input: {
   direction: string;
   type: string;
   text: string;
+  mediaUrl?: string;
   createdAt: string;
   raw: unknown;
-}): Promise<{ id: string; direction: 'INBOUND' | 'OUTBOUND'; text: string; createdAt: string } | null> {
+}): Promise<{
+  id: string;
+  direction: 'INBOUND' | 'OUTBOUND';
+  text: string;
+  type: string;
+  mediaUrl: string;
+  createdAt: string;
+} | null> {
   const direction = input.direction.toUpperCase() === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND';
   if (direction === 'OUTBOUND' && input.text.trim()) {
     const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
@@ -100,9 +108,17 @@ export async function saveSyncedMessage(input: {
     direction,
     type: input.type,
     text: input.text,
+    mediaUrl: input.mediaUrl || '',
     createdAt: input.createdAt,
     origin: direction === 'INBOUND' ? 'contact' : 'whatsapp',
     raw: input.raw,
   });
-  return { id: input.id, direction, text: input.text, createdAt: input.createdAt };
+  return {
+    id: input.id,
+    direction,
+    text: input.text,
+    type: input.type,
+    mediaUrl: input.mediaUrl || '',
+    createdAt: input.createdAt,
+  };
 }

@@ -1,7 +1,8 @@
-import { getSetting } from './db.js';
+import { getSetting, withDispatchLock } from './db.js';
 import { minutesFromClock, zonedNow } from './clock.js';
 import { NevoaError, sendWhatsappText } from './nevoa.js';
 import { dispatchStatus, listDueMessages, markDispatch, runsOnWeekday } from './plans.js';
+import { runQuestionnaireDispatches } from './questionnaire-dispatch.js';
 import { ensureConversation, recordOutbound } from './thread.js';
 
 export type DispatchRun = {
@@ -10,19 +11,28 @@ export type DispatchRun = {
   failed: number;
   waiting: number;
   skipped: number;
+  locked?: boolean;
   items: { phone: string; status: string; detail: string }[];
+  questionnaires?: {
+    sent: number;
+    failed: number;
+    waiting: number;
+    skipped: number;
+  };
 };
 
 export async function runDueDispatches(): Promise<DispatchRun> {
+  const empty = emptyRun(zonedNow().date);
+  const locked = await withDispatchLock(() => runDispatchBody());
+  if (!locked.ran) {
+    return { ...empty, locked: false, skipped: 1, items: [{ phone: '-', status: 'skipped', detail: 'lock ocupado' }] };
+  }
+  return { ...locked.value, locked: true };
+}
+
+async function runDispatchBody(): Promise<DispatchRun> {
   const clock = zonedNow();
-  const result: DispatchRun = {
-    date: clock.date,
-    sent: 0,
-    failed: 0,
-    waiting: 0,
-    skipped: 0,
-    items: [],
-  };
+  const result = emptyRun(clock.date);
   const channelId = getSetting('nevoa_channel_id');
 
   for (const message of await listDueMessages()) {
@@ -79,5 +89,22 @@ export async function runDueDispatches(): Promise<DispatchRun> {
     }
   }
 
+  const questionnaires = await runQuestionnaireDispatches();
+  result.sent += questionnaires.sent;
+  result.failed += questionnaires.failed;
+  result.waiting += questionnaires.waiting;
+  result.skipped += questionnaires.skipped;
+  result.items.push(...questionnaires.items.map((item) => ({ ...item, detail: `questionário: ${item.detail}` })));
+  result.questionnaires = {
+    sent: questionnaires.sent,
+    failed: questionnaires.failed,
+    waiting: questionnaires.waiting,
+    skipped: questionnaires.skipped,
+  };
+
   return result;
+}
+
+function emptyRun(date: string): DispatchRun {
+  return { date, sent: 0, failed: 0, waiting: 0, skipped: 0, items: [] };
 }

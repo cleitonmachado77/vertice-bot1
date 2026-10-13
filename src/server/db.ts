@@ -22,6 +22,28 @@ export async function run(sql: string, params: unknown[] = []): Promise<void> {
   await getPool().query(sql, params);
 }
 
+/** Impede dois workers (web + cron Railway) de dispararem ao mesmo tempo. */
+export async function withDispatchLock<T>(
+  work: () => Promise<T>,
+): Promise<{ ran: true; value: T } | { ran: false; value?: undefined }> {
+  const client = await getPool().connect();
+  try {
+    const locked = await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1) AS locked', [
+      DISPATCH_LOCK_KEY,
+    ]);
+    if (!locked.rows[0]?.locked) return { ran: false };
+    try {
+      return { ran: true, value: await work() };
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [DISPATCH_LOCK_KEY]);
+    }
+  } finally {
+    client.release();
+  }
+}
+
+const DISPATCH_LOCK_KEY = 87421013;
+
 export async function closeDatabase(): Promise<void> {
   if (!pool) return;
   await pool.end();
@@ -150,14 +172,67 @@ const SCHEMA = `
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS questionnaires (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    greeting TEXT NOT NULL DEFAULT '',
+    frequency TEXT NOT NULL DEFAULT 'daily',
+    weekday INTEGER NOT NULL DEFAULT 1,
+    send_time TEXT NOT NULL DEFAULT '09:00',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS questionnaire_questions (
+    id TEXT PRIMARY KEY,
+    questionnaire_id TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    expected_type TEXT NOT NULL DEFAULT 'any',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS questionnaire_assignments (
+    questionnaire_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (questionnaire_id, contact_id)
+  );
+  CREATE TABLE IF NOT EXISTS questionnaire_cycles (
+    id TEXT PRIMARY KEY,
+    questionnaire_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    occurrence_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    template_sent_at TEXT NOT NULL DEFAULT '',
+    completed_at TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS questionnaire_answers (
+    id TEXT PRIMARY KEY,
+    cycle_id TEXT NOT NULL,
+    question_id TEXT NOT NULL,
+    answer_text TEXT NOT NULL DEFAULT '',
+    answer_type TEXT NOT NULL DEFAULT 'text',
+    media_url TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+  CREATE INDEX IF NOT EXISTS idx_questionnaire_questions ON questionnaire_questions(questionnaire_id, sort_order);
+  CREATE INDEX IF NOT EXISTS idx_questionnaire_assignments_contact ON questionnaire_assignments(contact_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_cycles_day
+    ON questionnaire_cycles(questionnaire_id, contact_id, occurrence_date);
+  CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_answers_question
+    ON questionnaire_answers(cycle_id, question_id);
 `;
 
 const DEFAULT_PROMPT = `Você é o assistente de WhatsApp da Vértice Inovação.
 Responda em português do Brasil, de forma curta, clara e educada.
-Siga o roteiro do contato.
-Não invente preços, prazos ou promessas. Se faltar informação, diga que um atendente humano vai continuar.
+Use apenas o conhecimento e as regras deste prompt. Não invente preços, prazos ou promessas.
+Se não souber a resposta ou faltar informação, diga claramente que vai passar o atendimento para um atendente humano e peça para aguardar.
 Não mencione que você é um modelo de linguagem.`;
 
 async function migrate(): Promise<void> {
@@ -181,6 +256,51 @@ async function migrate(): Promise<void> {
     `UPDATE messages SET origin = 'whatsapp' WHERE direction = 'OUTBOUND' AND origin = 'contact'`,
   );
   await run(`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS hidden INTEGER NOT NULL DEFAULT 0`);
+  await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS hidden INTEGER NOT NULL DEFAULT 0`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_questionnaire_questions ON questionnaire_questions(questionnaire_id, sort_order)`);
+  await run(
+    `CREATE TABLE IF NOT EXISTS questionnaire_assignments (
+      questionnaire_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (questionnaire_id, contact_id)
+    )`,
+  );
+  await run(
+    `CREATE TABLE IF NOT EXISTS questionnaire_cycles (
+      id TEXT PRIMARY KEY,
+      questionnaire_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      occurrence_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      template_sent_at TEXT NOT NULL DEFAULT '',
+      completed_at TEXT NOT NULL DEFAULT '',
+      error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+  await run(
+    `CREATE TABLE IF NOT EXISTS questionnaire_answers (
+      id TEXT PRIMARY KEY,
+      cycle_id TEXT NOT NULL,
+      question_id TEXT NOT NULL,
+      answer_text TEXT NOT NULL DEFAULT '',
+      answer_type TEXT NOT NULL DEFAULT 'text',
+      media_url TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+  await run(`CREATE INDEX IF NOT EXISTS idx_questionnaire_assignments_contact ON questionnaire_assignments(contact_id)`);
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_cycles_day
+     ON questionnaire_cycles(questionnaire_id, contact_id, occurrence_date)`,
+  );
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_answers_question
+     ON questionnaire_answers(cycle_id, question_id)`,
+  );
 }
 
 async function seedSettings(): Promise<void> {
@@ -204,6 +324,8 @@ async function seedSettings(): Promise<void> {
     nevoa_channel_id: env('NEVOA_CHANNEL_ID', ''),
     timezone: env('TIMEZONE', 'America/Sao_Paulo'),
     public_base_url: '',
+    questionnaire_template_id: '',
+    agent_transcribe_model: env('OPENAI_TRANSCRIBE_MODEL', 'whisper-1'),
   };
   for (const [key, value] of Object.entries(defaults)) {
     await run('INSERT INTO settings(key, value) VALUES($1, $2) ON CONFLICT(key) DO NOTHING', [key, value]);

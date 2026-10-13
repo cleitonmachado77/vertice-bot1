@@ -3,6 +3,7 @@ import { getSetting } from './db.js';
 import { mapContact, mapConversation, inboundContent, unwrapEnvelope } from './map.js';
 import { zonedNow } from './clock.js';
 import { attachCollectedResponse } from './plans.js';
+import { linkRemoteContact } from './local-contact.js';
 import {
   getContact,
   hasEvent,
@@ -56,8 +57,17 @@ export async function processInbound(raw: unknown, deliveryId = ''): Promise<Dec
   const channelId = String(channel.integrationId || getSetting('nevoa_channel_id') || '');
   const content = inboundContent(messageRaw);
 
+  let contactName = contact?.name || '';
+  let contactId = contact?.id || '';
   if (contact?.id) {
-    await upsertContact({ ...contact, raw: contactRaw });
+    const linked = await linkRemoteContact({
+      remoteId: contact.id,
+      phone: phone || contact.phone,
+      remoteName: contact.name,
+    });
+    contactId = linked.id;
+    contactName = linked.name;
+    await upsertContact({ ...contact, name: contactName, phone: phone || contact.phone, raw: contactRaw });
   }
   if (conversationId) {
     const mapped = mapConversation({
@@ -70,8 +80,8 @@ export async function processInbound(raw: unknown, deliveryId = ''): Promise<Dec
     await upsertConversation({
       ...mapped,
       id: conversationId,
-      contactId: contact?.id || mapped.contactId,
-      contactName: contact?.name || mapped.contactName,
+      contactId: contactId || mapped.contactId,
+      contactName: contactName || mapped.contactName,
       contactPhone: phone || mapped.contactPhone,
       channelId: channelId || mapped.channelId,
       preview: content.prompt || mapped.preview,
@@ -92,8 +102,8 @@ export async function processInbound(raw: unknown, deliveryId = ''): Promise<Dec
       raw: messageRaw,
     });
   }
-  if (event === 'message.received' && contact?.id) {
-    await attachCollectedResponse(contact.id, zonedNow().date, {
+  if (event === 'message.received' && contactId) {
+    await attachCollectedResponse(contactId, zonedNow().date, {
       type: content.kind,
       text: content.text || content.prompt,
       mediaUrl: content.mediaUrl,
@@ -104,7 +114,7 @@ export async function processInbound(raw: unknown, deliveryId = ''): Promise<Dec
     return await finish(id, event, ignore(id, event, 'Evento registrado', conversationId, phone, channelId), data);
   }
 
-  const local = contact?.id ? await getContact(contact.id) : undefined;
+  const local = contactId ? await getContact(contactId) : undefined;
   if (local && !local.bot_enabled) {
     return await finish(id, event, ignore(id, event, 'Bot pausado neste contato', conversationId, phone, channelId), data);
   }
@@ -124,8 +134,10 @@ export async function processInbound(raw: unknown, deliveryId = ''): Promise<Dec
     phone,
     channelId,
     text: content.prompt,
+    inboundType: content.kind,
+    mediaUrl: content.mediaUrl,
     messageId: String((messageRaw.id as string) || `${id}:in`),
-    contact,
+    contact: contactId ? { id: contactId, name: contactName || contact?.name || '' } : contact,
   } as unknown as Decision;
 }
 
@@ -138,6 +150,8 @@ type Pending = {
   phone: string;
   channelId: string;
   text: string;
+  inboundType: string;
+  mediaUrl: string;
   messageId: string;
   contact: { id: string; name: string } | null;
 };
@@ -155,6 +169,8 @@ export async function completeInbound(pending: Pending): Promise<Decision> {
     channelId: pending.channelId,
     contactId: pending.contact?.id,
     contactName: pending.contact?.name,
+    inboundType: pending.inboundType,
+    mediaUrl: pending.mediaUrl,
   });
   if (!answer.sent) {
     return await finish(

@@ -45,25 +45,34 @@ export async function listContactMessages(contactId: string): Promise<PlannedMes
   );
 }
 
-export async function saveContactPlan(contactId: string, input: PlanInput): Promise<void> {
+export async function updateContactBasics(
+  contactId: string,
+  input: { name?: string; phone?: string; email?: string; botEnabled: boolean },
+): Promise<void> {
   const found = await one<{ id: string }>('SELECT id FROM contacts WHERE id = $1', [contactId]);
   if (!found) throw new Error('Contato não encontrado');
   await run(
-    `UPDATE contacts SET name = $1, phone = COALESCE($2, phone), email = $3, prompt = $4, instructions = $5, notes = $6, bot_enabled = $7 WHERE id = $8`,
-    [
-      input.name || '',
-      input.phone || null,
-      input.email ?? '',
-      input.prompt,
-      input.instructions,
-      input.notes,
-      input.botEnabled ? 1 : 0,
-      contactId,
-    ],
+    `UPDATE contacts SET name = $1, phone = COALESCE($2, phone), email = $3, bot_enabled = $4 WHERE id = $5`,
+    [input.name || '', input.phone || null, input.email ?? '', input.botEnabled ? 1 : 0, contactId],
   );
   await run('UPDATE conversations SET contact_name = $1, contact_phone = COALESCE($2, contact_phone) WHERE contact_id = $3', [
     input.name || '',
     input.phone || null,
+    contactId,
+  ]);
+}
+
+export async function saveContactPlan(contactId: string, input: PlanInput): Promise<void> {
+  await updateContactBasics(contactId, {
+    name: input.name,
+    phone: input.phone,
+    email: input.email,
+    botEnabled: input.botEnabled,
+  });
+  await run(`UPDATE contacts SET prompt = $1, instructions = $2, notes = $3 WHERE id = $4`, [
+    input.prompt,
+    input.instructions,
+    input.notes,
     contactId,
   ]);
 
@@ -102,7 +111,7 @@ export async function listDueMessages(): Promise<DueMessage[]> {
     `SELECT m.id, m.contact_id, m.body, m.frequency, m.weekday, m.send_time, m.active, c.name, c.phone
      FROM contact_messages m
      JOIN contacts c ON c.id = m.contact_id
-     WHERE m.active = 1 AND m.body <> '' AND c.bot_enabled = 1 AND c.blocked = 0 AND c.phone <> ''`,
+     WHERE m.active = 1 AND m.body <> '' AND c.bot_enabled = 1 AND c.blocked = 0 AND c.hidden = 0 AND c.phone <> ''`,
   );
 }
 

@@ -6,6 +6,15 @@ export type Draft = {
   detail: string;
 };
 
+export type ChatPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+export type ChatMessage = {
+  role: string;
+  content: string | ChatPart[];
+};
+
 type HistoryItem = { direction: string; text: string };
 
 export async function draftReply(input: {
@@ -45,14 +54,14 @@ export async function draftReply(input: {
       content: item.text,
     }));
 
-  const messages = [
+  const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt(input) },
     ...history,
     { role: 'user', content: input.inbound },
   ];
 
   try {
-    const text = await complete(messages);
+    const text = await completeChat(messages);
     if (!text) {
       return { text: fallback, source: 'fallback', detail: 'Modelo devolveu vazio' };
     }
@@ -79,6 +88,34 @@ export async function previewReply(sample: string): Promise<Draft> {
   });
 }
 
+export async function completeChat(
+  messages: ChatMessage[],
+  options: { temperature?: number; timeoutMs?: number } = {},
+): Promise<string> {
+  const base = getSetting('agent_base_url').replace(/\/$/, '');
+  const response = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${getSetting('agent_api_key')}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: getSetting('agent_model'),
+      temperature: options.temperature ?? Number(getSetting('agent_temperature') || '0.4'),
+      messages,
+    }),
+    signal: AbortSignal.timeout(options.timeoutMs ?? 20_000),
+  });
+  const payload = (await response.json()) as {
+    error?: { message?: string };
+    choices?: { message?: { content?: string } }[];
+  };
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `Modelo respondeu ${response.status}`);
+  }
+  return payload.choices?.[0]?.message?.content?.trim() || '';
+}
+
 function systemPrompt(input: {
   contactName: string;
   contactPhone: string;
@@ -92,35 +129,12 @@ function systemPrompt(input: {
   return [
     base,
     '',
+    'Modo: conversa livre. Não colete respostas de questionário neste modo.',
     'Siga as instruções deste contato. Não invente etapas, preços ou promessas fora delas.',
     'Se a mensagem for áudio, vídeo ou imagem, confirme o recebimento e continue as instruções.',
+    'Se não souber responder com segurança, diga que vai passar o atendimento para um atendente humano.',
     `Instruções: ${script}`,
     `Contato: ${input.contactName || 'não informado'} ${input.contactPhone}`.trim(),
     `Notas internas: ${notes}`,
   ].join('\n');
-}
-
-async function complete(messages: { role: string; content: string }[]): Promise<string> {
-  const base = getSetting('agent_base_url').replace(/\/$/, '');
-  const response = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${getSetting('agent_api_key')}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: getSetting('agent_model'),
-      temperature: Number(getSetting('agent_temperature') || '0.4'),
-      messages,
-    }),
-    signal: AbortSignal.timeout(20_000),
-  });
-  const payload = (await response.json()) as {
-    error?: { message?: string };
-    choices?: { message?: { content?: string } }[];
-  };
-  if (!response.ok) {
-    throw new Error(payload.error?.message || `Modelo respondeu ${response.status}`);
-  }
-  return payload.choices?.[0]?.message?.content?.trim() || '';
 }

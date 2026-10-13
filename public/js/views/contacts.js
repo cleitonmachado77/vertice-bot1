@@ -30,11 +30,16 @@ export async function renderContacts(root) {
         <button class="btn" type="submit">Cadastrar</button>
       </form>
       <div class="split-board-side">
-        <input id="search" placeholder="Buscar nome, telefone ou nota" />
+        <input id="search" placeholder="Buscar nome ou telefone" />
         <div class="stack" id="contact-list">${draw(data.items)}</div>
       </div>
     </div>`;
   listSig = itemsSig(data.items);
+  document.querySelector('#contact-list').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-remove]');
+    if (!button) return;
+    removeContact(button.dataset.remove);
+  });
   document.querySelector('#new-contact').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -67,6 +72,19 @@ async function paintList(query) {
   list.innerHTML = draw(result.items);
 }
 
+async function removeContact(id) {
+  if (!window.confirm('Excluir este contato da lista?')) return;
+  try {
+    await api(`/api/contacts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    listSig = '';
+    const search = document.querySelector('#search');
+    await paintList(search ? search.value : '');
+    toast('Contato excluído');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function itemsSig(items) {
   return items
     .map((item) => [item.id, item.name, item.phone, item.message_count, item.bot_enabled ? 1 : 0, item.blocked ? 1 : 0].join('\u001f'))
@@ -90,6 +108,7 @@ function draw(items) {
           <div class="row">
             <a class="btn" href="#/inbox/c/${encodeURIComponent(item.id)}">Conversar</a>
             <a class="btn-ghost" href="#/contacts/${encodeURIComponent(item.id)}">Configurar</a>
+            <button type="button" class="btn-danger" data-remove="${escapeHtml(item.id)}">Excluir</button>
           </div>
         </article>`;
     })

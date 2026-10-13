@@ -1,3 +1,4 @@
+import { linkRemoteContact } from './local-contact.js';
 import { mapContact, mapConversation, mapMessage } from './map.js';
 import { nevoaList } from './nevoa.js';
 import { answerInbound } from './reply.js';
@@ -9,20 +10,34 @@ export async function syncContactsAndConversations(): Promise<{ contacts: number
   for (const row of contacts) {
     const mapped = mapContact(row);
     if (!mapped.id) continue;
-    await upsertContact(mapped);
+    const linked = await linkRemoteContact({
+      remoteId: mapped.id,
+      phone: mapped.phone,
+      remoteName: mapped.name,
+    });
+    await upsertContact({ ...mapped, name: linked.name });
   }
 
   const conversations = await nevoaList('/conversations');
   for (const row of conversations) {
     const mapped = mapConversation(row);
     if (!mapped.id) continue;
-    const changed = await upsertConversation({ ...mapped, raw: row });
+    let contactName = mapped.contactName;
+    if (mapped.contactId) {
+      const linked = await linkRemoteContact({
+        remoteId: mapped.contactId,
+        phone: mapped.contactPhone,
+        remoteName: mapped.contactName,
+      });
+      contactName = linked.name;
+    }
+    const changed = await upsertConversation({ ...mapped, contactName, raw: row });
     if (changed) await syncConversationMessages(mapped.id);
     if (mapped.contactId) {
       await attachLocalThread(mapped.id, mapped.contactId);
       await insertContactIfMissing({
         id: mapped.contactId,
-        name: mapped.contactName || mapped.contactPhone || 'Sem nome',
+        name: contactName || mapped.contactPhone || 'Sem nome',
         phone: mapped.contactPhone,
       });
     }
@@ -36,13 +51,20 @@ export async function syncConversationMessages(conversationId: string): Promise<
   for (const row of items) {
     const mapped = mapMessage(row);
     if (!mapped.id) continue;
-    const saved = await saveSyncedMessage({ ...mapped, conversationId, raw: row });
+    const saved = await saveSyncedMessage({
+      ...mapped,
+      conversationId,
+      mediaUrl: mapped.mediaUrl,
+      raw: row,
+    });
     if (saved?.direction === 'INBOUND') {
       await answerInbound({
         messageId: saved.id,
         conversationId,
         text: saved.text,
         createdAt: saved.createdAt,
+        inboundType: saved.type,
+        mediaUrl: saved.mediaUrl,
       });
     }
   }

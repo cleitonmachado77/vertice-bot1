@@ -1,14 +1,12 @@
 import { unhideConversation } from './conversation-visibility.js';
 import { many, one, run } from './db.js';
+import { looksLikePhoneName, phonesMatch } from './phone.js';
 
 const now = () => new Date().toISOString();
 
-function hasLetters(value: string): boolean {
-  return /\p{L}/u.test(value);
-}
-
 function preferNamed(current: string, incoming: string): string {
-  if (hasLetters(current) && !hasLetters(incoming)) return current;
+  if (!looksLikePhoneName(current) && looksLikePhoneName(incoming)) return current;
+  if (!incoming.trim()) return current;
   return incoming;
 }
 
@@ -27,6 +25,7 @@ export type ContactRecord = {
   bot_enabled: number;
   human_handoff: number;
   blocked: number;
+  hidden: number;
   tags_json: string;
   roteiro_id: string;
   message_count: number;
@@ -68,10 +67,16 @@ export async function upsertContact(input: {
   blocked: boolean;
   raw: unknown;
 }): Promise<void> {
-  const existing = await one<{ name: string; phone: string; email: string; tags_json: string; blocked: number }>(
-    'SELECT name, phone, email, tags_json, blocked FROM contacts WHERE id = $1',
-    [input.id],
-  );
+  const existing = await one<{
+    name: string;
+    phone: string;
+    email: string;
+    tags_json: string;
+    blocked: number;
+    hidden: number;
+  }>('SELECT name, phone, email, tags_json, blocked, hidden FROM contacts WHERE id = $1', [input.id]);
+  if (Number(existing?.hidden) === 1) return;
+  if (!existing && (await hiddenByPhone(input.phone))) return;
   const name = existing ? preferNamed(existing.name, input.name) : input.name;
   const phone = existing && input.phone === '' ? existing.phone : input.phone;
   const email = existing && input.email === '' ? existing.email : input.email;
@@ -105,7 +110,7 @@ export async function upsertContact(input: {
 export async function listContacts(search = ''): Promise<ContactRecord[]> {
   const like = `%${search.trim()}%`;
   return many<ContactRecord>(
-    `SELECT id, name, phone, email, notes, prompt, instructions, bot_enabled, human_handoff, blocked, tags_json, roteiro_id,
+    `SELECT id, name, phone, email, notes, prompt, instructions, bot_enabled, human_handoff, blocked, hidden, tags_json, roteiro_id,
             updated_at,
             (SELECT COUNT(*)::int
              FROM messages msg
@@ -120,7 +125,7 @@ export async function listContacts(search = ''): Promise<ContactRecord[]> {
                  )
                )) AS message_count
      FROM contacts
-     WHERE name ILIKE $1 OR phone ILIKE $1 OR notes ILIKE $1
+     WHERE hidden = 0 AND (name ILIKE $1 OR phone ILIKE $1 OR notes ILIKE $1)
      ORDER BY updated_at DESC`,
     [like],
   );
@@ -128,7 +133,7 @@ export async function listContacts(search = ''): Promise<ContactRecord[]> {
 
 export async function getContact(id: string): Promise<ContactRecord | undefined> {
   return one<ContactRecord>(
-    `SELECT id, name, phone, email, notes, prompt, instructions, bot_enabled, human_handoff, blocked, tags_json, roteiro_id,
+    `SELECT id, name, phone, email, notes, prompt, instructions, bot_enabled, human_handoff, blocked, hidden, tags_json, roteiro_id,
             updated_at, 0 AS message_count
      FROM contacts WHERE id = $1`,
     [id],
@@ -139,11 +144,38 @@ export async function setHumanHandoff(contactId: string, active: boolean): Promi
   await run('UPDATE contacts SET human_handoff = $1 WHERE id = $2', [active ? 1 : 0, contactId]);
 }
 
+export async function hideContact(id: string, phone: string): Promise<void> {
+  const digits = phone.replace(/\D/g, '');
+  const tail = digits.length >= 10 ? digits.slice(-11) : '';
+  await run('UPDATE contacts SET hidden = 1, updated_at = $2 WHERE id = $1', [id, now()]);
+  await run('UPDATE contact_messages SET active = 0 WHERE contact_id = $1', [id]);
+  await run(
+    `UPDATE conversations SET hidden = 1
+     WHERE contact_id = $1
+        OR ($2 <> '' AND right(regexp_replace(contact_phone, '[^0-9]', '', 'g'), 11) = $2)`,
+    [id, tail],
+  );
+}
+
+async function hiddenByPhone(phone: string): Promise<boolean> {
+  const row = await one<{ id: string }>(
+    `SELECT id FROM contacts
+     WHERE hidden = 1
+       AND regexp_replace($1, '[^0-9]', '', 'g') <> ''
+       AND right(regexp_replace(phone, '[^0-9]', '', 'g'), 11)
+           = right(regexp_replace($1, '[^0-9]', '', 'g'), 11)
+     LIMIT 1`,
+    [phone],
+  );
+  return Boolean(row);
+}
+
 export async function insertContactIfMissing(input: {
   id: string;
   name: string;
   phone: string;
 }): Promise<void> {
+  if (await hiddenByPhone(input.phone)) return;
   await run(
     `INSERT INTO contacts(id, name, phone, email, tags_json, blocked, raw_json, updated_at)
      VALUES($1, $2, $3, '', '[]', 0, '{}', $4)
@@ -222,7 +254,7 @@ export async function upsertConversation(input: {
 const personKey = `COALESCE(NULLIF(conversations.contact_id, ''), NULLIF(conversations.contact_phone, ''), conversations.id)`;
 
 export async function listConversations(): Promise<ConversationRecord[]> {
-  return many<ConversationRecord>(
+  const rows = await many<ConversationRecord>(
     `SELECT id, contact_id, contact_name, contact_phone, status, preview, last_message_at, channel_id, updated_at, human_handoff
      FROM (
        SELECT DISTINCT ON (${personKey})
@@ -236,10 +268,11 @@ export async function listConversations(): Promise<ConversationRecord[]> {
      ) people
      ORDER BY last_message_at DESC`,
   );
+  return attachContactNames(rows);
 }
 
 export async function getConversation(id: string): Promise<ConversationRecord | undefined> {
-  return one<ConversationRecord>(
+  const row = await one<ConversationRecord>(
     `SELECT conversations.id, conversations.contact_id, conversations.contact_name, conversations.contact_phone,
             conversations.status, conversations.preview, conversations.last_message_at, conversations.channel_id,
             conversations.updated_at, COALESCE(contacts.human_handoff, 0) AS human_handoff
@@ -248,6 +281,25 @@ export async function getConversation(id: string): Promise<ConversationRecord | 
      WHERE conversations.id = $1`,
     [id],
   );
+  if (!row) return undefined;
+  return (await attachContactNames([row]))[0];
+}
+
+async function attachContactNames(rows: ConversationRecord[]): Promise<ConversationRecord[]> {
+  if (!rows.length) return rows;
+  const contacts = await many<{ id: string; name: string; phone: string; human_handoff: number }>(
+    'SELECT id, name, phone, human_handoff FROM contacts WHERE hidden = 0',
+  );
+  return rows.map((row) => {
+    const byId = contacts.find((item) => item.id === row.contact_id);
+    const byPhone = contacts.find((item) => phonesMatch(item.phone, row.contact_phone));
+    const named = [byId, byPhone].find((item) => item && !looksLikePhoneName(item.name));
+    return {
+      ...row,
+      contact_name: named?.name || (!looksLikePhoneName(row.contact_name) ? row.contact_name : byId?.name || byPhone?.name || row.contact_name || row.contact_phone),
+      human_handoff: byId?.human_handoff ?? byPhone?.human_handoff ?? row.human_handoff,
+    };
+  });
 }
 
 export async function upsertMessage(input: {

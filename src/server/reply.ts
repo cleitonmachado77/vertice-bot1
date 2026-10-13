@@ -1,6 +1,9 @@
 import { draftReply } from './agent.js';
 import { getSetting, one } from './db.js';
+import { zonedNow } from './clock.js';
 import { sendWhatsappText } from './nevoa.js';
+import { draftQuestionnaireReply } from './questionnaire-agent.js';
+import { findActiveCycleForContact } from './questionnaire-cycles.js';
 import { getContact, getConversation, hasEvent, insertEvent, recentMessages } from './store.js';
 import { recordOutbound } from './thread.js';
 
@@ -25,6 +28,8 @@ export async function answerInbound(input: {
   channelId?: string;
   contactId?: string;
   contactName?: string;
+  inboundType?: string;
+  mediaUrl?: string;
 }): Promise<AgentAnswer> {
   const empty = (detail: string): AgentAnswer => ({
     sent: false,
@@ -34,8 +39,21 @@ export async function answerInbound(input: {
     channelId: input.channelId || '',
     source: 'none',
   });
-  if (!input.messageId || !input.conversationId || !input.text.trim()) return empty('Mensagem sem conteúdo');
-  if (input.text.includes('Unsupported message')) return empty('Mensagem não suportada pelo WhatsApp');
+  const inboundType = input.inboundType || 'text';
+  const mediaUrl = input.mediaUrl || '';
+  const inboundText =
+    input.text.trim() ||
+    (mediaUrl
+      ? inboundType === 'audio'
+        ? 'O contato enviou um áudio.'
+        : inboundType === 'image'
+          ? 'O contato enviou uma imagem.'
+          : inboundType === 'video'
+            ? 'O contato enviou um vídeo.'
+            : 'O contato enviou uma mídia.'
+      : '');
+  if (!input.messageId || !input.conversationId || !inboundText) return empty('Mensagem sem conteúdo');
+  if (inboundText.includes('Unsupported message')) return empty('Mensagem não suportada pelo WhatsApp');
   if (input.createdAt && !isRecent(input.createdAt)) return empty('Mensagem antiga');
   const storedAt = await messageTime(input.messageId);
   const createdAt = storedAt || input.createdAt || '';
@@ -52,6 +70,7 @@ export async function answerInbound(input: {
     const conversation = await getConversation(input.conversationId);
     const contactId = input.contactId || conversation?.contact_id || '';
     const contact = contactId ? await getContact(contactId) : undefined;
+    if (Number(contact?.hidden) === 1) return empty('Contato excluído');
     if (contact && !contact.bot_enabled) return empty('Bot pausado neste contato');
     if (contact?.human_handoff) return empty('Humano assumiu a conversa');
 
@@ -61,19 +80,35 @@ export async function answerInbound(input: {
 
     const limit = Number(getSetting('agent_history') || '8');
     const history = (await recentMessages(input.conversationId, limit)).filter(
-      (item, index, all) => !(index === all.length - 1 && item.direction === 'INBOUND' && item.text === input.text),
+      (item, index, all) =>
+        !(index === all.length - 1 && item.direction === 'INBOUND' && item.text === inboundText),
     );
-    const draft = await draftReply({
-      contactName: contact?.name || input.contactName || conversation?.contact_name || '',
-      contactPhone: phone,
-      notes: contact?.notes || '',
-      instructions: contact?.instructions || '',
-      prompt: contact?.prompt || '',
-      history: history.map((item) => ({ direction: item.direction, text: item.text })),
-      inbound: input.text,
-      hasText: true,
-      allowReply: true,
-    });
+    const clock = zonedNow();
+    const cycle = contactId
+      ? await findActiveCycleForContact(contactId, clock.date, clock.weekday)
+      : undefined;
+
+    const draft = cycle
+      ? await draftQuestionnaireReply({
+          context: cycle,
+          contactName: contact?.name || input.contactName || conversation?.contact_name || '',
+          inbound: inboundText,
+          inboundType,
+          mediaUrl,
+          history: history.map((item) => ({ direction: item.direction, text: item.text })),
+        })
+      : await draftReply({
+          contactName: contact?.name || input.contactName || conversation?.contact_name || '',
+          contactPhone: phone,
+          notes: contact?.notes || '',
+          instructions: contact?.instructions || '',
+          prompt: contact?.prompt || '',
+          history: history.map((item) => ({ direction: item.direction, text: item.text })),
+          inbound: inboundText,
+          hasText: true,
+          allowReply: true,
+        });
+
     if (!draft.text) return empty(draft.detail || 'Sem resposta');
 
     await sendWhatsappText({
@@ -85,7 +120,12 @@ export async function answerInbound(input: {
       conversationId: input.conversationId,
       text: draft.text,
       origin: 'agent',
-      raw: { source: draft.source, messageId: input.messageId },
+      raw: {
+        source: draft.source,
+        messageId: input.messageId,
+        mode: cycle ? 'questionnaire' : 'free',
+        cycleId: cycle?.cycle.id,
+      },
     });
     await insertEvent({
       id: marker,
@@ -93,7 +133,12 @@ export async function answerInbound(input: {
       status: 'reply',
       summary: draft.detail,
       payload: { messageId: input.messageId, conversationId: input.conversationId },
-      result: { action: 'reply', source: draft.source, text: draft.text },
+      result: {
+        action: 'reply',
+        source: draft.source,
+        text: draft.text,
+        mode: cycle ? 'questionnaire' : 'free',
+      },
     });
     return { sent: true, text: draft.text, detail: draft.detail, phone, channelId, source: draft.source };
   } catch (error) {

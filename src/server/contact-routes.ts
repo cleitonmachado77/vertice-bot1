@@ -1,13 +1,16 @@
-import { zonedNow } from './clock.js';
 import { json, route, type Ctx } from './http.js';
 import { hasSession } from './auth.js';
-import { getContact, upsertConversation } from './store.js';
+import { getContact, hideContact, upsertConversation, type ContactRecord } from './store.js';
 import { createLocalContact, moveContact } from './local-contact.js';
 import { ensureConversation, findConversationId, recordOutbound } from './thread.js';
 import { getSetting } from './db.js';
 import { asList } from './map.js';
 import { NevoaError, listTemplates, sendWhatsappTemplate, sendWhatsappText } from './nevoa.js';
-import { listContactDispatches, listContactMessages, saveContactPlan } from './plans.js';
+import { updateContactBasics } from './plans.js';
+
+function isVisible(contact: ContactRecord | undefined): contact is ContactRecord {
+  return Boolean(contact) && Number(contact?.hidden) !== 1;
+}
 
 function requireUser(ctx: Ctx): boolean {
   if (hasSession(ctx.req.headers.cookie)) return true;
@@ -86,18 +89,27 @@ export function registerContactRoutes(): void {
     }
   });
 
+  route('DELETE', '/api/contacts/:id', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    const contact = await getContact(ctx.params.id);
+    if (!isVisible(contact)) {
+      json(ctx.res, 404, { error: 'Contato não encontrado' });
+      return;
+    }
+    await hideContact(contact.id, contact.phone);
+    json(ctx.res, 200, { ok: true });
+  });
+
   route('GET', '/api/contacts/:id', async (ctx) => {
     if (!requireUser(ctx)) return;
     const contact = await getContact(ctx.params.id);
-    if (!contact) {
+    if (!isVisible(contact)) {
       json(ctx.res, 404, { error: 'Contato não encontrado' });
       return;
     }
     json(ctx.res, 200, {
       contact,
       conversationId: await findConversationId(contact.id, contact.phone),
-      messages: await listContactMessages(contact.id),
-      dispatches: await listContactDispatches(contact.id, zonedNow().date),
     });
   });
 
@@ -105,7 +117,7 @@ export function registerContactRoutes(): void {
     if (!requireUser(ctx)) return;
     const contact = await getContact(ctx.params.id);
     const message = text(body(ctx).text).trim();
-    if (!contact) {
+    if (!isVisible(contact)) {
       json(ctx.res, 404, { error: 'Contato não encontrado' });
       return;
     }
@@ -133,7 +145,7 @@ export function registerContactRoutes(): void {
     if (!requireUser(ctx)) return;
     try {
       const contact = await getContact(ctx.params.id);
-      if (!contact?.phone) {
+      if (!isVisible(contact) || !contact.phone) {
         json(ctx.res, 404, { error: 'Contato não encontrado' });
         return;
       }
@@ -189,27 +201,17 @@ export function registerContactRoutes(): void {
   route('PUT', '/api/contacts/:id', async (ctx) => {
     if (!requireUser(ctx)) return;
     try {
+      const current = await getContact(ctx.params.id);
+      if (!isVisible(current)) {
+        json(ctx.res, 404, { error: 'Contato não encontrado' });
+        return;
+      }
       const input = body(ctx);
-      const messages = Array.isArray(input.messages) ? input.messages : [];
-      await saveContactPlan(ctx.params.id, {
+      await updateContactBasics(ctx.params.id, {
         name: text(input.name).trim(),
         phone: phoneE164(text(input.phone)),
         email: text(input.email).trim(),
-        prompt: text(input.prompt),
-        instructions: text(input.instructions),
-        notes: text(input.notes),
         botEnabled: input.botEnabled !== false,
-        messages: messages.map((item) => {
-          const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-          return {
-            id: text(row.id) || undefined,
-            body: text(row.body),
-            frequency: text(row.frequency, 'daily'),
-            weekday: Number(row.weekday ?? 1),
-            sendTime: text(row.sendTime, '09:00'),
-            active: row.active !== false,
-          };
-        }),
       });
       json(ctx.res, 200, { ok: true });
     } catch (error) {

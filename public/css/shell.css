@@ -32,12 +32,11 @@
   text-decoration: none;
   color: var(--ink);
 }
-.brand strong {
-  font-weight: 600;
-  font-size: 0.98rem;
-  letter-spacing: -0.03em;
+.brand-logo {
+  display: block;
+  height: 48px;
+  width: auto;
 }
-.mark { display: block; flex: none; border-radius: 10px; }
 .icon-btn {
   width: 32px;
   height: 32px;
@@ -127,7 +126,11 @@
 .side-user span { color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .shell.collapsed .sidebar { width: 88px; }
-.shell.collapsed .brand strong,
+.shell.collapsed .brand-logo {
+  width: 48px;
+  object-fit: cover;
+  object-position: left center;
+}
 .shell.collapsed .side-nav span,
 .shell.collapsed .side-user { display: none; }
 .shell.collapsed #collapse svg { transition: transform 0.3s ease; }
@@ -188,24 +191,238 @@
 .gate {
   min-height: 100%;
   display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top, rgba(17, 24, 39, 0.04), transparent 42%),
-    var(--paper);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  background: var(--paper);
+  overflow: hidden;
 }
-.gate-card {
+
+.gate-form-panel {
+  display: grid;
+  place-items: center;
+  padding: clamp(24px, 5vw, 64px);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(17, 24, 39, 0.04), transparent 42%),
+    linear-gradient(180deg, #f3f4f6 0%, var(--paper) 48%, #eef2f7 100%);
+  animation: gateInLeft 0.55s ease both;
+}
+
+.gate-form {
   width: min(420px, 100%);
-  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--card);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--shadow);
-  padding: 28px 24px 22px;
-  animation: rise 0.45s ease both;
+  box-shadow:
+    0 1px 2px rgba(17, 24, 39, 0.04),
+    0 18px 40px rgba(17, 24, 39, 0.08);
+  overflow: hidden;
 }
-.gate-card h1 { font-size: 1.6rem; margin-top: 16px; }
-.gate-card .btn { width: 100%; margin-top: 18px; }
-.login-error { min-height: 1.2em; margin: 10px 0 0; color: var(--danger); font-size: 0.86rem; }
+
+.gate-form-head {
+  padding: 28px 28px 20px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #fff 0%, #f9fafb 100%);
+  text-align: center;
+}
+
+.gate-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px 28px 24px;
+}
+
+.gate-logo {
+  height: 72px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto 18px;
+}
+
+.gate-kicker {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.gate-form h1 {
+  font-size: clamp(1.7rem, 2.6vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.15;
+}
+
+.gate-label {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.gate-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 12px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f9fafb;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.gate-field:focus-within {
+  background: #fff;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(17, 24, 39, 0.1);
+}
+
+.gate-field-icon,
+.gate-eye {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+.gate-field-icon svg,
+.gate-eye svg {
+  width: 18px;
+  height: 18px;
+}
+
+.gate-eye {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.gate-eye:hover {
+  background: #f3f4f6;
+  color: var(--ink-soft);
+}
+
+.gate-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.gate-field input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.gate-field input::placeholder {
+  color: var(--faint);
+}
+
+.gate-submit {
+  height: 46px;
+  margin-top: 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.gate-submit:hover {
+  background: #1f2937;
+  box-shadow: 0 8px 20px rgba(17, 24, 39, 0.16);
+}
+.gate-submit:active { transform: scale(0.985); }
+.gate-submit:disabled { opacity: 0.65; cursor: wait; box-shadow: none; }
+
+.login-error {
+  min-height: 1.15em;
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 0.84rem;
+}
+
+.gate-foot {
+  margin: 0;
+  padding: 14px 28px 18px;
+  border-top: 1px solid var(--line);
+  background: #f9fafb;
+  color: var(--faint);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.gate-visual {
+  position: relative;
+  min-height: 100%;
+  overflow: hidden;
+  background: #111827;
+  animation: gateInRight 0.65s ease both;
+}
+
+.gate-visual-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+@keyframes gateInLeft {
+  from { opacity: 0; transform: translateX(-18px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes gateInRight {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 900px) {
+  .gate {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .gate-visual {
+    min-height: 38vh;
+    order: -1;
+  }
+  .gate-form-panel {
+    padding: 20px 16px 32px;
+  }
+  .gate-form-head,
+  .gate-form-body {
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+  .gate-foot { padding-left: 22px; padding-right: 22px; }
+}
 
 @media (max-width: 980px) {
   .nav-toggle { display: inline-flex; }
@@ -219,7 +436,11 @@
   .shell.nav-open .sidebar { transform: none; }
   .shell.nav-open .backdrop { display: block; opacity: 1; }
   .shell.collapsed .sidebar { width: 224px; }
-  .shell.collapsed .brand strong,
+  .shell.collapsed .brand-logo,
+  .shell.nav-open .brand-logo {
+    width: auto;
+    object-fit: contain;
+  }
   .shell.collapsed .side-nav span,
   .shell.collapsed .side-user { display: block; }
   .shell.collapsed .side-nav a,

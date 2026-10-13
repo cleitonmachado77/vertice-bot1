@@ -134,8 +134,7 @@ function syncThreadMode() {
 function emptyThread() {
   return `
     <div class="wa-empty">
-      <svg class="mark" width="56" height="56" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="10" fill="#111827"/><path d="M9 22.5 16 8.5l7 14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <h2>Vértice</h2>
+      <img class="brand-logo" src="/logo-vertice.png" alt="Vértice Bot" />
       <p>Selecione uma conversa para ler e responder no WhatsApp.</p>
     </div>`;
 }

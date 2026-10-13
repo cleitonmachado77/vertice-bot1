@@ -17,6 +17,11 @@ export async function renderEvents(root) {
     )
     .join('');
   root.innerHTML = `
-    <div class="top"><div><p class="kicker">Histórico</p><h1>Eventos</h1><p class="muted">O que chegou da Névoa e o que o agente decidiu.</p></div></div>
-    <div class="stack">${rows || '<p class="muted">Nenhum evento ainda.</p>'}</div>`;
+    <div class="stack">
+      <div class="card-head" style="margin-bottom: 4px;">
+        <h2>Histórico</h2>
+        <p class="muted">O que chegou da Névoa e o que o agente decidiu.</p>
+      </div>
+      ${rows || '<p class="muted">Nenhum evento ainda.</p>'}
+    </div>`;
 }

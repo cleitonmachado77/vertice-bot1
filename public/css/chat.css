@@ -119,8 +119,7 @@
   color: var(--muted);
   animation: rise 0.35s ease both;
 }
-.wa-empty h2 { font-size: 1.35rem; margin: 12px 0 6px; color: var(--ink); }
-.wa-empty .mark { margin: 0 auto; }
+.wa-empty .brand-logo { height: 64px; margin: 0 auto 12px; }
 
 .wa-head {
   flex: none;

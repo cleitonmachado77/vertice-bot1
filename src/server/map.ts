@@ -67,11 +67,13 @@ export function mapConversation(row: Record<string, unknown>) {
 }
 
 export function mapMessage(row: Record<string, unknown>) {
+  const content = inboundContent(row);
   return {
     id: String(row.id || ''),
     direction: String(row.direction || 'INBOUND').toUpperCase(),
-    type: String(row.type || 'text'),
-    text: messageText(row),
+    type: content.kind || String(row.type || 'text'),
+    text: content.prompt || content.text || messageText(row),
+    mediaUrl: content.mediaUrl,
     createdAt: String(row.timestamp || row.createdAt || row.sentAt || row.at || new Date().toISOString()),
     raw: row,
   };
