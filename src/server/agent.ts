@@ -65,6 +65,9 @@ export async function draftReply(input: {
     if (!text) {
       return { text: fallback, source: 'fallback', detail: 'Modelo devolveu vazio' };
     }
+    if (isNoReply(text)) {
+      return { text: '', source: 'none', detail: 'Sem necessidade de resposta' };
+    }
     return { text: text.slice(0, 1500), source: 'model', detail: getSetting('agent_model') };
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Falha no modelo';
@@ -133,8 +136,16 @@ function systemPrompt(input: {
     'Siga as instruções deste contato. Não invente etapas, preços ou promessas fora delas.',
     'Se a mensagem for áudio, vídeo ou imagem, confirme o recebimento e continue as instruções.',
     'Se não souber responder com segurança, diga que vai passar o atendimento para um atendente humano.',
+    'Interprete a intenção: se o usuário só agradece, confirma ou encerra sem trazer pergunta/assunto novo (ex.: "ok", "por nada", "valeu", "obrigado", "tchau"), NÃO continue o papo.',
+    'Nesses casos de encerramento curto, responda exatamente com a palavra: NO_REPLY',
+    'Evite loops de educação ("estou à disposição", "se precisar é só chamar") quando a conversa já está se encerrando.',
     `Instruções: ${script}`,
     `Contato: ${input.contactName || 'não informado'} ${input.contactPhone}`.trim(),
     `Notas internas: ${notes}`,
   ].join('\n');
+}
+
+function isNoReply(text: string): boolean {
+  const normalized = text.trim().replace(/^["'`]+|["'`]+$/g, '');
+  return /^no[_\s-]?reply$/i.test(normalized);
 }

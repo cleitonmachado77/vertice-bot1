@@ -109,7 +109,22 @@ export async function answerInbound(input: {
           allowReply: true,
         });
 
-    if (!draft.text) return empty(draft.detail || 'Sem resposta');
+    if (!draft.text) {
+      await insertEvent({
+        id: marker,
+        event: 'message.received',
+        status: 'ignore',
+        summary: draft.detail || 'Sem resposta',
+        payload: { messageId: input.messageId, conversationId: input.conversationId },
+        result: {
+          action: 'ignore',
+          source: draft.source,
+          mode: cycle ? 'questionnaire' : 'free',
+          cycleId: cycle?.cycle.id,
+        },
+      });
+      return empty(draft.detail || 'Sem resposta');
+    }
 
     await sendWhatsappText({
       phone,
