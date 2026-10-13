@@ -8,6 +8,7 @@ import {
   listDueQuestionnaireSends,
   markCycleFailed,
   markCycleNotified,
+  recoverStuckSendingCycles,
 } from './questionnaire-cycles.js';
 import { ensureConversation, recordOutbound } from './thread.js';
 import { upsertConversation } from './store.js';
@@ -31,7 +32,22 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
     skipped: 0,
     items: [],
   };
+  const recovered = await recoverStuckSendingCycles(10);
+  if (recovered) {
+    result.items.push({
+      phone: '-',
+      status: 'recovered',
+      detail: `${recovered} ciclo(s) travado(s) liberado(s)`,
+    });
+  }
+
   const channelId = getSetting('nevoa_channel_id');
+  if (!channelId) {
+    result.failed += 1;
+    result.items.push({ phone: '-', status: 'failed', detail: 'nevoa_channel_id não configurado' });
+    return result;
+  }
+
   let template: { id: string; name: string; body: string } | undefined;
   try {
     template = await resolveFirstContactTemplate(channelId);
@@ -42,16 +58,26 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
     return result;
   }
   if (!template) {
-    result.skipped += 1;
+    result.failed += 1;
     result.items.push({
       phone: '-',
-      status: 'skipped',
-      detail: 'Template de primeiro envio não configurado ou indisponível',
+      status: 'failed',
+      detail: 'Nenhum template Meta APPROVED disponível para o primeiro envio',
     });
     return result;
   }
 
-  for (const item of await listDueQuestionnaireSends(clock.weekday)) {
+  const due = await listDueQuestionnaireSends(clock.weekday);
+  if (!due.length) {
+    result.skipped += 1;
+    result.items.push({
+      phone: '-',
+      status: 'skipped',
+      detail: 'Nenhum questionário ativo com contato atribuído para hoje',
+    });
+  }
+
+  for (const item of due) {
     if (clock.minutes < minutesFromClock(item.send_time)) {
       result.waiting += 1;
       continue;

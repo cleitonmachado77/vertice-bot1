@@ -1,4 +1,5 @@
 import { env } from './env.js';
+import { zonedNow } from './clock.js';
 import { runDueDispatches } from './dispatch.js';
 
 const EVERY_MS = 5 * 60 * 1000;
@@ -16,12 +17,24 @@ export function startScheduler(): void {
     running = true;
     runDueDispatches()
       .then((result) => {
+        const clock = zonedNow();
+        const hh = String(Math.floor(clock.minutes / 60)).padStart(2, '0');
+        const mm = String(clock.minutes % 60).padStart(2, '0');
         if (result.locked === false) {
-          console.log('agendamentos: outro worker já está disparando');
+          console.log(`agendamentos: ${clock.date} ${hh}:${mm} lock ocupado`);
           return;
         }
-        if (result.sent || result.failed) {
-          console.log(`agendamentos: ${result.sent} enviadas, ${result.failed} falharam`);
+        const q = result.questionnaires;
+        console.log(
+          `agendamentos: ${clock.date} ${hh}:${mm} enviadas=${result.sent} falhas=${result.failed} aguardando=${result.waiting} ignoradas=${result.skipped}` +
+            (q
+              ? ` | questionários enviados=${q.sent} falhas=${q.failed} aguardando=${q.waiting} ignorados=${q.skipped}`
+              : ''),
+        );
+        for (const item of result.items.slice(0, 20)) {
+          if (item.status === 'failed' || item.status === 'notified' || item.status === 'sent') {
+            console.log(`agendamentos item: ${item.phone} → ${item.status} (${item.detail})`);
+          }
         }
       })
       .catch((error) => {

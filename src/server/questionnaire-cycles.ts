@@ -16,6 +16,7 @@ export type QuestionnaireCycle = {
   template_sent_at: string;
   completed_at: string;
   error: string;
+  updated_at?: string;
 };
 
 export type CycleAnswer = {
@@ -120,7 +121,7 @@ export async function getOrCreateCycle(
   date: string,
 ): Promise<QuestionnaireCycle> {
   const existing = await one<QuestionnaireCycle>(
-    `SELECT id, questionnaire_id, contact_id, occurrence_date, status, template_sent_at, completed_at, error
+    `SELECT id, questionnaire_id, contact_id, occurrence_date, status, template_sent_at, completed_at, error, updated_at
      FROM questionnaire_cycles
      WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3`,
     [questionnaireId, contactId, date],
@@ -140,13 +141,27 @@ export async function getOrCreateCycle(
     // Concorrência: outro processo criou o ciclo do dia.
   }
   const created = await one<QuestionnaireCycle>(
-    `SELECT id, questionnaire_id, contact_id, occurrence_date, status, template_sent_at, completed_at, error
+    `SELECT id, questionnaire_id, contact_id, occurrence_date, status, template_sent_at, completed_at, error, updated_at
      FROM questionnaire_cycles
      WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3`,
     [questionnaireId, contactId, date],
   );
   if (!created) throw new Error('Falha ao abrir ciclo do questionário');
   return created;
+}
+
+/** Libera ciclos travados em "sending" após queda do processo. */
+export async function recoverStuckSendingCycles(maxAgeMinutes = 10): Promise<number> {
+  const stamp = now();
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60_000).toISOString();
+  const rows = await many<{ id: string }>(
+    `UPDATE questionnaire_cycles
+     SET status = 'failed', error = 'Envio interrompido; será tentado de novo', updated_at = $1
+     WHERE status = 'sending' AND updated_at < $2
+     RETURNING id`,
+    [stamp, cutoff],
+  );
+  return rows.length;
 }
 
 /** Reserva o ciclo para envio do template; retorna null se já foi notificado/concluído ou outro worker pegou. */
@@ -160,14 +175,13 @@ export async function claimCycleForSend(
     return undefined;
   }
   const stamp = now();
-  const claimed = await one<QuestionnaireCycle>(
+  return one<QuestionnaireCycle>(
     `UPDATE questionnaire_cycles
      SET status = 'sending', updated_at = $1, error = ''
      WHERE id = $2 AND status IN ('open', 'failed')
-     RETURNING id, questionnaire_id, contact_id, occurrence_date, status, template_sent_at, completed_at, error`,
+     RETURNING id, questionnaire_id, contact_id, occurrence_date, status, template_sent_at, completed_at, error, updated_at`,
     [stamp, cycle.id],
   );
-  return claimed;
 }
 
 export async function markCycleNotified(cycleId: string): Promise<void> {

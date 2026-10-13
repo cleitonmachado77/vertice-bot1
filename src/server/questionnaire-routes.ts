@@ -1,9 +1,11 @@
 import { json, route, type Ctx } from './http.js';
 import { hasSession } from './auth.js';
-import { getSetting, setSetting } from './db.js';
+import { zonedNow, minutesFromClock } from './clock.js';
+import { getSetting, setSetting, many } from './db.js';
+import { runDueDispatches } from './dispatch.js';
 import { asList } from './map.js';
 import { listTemplates } from './nevoa.js';
-import { listCollectedData } from './questionnaire-cycles.js';
+import { listCollectedData, listDueQuestionnaireSends } from './questionnaire-cycles.js';
 import {
   deleteQuestionnaire,
   listQuestionnaires,
@@ -55,6 +57,73 @@ export function registerQuestionnaireRoutes(): void {
       const templateId = text(body(ctx).templateId).trim();
       await setSetting('questionnaire_template_id', templateId);
       json(ctx.res, 200, { ok: true, templateId });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('GET', '/api/questionnaires/dispatch-status', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    try {
+      const clock = zonedNow();
+      const due = await listDueQuestionnaireSends(clock.weekday);
+      const cycles = await many<{
+        id: string;
+        questionnaire_id: string;
+        contact_id: string;
+        occurrence_date: string;
+        status: string;
+        error: string;
+        updated_at: string;
+      }>(
+        `SELECT id, questionnaire_id, contact_id, occurrence_date, status, error, updated_at
+         FROM questionnaire_cycles
+         WHERE occurrence_date = $1
+         ORDER BY updated_at DESC
+         LIMIT 30`,
+        [clock.date],
+      );
+      let templates: { id: string; name: string }[] = [];
+      let templateError = '';
+      try {
+        templates = asList(await listTemplates(getSetting('nevoa_channel_id')))
+          .map((row) => ({
+            id: String(row.id || ''),
+            name: String(row.name || row.externalTemplateName || 'Template'),
+            status: String(row.status || ''),
+          }))
+          .filter((item) => item.id && item.status === 'APPROVED')
+          .map((item) => ({ id: item.id, name: item.name }));
+      } catch (error) {
+        templateError = error instanceof Error ? error.message : 'Falha ao listar templates';
+      }
+      json(ctx.res, 200, {
+        clock: {
+          date: clock.date,
+          time: `${String(Math.floor(clock.minutes / 60)).padStart(2, '0')}:${String(clock.minutes % 60).padStart(2, '0')}`,
+          minutes: clock.minutes,
+          weekday: clock.weekday,
+          timezone: getSetting('timezone', 'America/Sao_Paulo'),
+        },
+        channelId: getSetting('nevoa_channel_id') || '',
+        templateId: getSetting('questionnaire_template_id') || '',
+        templates,
+        templateError,
+        due: due.map((item) => ({
+          ...item,
+          dueNow: clock.minutes >= minutesFromClock(item.send_time),
+        })),
+        cyclesToday: cycles,
+      });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('POST', '/api/questionnaires/dispatch', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    try {
+      json(ctx.res, 200, await runDueDispatches());
     } catch (error) {
       fail(ctx, error);
     }

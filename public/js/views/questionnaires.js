@@ -75,7 +75,11 @@ async function renderModels(root) {
             )
             .join('')}
         </select>
-        <button class="btn" type="submit">Salvar template</button>
+        <div class="row form-actions">
+          <button class="btn" type="submit">Salvar template</button>
+          <button class="btn-ghost" type="button" id="run-dispatch">Disparar agora</button>
+        </div>
+        <p class="muted" id="dispatch-hint"></p>
       </form>
 
       <section class="card stack" id="questionnaire-list">
@@ -122,6 +126,32 @@ async function renderModels(root) {
       toast('Template de primeiro envio salvo');
     } catch (error) {
       toast(error.message);
+    }
+  });
+
+  document.querySelector('#run-dispatch')?.addEventListener('click', async () => {
+    const hint = document.querySelector('#dispatch-hint');
+    const button = document.querySelector('#run-dispatch');
+    button.disabled = true;
+    hint.textContent = 'Disparando…';
+    try {
+      const [status, result] = await Promise.all([
+        api('/api/questionnaires/dispatch-status'),
+        api('/api/questionnaires/dispatch', { method: 'POST', body: {} }),
+      ]);
+      const q = result.questionnaires || {};
+      hint.textContent = `Relógio ${status.clock.date} ${status.clock.time} (${status.clock.timezone}) · enviados ${result.sent} · falhas ${result.failed} · aguardando ${result.waiting} · questionários ${q.sent || 0}/${q.failed || 0}`;
+      const failed = (result.items || []).find((item) => item.status === 'failed');
+      if (failed) toast(failed.detail);
+      else if (result.sent) toast(`${result.sent} envio(s) concluído(s)`);
+      else if (!status.templates?.length) toast(status.templateError || 'Nenhum template Meta aprovado');
+      else if (!(status.due || []).some((item) => item.dueNow)) toast('Nenhum questionário vencido neste horário');
+      else toast('Nada novo para enviar');
+    } catch (error) {
+      hint.textContent = '';
+      toast(error.message);
+    } finally {
+      button.disabled = false;
     }
   });
 
