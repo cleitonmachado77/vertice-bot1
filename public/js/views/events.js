@@ -1,8 +1,11 @@
 import { api } from '../api.js';
-import { escapeHtml, formatWhen } from '../ui.js';
+import { escapeHtml, formatWhen, panelLoading } from '../ui.js';
+import { getNavToken, isNavActive } from '../nav.js';
 
-export async function renderEvents(root) {
+export async function renderEvents(root, token = getNavToken()) {
+  root.innerHTML = panelLoading('Carregando eventos…');
   const data = await api('/api/events');
+  if (!isNavActive(token)) return;
   const rows = data.items
     .map(
       (item) => `

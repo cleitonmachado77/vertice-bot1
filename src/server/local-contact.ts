@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { many, one, run } from './db.js';
+import { getSetting, many, one, run } from './db.js';
 import { looksLikePhoneName, phonesMatch } from './phone.js';
 import { getContact, type ContactRecord } from './store.js';
+import { ensureConversation } from './thread.js';
 
 const now = () => new Date().toISOString();
 
@@ -18,7 +19,14 @@ export async function createLocalContact(input: {
       [existing.id, input.name, input.email, now()],
     );
     await run('UPDATE conversations SET hidden = 0 WHERE contact_id = $1', [existing.id]);
-    return (await getContact(existing.id)) as ContactRecord;
+    const restored = (await getContact(existing.id)) as ContactRecord;
+    await ensureConversation({
+      contactId: restored.id,
+      name: restored.name,
+      phone: restored.phone,
+      channelId: getSetting('nevoa_channel_id'),
+    });
+    return restored;
   }
   const id = randomUUID();
   await run(
@@ -27,7 +35,14 @@ export async function createLocalContact(input: {
      ) VALUES($1, $2, $3, $4, '', '', '', '[]', 0, 1, '', '{}', $5)`,
     [id, input.name, input.phone, input.email, now()],
   );
-  return (await getContact(id)) as ContactRecord;
+  const created = (await getContact(id)) as ContactRecord;
+  await ensureConversation({
+    contactId: created.id,
+    name: created.name,
+    phone: created.phone,
+    channelId: getSetting('nevoa_channel_id'),
+  });
+  return created;
 }
 
 export async function findContactByPhone(

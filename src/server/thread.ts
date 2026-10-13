@@ -15,6 +15,67 @@ export async function findConversationId(contactId: string, phone: string): Prom
   return found?.id || '';
 }
 
+/** Janela de atendimento WhatsApp (~24h após última mensagem do contato). */
+export async function hasOpenCustomerWindow(contactId: string, phone: string): Promise<boolean> {
+  const lastInbound = await one<{ created_at: string }>(
+    `SELECT m.created_at
+     FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     WHERE m.direction = 'INBOUND'
+       AND (c.contact_id = $1 OR ($2 <> '' AND c.contact_phone = $2))
+     ORDER BY m.created_at DESC
+     LIMIT 1`,
+    [contactId, phone],
+  );
+  if (!lastInbound?.created_at) return false;
+  const at = Date.parse(lastInbound.created_at);
+  if (!Number.isFinite(at)) return false;
+  return Date.now() - at < 24 * 60 * 60 * 1000;
+}
+
+export async function hasOutboundMessage(contactId: string, phone: string): Promise<boolean> {
+  const found = await one<{ id: string }>(
+    `SELECT m.id
+     FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     WHERE m.direction = 'OUTBOUND'
+       AND (c.contact_id = $1 OR ($2 <> '' AND c.contact_phone = $2))
+     LIMIT 1`,
+    [contactId, phone],
+  );
+  return Boolean(found?.id);
+}
+
+/** Fora da janela 24h o WhatsApp só aceita template Meta. */
+export async function getSessionGate(
+  contactId: string,
+  phone: string,
+): Promise<{
+  open: boolean;
+  requiresTemplate: boolean;
+  firstContact: boolean;
+  message: string;
+}> {
+  const open = await hasOpenCustomerWindow(contactId, phone);
+  if (open) {
+    return {
+      open: true,
+      requiresTemplate: false,
+      firstContact: false,
+      message: '',
+    };
+  }
+  const hasOutbound = await hasOutboundMessage(contactId, phone);
+  return {
+    open: false,
+    requiresTemplate: true,
+    firstContact: !hasOutbound,
+    message: hasOutbound
+      ? 'Janela de 24h fechada. Envie um template Meta para retomar a conversa. Mensagens livres ficam bloqueadas até o contato responder.'
+      : 'Primeiro contato: a primeira mensagem precisa ser um template Meta aprovado. Mensagens livres ficam bloqueadas até o envio do template.',
+  };
+}
+
 export async function ensureConversation(input: {
   contactId: string;
   name: string;

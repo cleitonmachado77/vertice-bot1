@@ -1,8 +1,11 @@
 import { api } from '../api.js';
-import { escapeHtml, toast } from '../ui.js';
+import { escapeHtml, toast, panelLoading } from '../ui.js';
+import { getNavToken, isNavActive } from '../nav.js';
 
-export async function renderIntegrations(root) {
+export async function renderIntegrations(root, token = getNavToken()) {
+  if (!root.querySelector('#integration-form')) root.innerHTML = panelLoading('Carregando integrações…');
   const data = await api('/api/integrations');
+  if (!isNavActive(token)) return;
   const origin = data.publicBaseUrl || location.origin;
   root.innerHTML = `
     <div class="stack">

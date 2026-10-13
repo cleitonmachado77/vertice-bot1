@@ -1,46 +1,62 @@
 import { api } from '../api.js';
-import { escapeHtml, formatWhen } from '../ui.js';
+import { escapeHtml, formatWhen, createPoll } from '../ui.js';
+import { getNavToken, isNavActive } from '../nav.js';
 
-let timer = 0;
+const POLL_MS = 8000;
+let stopPoll = null;
 let statsSig = '';
 let recentSig = '';
 
 export function stopOverview() {
-  if (timer) clearInterval(timer);
-  timer = 0;
+  if (stopPoll) stopPoll();
+  stopPoll = null;
   statsSig = '';
   recentSig = '';
 }
 
-export async function renderOverview(root) {
+export async function renderOverview(root, token = getNavToken()) {
   stopOverview();
-  const data = await api('/api/overview');
   root.innerHTML = `
-    <div class="top">
-      <div>
-        <p class="kicker">Operação</p>
-        <h1>Visão geral</h1>
-        <p class="muted">Cada contato tem o próprio prompt, as instruções e o horário das mensagens.</p>
+    <div class="view-pane">
+      <div class="top">
+        <div>
+          <p class="kicker">Operação</p>
+          <h1>Visão geral</h1>
+        </div>
       </div>
-    </div>
-    <section class="cards" id="stats">${stats(data)}</section>
-    <section class="card" style="padding: 18px 18px 8px;">
-      <div class="card-head">
-        <h2>Últimas conversas</h2>
-        <p class="muted">Atividade recente da operação</p>
-      </div>
-      <div class="list" id="recent">${recent(data.conversations)}</div>
-    </section>`;
+      <section class="cards" id="stats">
+        <article class="stat skeleton-card"></article>
+        <article class="stat skeleton-card"></article>
+        <article class="stat skeleton-card"></article>
+        <article class="stat skeleton-card"></article>
+      </section>
+      <section class="card" style="padding: 18px 18px 8px;">
+        <div class="card-head">
+          <h2>Últimas conversas</h2>
+        </div>
+        <div class="list" id="recent"><p class="muted">Carregando…</p></div>
+      </section>
+    </div>`;
+
+  const data = await api('/api/overview');
+  if (!isNavActive(token)) return;
+
+  const statsEl = root.querySelector('#stats');
+  const recentEl = root.querySelector('#recent');
+  if (statsEl) statsEl.innerHTML = stats(data);
+  if (recentEl) recentEl.innerHTML = recent(data.conversations);
   statsSig = countsSig(data);
   recentSig = conversationsSig(data.conversations);
-  timer = setInterval(() => refresh().catch(() => {}), 2000);
+  stopPoll = createPoll(() => refresh(token), POLL_MS);
 }
 
-async function refresh() {
+async function refresh(token) {
+  if (!isNavActive(token)) return;
   const statsEl = document.querySelector('#stats');
   const recentEl = document.querySelector('#recent');
   if (!statsEl || !recentEl) return;
   const data = await api('/api/overview');
+  if (!isNavActive(token)) return;
   const nextStats = countsSig(data);
   const nextRecent = conversationsSig(data.conversations);
   if (nextStats !== statsSig) {
@@ -84,4 +100,3 @@ function recent(conversations) {
     .join('');
   return items || '<p class="muted">Nenhuma conversa ainda.</p>';
 }
-

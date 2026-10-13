@@ -1,12 +1,17 @@
 import { json, route, type Ctx } from './http.js';
 import { hasSession } from './auth.js';
-import { getContact, hideContact, upsertConversation, type ContactRecord } from './store.js';
-import { createLocalContact, moveContact } from './local-contact.js';
-import { ensureConversation, findConversationId, recordOutbound } from './thread.js';
+import { getContact, hideContact, type ContactRecord } from './store.js';
+import { createLocalContact } from './local-contact.js';
 import { getSetting } from './db.js';
 import { asList } from './map.js';
-import { NevoaError, listTemplates, sendWhatsappTemplate, sendWhatsappText } from './nevoa.js';
+import { NevoaError, listTemplates, sendWhatsappText } from './nevoa.js';
 import { updateContactBasics } from './plans.js';
+import {
+  listApprovedTemplates,
+  resolveFirstContactTemplate,
+  sendFirstContactTemplate,
+} from './first-contact.js';
+import { ensureConversation, findConversationId, getSessionGate, recordOutbound } from './thread.js';
 
 function isVisible(contact: ContactRecord | undefined): contact is ContactRecord {
   return Boolean(contact) && Number(contact?.hidden) !== 1;
@@ -43,35 +48,29 @@ function phoneE164(value: string): string {
   throw new Error('Informe o telefone com DDI, por exemplo +5543999999999');
 }
 
-function templateItems(payload: unknown): { id: string; name: string; body: string; language: string; status: string }[] {
-  return asList(payload)
-    .map((row) => ({
-      id: String(row.id || ''),
-      name: String(row.name || row.externalTemplateName || 'Template'),
-      body: String(row.body || ''),
-      language: String(row.language || ''),
-      status: String(row.status || ''),
-    }))
-    .filter((item) => item.id);
-}
-
-function variablesFor(body: string, name: string): string[] {
-  const marks = body.match(/\{\{\s*\d+\s*\}\}/g) || [];
-  const count = new Set(marks.map((mark) => mark.replace(/\D/g, ''))).size;
-  return Array.from({ length: count }, () => name);
-}
-
 export function registerContactRoutes(): void {
   route('GET', '/api/templates', async (ctx) => {
     if (!requireUser(ctx)) return;
-    const payload = await listTemplates(getSetting('nevoa_channel_id'));
-    const all = templateItems(payload);
-    json(ctx.res, 200, {
-      items: all.filter((item) => item.status === 'APPROVED'),
-      pending: all
-        .filter((item) => item.status !== 'APPROVED')
-        .map((item) => ({ name: item.name, status: item.status })),
-    });
+    try {
+      const all = asList(await listTemplates(getSetting('nevoa_channel_id'))).map((row) => ({
+        id: String(row.id || ''),
+        name: String(row.name || row.externalTemplateName || 'Template'),
+        body: String(row.body || ''),
+        language: String(row.language || ''),
+        status: String(row.status || ''),
+      }));
+      const items = all.filter((item) => item.id && item.status === 'APPROVED');
+      const selected = resolveFirstContactTemplate(items);
+      json(ctx.res, 200, {
+        items,
+        selectedId: selected?.id || getSetting('first_contact_template_id') || '',
+        pending: all
+          .filter((item) => item.id && item.status !== 'APPROVED')
+          .map((item) => ({ name: item.name, status: item.status })),
+      });
+    } catch (error) {
+      fail(ctx, error);
+    }
   });
 
   route('POST', '/api/contacts', async (ctx) => {
@@ -83,7 +82,10 @@ export function registerContactRoutes(): void {
         phone: phoneE164(text(input.phone)),
         email: text(input.email).trim(),
       });
-      json(ctx.res, 200, { contact });
+      json(ctx.res, 200, {
+        contact,
+        conversationId: await findConversationId(contact.id, contact.phone),
+      });
     } catch (error) {
       fail(ctx, error);
     }
@@ -107,9 +109,22 @@ export function registerContactRoutes(): void {
       json(ctx.res, 404, { error: 'Contato não encontrado' });
       return;
     }
+    const conversationId =
+      (await findConversationId(contact.id, contact.phone)) ||
+      (await ensureConversation({
+        contactId: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        channelId: getSetting('nevoa_channel_id'),
+      }));
+    const gate = await getSessionGate(contact.id, contact.phone);
+    const templates = gate.requiresTemplate ? await listApprovedTemplates().catch(() => []) : [];
     json(ctx.res, 200, {
       contact,
-      conversationId: await findConversationId(contact.id, contact.phone),
+      conversationId,
+      session: gate,
+      templates,
+      defaultTemplateId: resolveFirstContactTemplate(templates)?.id || '',
     });
   });
 
@@ -125,74 +140,43 @@ export function registerContactRoutes(): void {
       json(ctx.res, 400, { error: 'Mensagem ou telefone ausente' });
       return;
     }
+    const gate = await getSessionGate(contact.id, contact.phone);
+    if (gate.requiresTemplate) {
+      json(ctx.res, 409, { error: gate.message || 'Envie um template Meta antes de mensagens livres.' });
+      return;
+    }
     const channelId = getSetting('nevoa_channel_id');
-    const sent = await sendWhatsappText({
-      phone: contact.phone,
-      text: message,
-      channelIntegrationId: channelId,
-    });
-    const conversationId = await ensureConversation({
-      contactId: contact.id,
-      name: contact.name,
-      phone: contact.phone,
-      channelId,
-    });
-    await recordOutbound({ conversationId, text: message, origin: 'manual', raw: sent });
-    json(ctx.res, 200, { ok: true, conversationId });
+    try {
+      const sent = await sendWhatsappText({
+        phone: contact.phone,
+        text: message,
+        channelIntegrationId: channelId,
+      });
+      const conversationId = await ensureConversation({
+        contactId: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        channelId,
+      });
+      await recordOutbound({ conversationId, text: message, origin: 'manual', raw: sent });
+      json(ctx.res, 200, { ok: true, conversationId });
+    } catch (error) {
+      fail(ctx, error);
+    }
   });
 
   route('POST', '/api/contacts/:id/start', async (ctx) => {
     if (!requireUser(ctx)) return;
     try {
-      const contact = await getContact(ctx.params.id);
-      if (!isVisible(contact) || !contact.phone) {
-        json(ctx.res, 404, { error: 'Contato não encontrado' });
-        return;
-      }
-      const channelId = getSetting('nevoa_channel_id');
-      const templates = templateItems(await listTemplates(channelId)).filter((item) => item.status === 'APPROVED');
-      const requested = text(body(ctx).templateId);
-      const template = templates.find((item) => item.id === requested) || templates[0];
-      if (!template) {
-        json(ctx.res, 400, {
-          error: 'Nenhum template ativo na Névoa. Aprove um modelo no WhatsApp para iniciar números novos.',
-        });
-        return;
-      }
-      const sent = (await sendWhatsappTemplate({
-        templateId: template.id,
-        phone: contact.phone,
-        variables: variablesFor(template.body, contact.name || contact.phone),
-        channelIntegrationId: channelId,
-      })) as {
-        conversation?: { id?: string; status?: string };
-        contact?: { id?: string; name?: string; phone?: string };
-      };
-      const remoteId = String(sent.contact?.id || '');
-      if (remoteId) await moveContact(contact.id, remoteId);
-      const contactId = remoteId || contact.id;
-      const conversationId =
-        String(sent.conversation?.id || '') ||
-        (await ensureConversation({
-          contactId,
-          name: contact.name,
-          phone: contact.phone,
-          channelId,
-        }));
-      const preview = template.body.replace(/\{\{\s*1\s*\}\}/g, contact.name || contact.phone) || template.name;
-      await upsertConversation({
-        id: conversationId,
-        contactId,
-        contactName: contact.name,
-        contactPhone: contact.phone,
-        status: String(sent.conversation?.status || 'TEMPLATE_OPEN'),
-        preview,
-        lastMessageAt: new Date().toISOString(),
-        channelId,
-        raw: sent,
+      const result = await sendFirstContactTemplate({
+        contactId: ctx.params.id,
+        templateId: text(body(ctx).templateId),
       });
-      await recordOutbound({ conversationId, text: preview, origin: 'manual', raw: sent });
-      json(ctx.res, 200, { ok: true, conversationId, contactId });
+      json(ctx.res, 200, {
+        ok: true,
+        conversationId: result.conversationId,
+        contactId: result.contactId,
+      });
     } catch (error) {
       fail(ctx, error);
     }

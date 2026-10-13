@@ -6,7 +6,10 @@ import { runDueDispatches } from './dispatch.js';
 import { asList } from './map.js';
 import { listTemplates } from './nevoa.js';
 import { listCollectedData, listDueQuestionnaireSends } from './questionnaire-cycles.js';
+import { buildRfqExport } from './rfq-export.js';
+import { RFQ_FIELDS } from './rfq-fields.js';
 import {
+  QUESTIONNAIRE_FIRST_CONTACT_PHRASE,
   deleteQuestionnaire,
   listQuestionnaires,
   previewQuestionnaireBody,
@@ -42,13 +45,32 @@ export function registerQuestionnaireRoutes(): void {
         preview: previewQuestionnaireBody(item.greeting, item.questions),
       })),
       templateId: getSetting('questionnaire_template_id'),
+      recommendedTemplateBody: QUESTIONNAIRE_FIRST_CONTACT_PHRASE,
+      rfqFields: RFQ_FIELDS,
     });
   });
 
   route('GET', '/api/questionnaires/data', async (ctx) => {
     if (!requireUser(ctx)) return;
     const questionnaireId = ctx.query.get('questionnaireId') || '';
-    json(ctx.res, 200, { items: await listCollectedData(questionnaireId) });
+    json(ctx.res, 200, { items: await listCollectedData(questionnaireId), rfqFields: RFQ_FIELDS });
+  });
+
+  route('GET', '/api/questionnaires/:id/export', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    try {
+      const result = await buildRfqExport(ctx.params.id);
+      ctx.res.writeHead(200, {
+        'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'content-disposition': `attachment; filename="${result.filename}"`,
+        'cache-control': 'no-store',
+        'x-export-rows': String(result.rows),
+        'x-export-warnings': encodeURIComponent(result.warnings.join(' | ')),
+      });
+      ctx.res.end(result.buffer);
+    } catch (error) {
+      fail(ctx, error);
+    }
   });
 
   route('PUT', '/api/questionnaires/settings', async (ctx) => {
@@ -168,10 +190,11 @@ export function registerQuestionnaireRoutes(): void {
           body: String(row.body || ''),
           status: String(row.status || ''),
         }))
-        .filter((item) => item.id && item.status === 'APPROVED');
+        .filter((item) => item.id && (item.status === 'APPROVED' || item.status === 'PENDING_APPROVAL'));
       json(ctx.res, 200, {
         items,
         selectedId: getSetting('questionnaire_template_id'),
+        recommendedBody: QUESTIONNAIRE_FIRST_CONTACT_PHRASE,
       });
     } catch (error) {
       fail(ctx, error);
@@ -200,6 +223,7 @@ async function saveFrom(ctx: Ctx, id = '') {
         id: text(row.id) || undefined,
         body: text(row.body),
         expectedType: text(row.expectedType, 'any'),
+        exportField: text(row.exportField),
       };
     }),
   });

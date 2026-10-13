@@ -6,6 +6,88 @@ export type Draft = {
   detail: string;
 };
 
+const FALLBACK_CHAT_MODELS = [
+  'gpt-4o-mini',
+  'gpt-4o',
+  'gpt-4.1-mini',
+  'gpt-4.1',
+  'gpt-4.1-nano',
+  'o4-mini',
+  'o3-mini',
+];
+
+function isChatModelId(id: string): boolean {
+  const value = id.toLowerCase();
+  if (!value) return false;
+  if (
+    /(embedding|whisper|tts|dall-e|moderation|realtime|audio|transcribe|search|instruct|davinci|babbage|curie|ada)/.test(
+      value,
+    )
+  ) {
+    return false;
+  }
+  return /^(gpt-|o[1-9]|chatgpt-)/.test(value) || value.includes('gpt');
+}
+
+/** Lista modelos de chat disponíveis na API configurada (`GET /models`). */
+export async function listAgentModels(): Promise<{ models: string[]; error: string }> {
+  const current = getSetting('agent_model').trim();
+  const apiKey = getSetting('agent_api_key');
+  const base = getSetting('agent_base_url').replace(/\/$/, '');
+  if (!apiKey) {
+    const models = uniqueModels([current, ...FALLBACK_CHAT_MODELS]);
+    return { models, error: 'Salve uma chave do modelo para listar os disponíveis na API.' };
+  }
+  if (!base) {
+    return { models: uniqueModels([current, ...FALLBACK_CHAT_MODELS]), error: 'URL do modelo não configurada' };
+  }
+  try {
+    const response = await fetch(`${base}/models`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+    const payload = (await response.json()) as {
+      error?: { message?: string };
+      data?: { id?: string }[];
+    };
+    if (!response.ok) {
+      throw new Error(payload.error?.message || `API respondeu ${response.status}`);
+    }
+    const fromApi = (payload.data || [])
+      .map((item) => String(item.id || '').trim())
+      .filter(isChatModelId)
+      .sort((a, b) => a.localeCompare(b));
+    if (!fromApi.length) {
+      return {
+        models: uniqueModels([current, ...FALLBACK_CHAT_MODELS]),
+        error: 'A API não retornou modelos de chat utilizáveis.',
+      };
+    }
+    return { models: uniqueModels([current, ...fromApi]), error: '' };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Falha ao listar modelos';
+    return {
+      models: uniqueModels([current, ...FALLBACK_CHAT_MODELS]),
+      error: detail,
+    };
+  }
+}
+
+function uniqueModels(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const id = value.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 export type ChatPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };

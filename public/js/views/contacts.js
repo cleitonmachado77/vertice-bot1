@@ -1,44 +1,47 @@
 import { api } from '../api.js';
-import { escapeHtml, toast, displayName } from '../ui.js';
+import { escapeHtml, toast, displayName, createPoll, panelLoading } from '../ui.js';
+import { getNavToken, isNavActive } from '../nav.js';
 
-let timer = 0;
+const POLL_MS = 8000;
+let stopPoll = null;
 let listSig = '';
 
 export function stopContacts() {
-  if (timer) clearInterval(timer);
-  timer = 0;
+  if (stopPoll) stopPoll();
+  stopPoll = null;
   listSig = '';
 }
 
-export async function renderContacts(root) {
+export async function renderContacts(root, token = getNavToken()) {
   stopContacts();
-  const data = await api('/api/contacts');
   root.innerHTML = `
-    <div class="top">
-      <div>
-        <p class="kicker">Pessoas</p>
-        <h1>Contatos</h1>
-        <p class="muted">Cadastre um número novo. Quem já falou com a Vértice entra sozinho.</p>
+    <div class="view-pane">
+      <div class="top">
+        <div>
+          <p class="kicker">Pessoas</p>
+          <h1>Contatos</h1>
+          <p class="muted">Cadastre um número novo. Quem já falou com a Vértice entra sozinho.</p>
+        </div>
       </div>
-    </div>
-    <div class="split-board">
-      <form class="card stack" id="new-contact">
-        <h2>Novo contato</h2>
-        <div><label>Nome</label><input name="name" required placeholder="Maria Souza" /></div>
-        <div><label>Telefone</label><input name="phone" required placeholder="+5543999999999" /></div>
-        <div><label>E-mail</label><input name="email" type="email" placeholder="maria@email.com" /></div>
-        <button class="btn" type="submit">Cadastrar</button>
-      </form>
-      <div class="split-board-side">
-        <input id="search" placeholder="Buscar nome ou telefone" />
-        <div class="stack" id="contact-list">${draw(data.items)}</div>
+      <div class="split-board">
+        <form class="card stack" id="new-contact">
+          <h2>Novo contato</h2>
+          <div><label>Nome</label><input name="name" required placeholder="Maria Souza" /></div>
+          <div><label>Telefone</label><input name="phone" required placeholder="+5543999999999" /></div>
+          <div><label>E-mail</label><input name="email" type="email" placeholder="maria@email.com" /></div>
+          <button class="btn" type="submit">Cadastrar</button>
+        </form>
+        <div class="split-board-side">
+          <input id="search" placeholder="Buscar nome ou telefone" />
+          <div class="stack" id="contact-list">${panelLoading('Carregando contatos…')}</div>
+        </div>
       </div>
     </div>`;
-  listSig = itemsSig(data.items);
+
   document.querySelector('#contact-list').addEventListener('click', (event) => {
     const button = event.target.closest('button[data-remove]');
     if (!button) return;
-    removeContact(button.dataset.remove);
+    removeContact(button.dataset.remove, token);
   });
   document.querySelector('#new-contact').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -48,37 +51,45 @@ export async function renderContacts(root) {
         method: 'POST',
         body: { name: form.get('name'), phone: form.get('phone'), email: form.get('email') },
       });
-      location.hash = `#/contacts/${encodeURIComponent(created.contact.id)}`;
+      const conversationId = created.conversationId;
+      location.hash = conversationId
+        ? `#/inbox/${encodeURIComponent(conversationId)}`
+        : `#/inbox/c/${encodeURIComponent(created.contact.id)}`;
     } catch (error) {
       toast(error.message);
     }
   });
   document.querySelector('#search').addEventListener('input', async (event) => {
-    await paintList(event.target.value);
+    await paintList(event.target.value, token);
   });
-  timer = setInterval(() => {
+
+  await paintList('', token);
+  if (!isNavActive(token)) return;
+  stopPoll = createPoll(() => {
     const search = document.querySelector('#search');
-    paintList(search ? search.value : '').catch(() => {});
-  }, 2000);
+    return paintList(search ? search.value : '', token);
+  }, POLL_MS);
 }
 
-async function paintList(query) {
+async function paintList(query, token = getNavToken()) {
+  if (!isNavActive(token)) return;
   const list = document.querySelector('#contact-list');
   if (!list) return;
   const result = await api(`/api/contacts?q=${encodeURIComponent(query || '')}`);
+  if (!isNavActive(token)) return;
   const next = itemsSig(result.items);
-  if (next === listSig) return;
+  if (next === listSig && !list.querySelector('.panel-loading')) return;
   listSig = next;
   list.innerHTML = draw(result.items);
 }
 
-async function removeContact(id) {
+async function removeContact(id, token = getNavToken()) {
   if (!window.confirm('Excluir este contato da lista?')) return;
   try {
     await api(`/api/contacts/${encodeURIComponent(id)}`, { method: 'DELETE' });
     listSig = '';
     const search = document.querySelector('#search');
-    await paintList(search ? search.value : '');
+    await paintList(search ? search.value : '', token);
     toast('Contato excluído');
   } catch (error) {
     toast(error.message);

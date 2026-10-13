@@ -1,5 +1,6 @@
-import { api } from './api.js';
-import { escapeHtml } from './ui.js';
+import { api, ensureSession, invalidateSession } from './api.js';
+import { escapeHtml, viewLoading } from './ui.js';
+import { nextNavToken, isNavActive } from './nav.js';
 import { renderOverview, stopOverview } from './views/overview.js';
 import { renderContacts, stopContacts } from './views/contacts.js';
 import { renderContact } from './views/contact.js';
@@ -57,18 +58,31 @@ function stopViews() {
 }
 
 async function draw() {
-  const me = await api('/api/me');
   const current = currentRoute();
+  if (drawnKey === current.key && document.querySelector('#view')) return;
+
+  const token = nextNavToken();
+  stopViews();
+  drawnKey = current.key;
+
+  const route = routes[current.name] || routes.overview;
+  const existingView = document.querySelector('#view');
+  // Drop old HTML before any network wait so is-inbox / layout never clips the previous page.
+  if (existingView) {
+    syncChrome(current.name, route.title);
+    existingView.innerHTML = viewLoading();
+  }
+
+  const me = await ensureSession();
+  if (!isNavActive(token)) return;
+
   if (!me.authenticated) {
     stopViews();
     drawnKey = '';
     renderLogin();
     return;
   }
-  if (drawnKey === current.key && document.querySelector('#view')) return;
-  stopViews();
-  drawnKey = current.key;
-  const route = routes[current.name] || routes.overview;
+
   if (!document.querySelector('.shell')) {
     app.innerHTML = shell(current.name, route.title);
     const frame = document.querySelector('.shell');
@@ -77,11 +91,20 @@ async function draw() {
   } else {
     syncChrome(current.name, route.title);
   }
+
   const view = document.querySelector('#view');
-  if (current.contactId) await renderContact(view, current.contactId);
-  else if (current.name === 'inbox') await renderInbox(view, current.inboxFocus || '');
-  else if (current.name === 'settings') await renderSettings(view, current.settingsTab || 'agent');
-  else await route.render(view);
+  if (!view || !isNavActive(token)) return;
+  if (!view.querySelector('.view-loading')) view.innerHTML = viewLoading();
+
+  try {
+    if (current.contactId) await renderContact(view, current.contactId, token);
+    else if (current.name === 'inbox') await renderInbox(view, current.inboxFocus || '', token);
+    else if (current.name === 'settings') await renderSettings(view, current.settingsTab || 'agent', token);
+    else await route.render(view, token);
+  } catch (error) {
+    if (!isNavActive(token)) return;
+    throw error;
+  }
 }
 
 function bindChrome(frame) {
@@ -97,7 +120,10 @@ function bindChrome(frame) {
   });
   const leave = async () => {
     await api('/api/logout', { method: 'POST', body: {} });
+    invalidateSession();
     drawnKey = '';
+    nextNavToken();
+    stopViews();
     location.hash = '#/login';
     renderLogin();
   };
@@ -107,6 +133,7 @@ function bindChrome(frame) {
 
 function syncChrome(active, title) {
   document.querySelector('.shell')?.classList.toggle('is-inbox', active === 'inbox');
+  document.querySelector('.shell')?.classList.remove('has-thread');
   const heading = document.querySelector('.page-title');
   if (heading) heading.textContent = title;
   document.querySelectorAll('.side-nav a').forEach((link) => {
@@ -210,6 +237,7 @@ function renderLogin() {
     submit.disabled = true;
     try {
       await api('/api/login', { method: 'POST', body: { password } });
+      invalidateSession();
       location.hash = '#/overview';
       await draw();
     } catch (error) {

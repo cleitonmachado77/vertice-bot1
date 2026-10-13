@@ -2,7 +2,7 @@ import { hasSession, passwordOk, sessionCookie, clearCookie } from './auth.js';
 import { getSetting, setSetting } from './db.js';
 import { json, route, type Ctx } from './http.js';
 import { NevoaError, nevoaRequest, sendWhatsappText } from './nevoa.js';
-import { previewReply } from './agent.js';
+import { listAgentModels, previewReply } from './agent.js';
 import { syncContactsAndConversations, syncConversationMessages } from './sync.js';
 import {
   dashboardCounts,
@@ -14,7 +14,12 @@ import {
   setHumanHandoff,
 } from './store.js';
 import { hideConversation } from './conversation-visibility.js';
-import { recordOutbound } from './thread.js';
+import {
+  listApprovedTemplates,
+  resolveFirstContactTemplate,
+  sendFirstContactTemplate,
+} from './first-contact.js';
+import { getSessionGate, recordOutbound } from './thread.js';
 
 function requireUser(ctx: Ctx): boolean {
   if (hasSession(ctx.req.headers.cookie)) return true;
@@ -87,7 +92,8 @@ export function registerPanelRoutes(): void {
 
   route('GET', '/api/agent', async (ctx) => {
     if (!requireUser(ctx)) return;
-    json(ctx.res, 200, agentPayload(true));
+    const models = await listAgentModels();
+    json(ctx.res, 200, { ...agentPayload(true), models: models.models, modelsError: models.error });
   });
 
   route('PUT', '/api/agent', async (ctx) => {
@@ -106,7 +112,8 @@ export function registerPanelRoutes(): void {
     await setSetting('agent_auto_reply', autoReply ? '1' : '0');
     await setSetting('agent_fallback', text(input.fallback));
     await setSetting('agent_history', String(clamp(Number(input.history ?? 8), 1, 30)));
-    json(ctx.res, 200, agentPayload(true));
+    const models = await listAgentModels();
+    json(ctx.res, 200, { ...agentPayload(true), models: models.models, modelsError: models.error });
   });
 
   route('POST', '/api/agent/preview', async (ctx) => {
@@ -147,17 +154,27 @@ export function registerPanelRoutes(): void {
 
   route('GET', '/api/conversations/:id/messages', async (ctx) => {
     if (!requireUser(ctx)) return;
+    const pack = async () => {
+      const conversation = await getConversation(ctx.params.id);
+      if (!conversation) return { items: [], conversation: null, session: null, templates: [], defaultTemplateId: '' };
+      const session = await getSessionGate(conversation.contact_id, conversation.contact_phone);
+      const templates = session.requiresTemplate ? await listApprovedTemplates().catch(() => []) : [];
+      return {
+        items: await listMessages(ctx.params.id),
+        conversation,
+        session,
+        templates,
+        defaultTemplateId: resolveFirstContactTemplate(templates)?.id || '',
+      };
+    };
     if (ctx.query.get('refresh') === '1') {
       await guard(ctx, async () => {
         await syncConversationMessages(ctx.params.id);
-        return { items: await listMessages(ctx.params.id), conversation: await getConversation(ctx.params.id) };
+        return pack();
       });
       return;
     }
-    json(ctx.res, 200, {
-      items: await listMessages(ctx.params.id),
-      conversation: await getConversation(ctx.params.id),
-    });
+    json(ctx.res, 200, await pack());
   });
 
   route('POST', '/api/conversations/:id/send', async (ctx) => {
@@ -170,6 +187,11 @@ export function registerPanelRoutes(): void {
     }
     if (!message) {
       json(ctx.res, 400, { error: 'Mensagem vazia' });
+      return;
+    }
+    const gate = await getSessionGate(conversation.contact_id, conversation.contact_phone);
+    if (gate.requiresTemplate) {
+      json(ctx.res, 409, { error: gate.message || 'Envie um template Meta antes de mensagens livres.' });
       return;
     }
     await guard(ctx, async () => {
@@ -186,6 +208,33 @@ export function registerPanelRoutes(): void {
       });
       return { ok: true };
     });
+  });
+
+  route('POST', '/api/conversations/:id/template', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    const conversation = await getConversation(ctx.params.id);
+    if (!conversation?.contact_id) {
+      json(ctx.res, 404, { error: 'Conversa não encontrada' });
+      return;
+    }
+    try {
+      const result = await sendFirstContactTemplate({
+        contactId: conversation.contact_id,
+        templateId: text(body(ctx).templateId),
+      });
+      json(ctx.res, 200, {
+        ok: true,
+        conversationId: result.conversationId,
+        preview: result.preview,
+      });
+    } catch (error) {
+      if (error instanceof NevoaError) {
+        json(ctx.res, error.status, { error: error.message, details: error.payload });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'Falha ao enviar template';
+      json(ctx.res, 400, { error: message });
+    }
   });
 
   route('PUT', '/api/conversations/:id/handoff', async (ctx) => {

@@ -1,5 +1,6 @@
 import { api } from '../api.js';
-import { escapeHtml, formatClock, initials, toast } from '../ui.js';
+import { escapeHtml, formatClock, initials, toast, createPoll } from '../ui.js';
+import { getNavToken, isNavActive } from '../nav.js';
 
 const ORIGIN = {
   contact: 'Contato',
@@ -9,31 +10,33 @@ const ORIGIN = {
   whatsapp: 'WhatsApp',
 };
 
-const LOCAL_MS = 2000;
-const NEVOA_MS = 2000;
+const LOCAL_MS = 8000;
+const NEVOA_MS = 10000;
 
 let selected = '';
 let watchToken = 0;
-let timers = [];
+let stopPoll = null;
 let pulling = false;
 let lastPull = 0;
 let painted = '';
 let listPainted = '';
 let shownId = '';
-let snapshot = { items: [], conversation: null };
+let snapshot = { items: [], conversation: null, session: null, templates: [], defaultTemplateId: '' };
 let pending = [];
 let sends = 0;
+let paintedGate = '';
+let navToken = 0;
 
 export function stopInbox() {
   watchToken += 1;
-  for (const timer of timers) clearInterval(timer);
-  timers = [];
+  if (stopPoll) stopPoll();
+  stopPoll = null;
   pulling = false;
 }
 
-export async function renderInbox(root, focus = '') {
+export async function renderInbox(root, focus = '', token = getNavToken()) {
   stopInbox();
-  const data = await api('/api/conversations');
+  navToken = token;
   root.innerHTML = `
     <section class="split">
       <aside class="wa-list">
@@ -41,33 +44,38 @@ export async function renderInbox(root, focus = '') {
           <h2>Conversas</h2>
           <input id="conv-search" type="search" placeholder="Pesquisar conversa" />
         </div>
-        <div class="wa-scroll" id="conv-list">${drawList(data.items)}</div>
+        <div class="wa-scroll" id="conv-list"><p class="muted">Carregando conversas…</p></div>
       </aside>
       <div class="thread" id="thread">${emptyThread()}</div>
     </section>`;
-  listPainted = listKey(data.items);
   document.querySelector('#conv-search').addEventListener('input', applySearch);
-  bindList(root);
   syncThreadMode();
-  if (focus.startsWith('c/')) await openContact(focus.slice(2));
-  else if (focus) await openConversation(focus);
-  else if (selected) await openConversation(selected);
-  startWatch(root);
+
+  const data = await api('/api/conversations');
+  if (!isNavActive(token) || token !== navToken) return;
+
+  listPainted = listKey(data.items);
+  const listEl = document.querySelector('#conv-list');
+  if (listEl) listEl.innerHTML = drawList(data.items);
+  bindList(root);
+  if (focus.startsWith('c/')) await openContact(focus.slice(2), token);
+  else if (focus) await openConversation(focus, token);
+  else if (selected) await openConversation(selected, token);
+  if (!isNavActive(token) || token !== navToken) return;
+  startWatch(root, token);
 }
 
-function startWatch(root) {
-  const token = watchToken;
-  const run = () => {
-    beat(root, token).catch(() => {});
-  };
+function startWatch(root, token) {
+  const localToken = watchToken;
+  const run = () => beat(root, localToken, token);
   run();
-  timers.push(setInterval(run, LOCAL_MS));
+  stopPoll = createPoll(run, LOCAL_MS);
 }
 
-async function beat(root, token) {
-  if (token !== watchToken) return;
+async function beat(root, localToken, token) {
+  if (localToken !== watchToken || !isNavActive(token)) return;
   const list = await api('/api/conversations');
-  if (token !== watchToken) return;
+  if (localToken !== watchToken || !isNavActive(token)) return;
   const nextList = listKey(list.items);
   if (nextList !== listPainted) {
     listPainted = nextList;
@@ -83,9 +91,10 @@ async function beat(root, token) {
     pulling = true;
     lastPull = Date.now();
     const id = selected;
+    // Fire-and-forget refresh so Nevoa sync never blocks navigation.
     api(`/api/conversations/${encodeURIComponent(id)}/messages?refresh=1`)
       .then((data) => {
-        if (token === watchToken && selected === id) showThread(id, data);
+        if (localToken === watchToken && isNavActive(token) && selected === id) showThread(id, data);
       })
       .catch(() => {})
       .finally(() => {
@@ -93,7 +102,7 @@ async function beat(root, token) {
       });
   }
   const data = await api(`/api/conversations/${encodeURIComponent(selected)}/messages`);
-  if (token === watchToken) showThread(selected, data);
+  if (localToken === watchToken && isNavActive(token)) showThread(selected, data);
 }
 
 function listKey(items) {
@@ -183,65 +192,79 @@ function markSelected(id) {
   });
 }
 
-async function openContact(contactId) {
+async function openContact(contactId, token = navToken) {
   const detail = await api(`/api/contacts/${encodeURIComponent(contactId)}`);
+  if (!isNavActive(token)) return;
   if (detail.conversationId) {
-    await openConversation(detail.conversationId);
+    await openConversation(detail.conversationId, token);
     return;
   }
-  const contact = detail.contact;
-  selected = '';
-  painted = '';
-  document.querySelector('#thread').innerHTML = threadShell(contact.name, contact.phone, '<div class="bubbles"><p class="muted">Nenhuma mensagem ainda.</p></div>');
-  bindBack();
-  syncThreadMode();
-  bindComposer(async (text) => {
-    const sent = await api(`/api/contacts/${encodeURIComponent(contactId)}/send`, { method: 'POST', body: { text } });
-    await openConversation(sent.conversationId);
-  });
+  toast('Não foi possível abrir a conversa deste contato');
 }
 
-async function openConversation(id) {
+async function openConversation(id, token = navToken) {
   selected = id;
   painted = '';
+  paintedGate = '';
   markSelected(id);
   syncThreadMode();
   const data = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
+  if (!isNavActive(token)) return;
   showThread(id, data);
   lastPull = 0;
 }
 
 function showThread(id, data) {
   if (selected !== id) return;
-  if (data) snapshot = { items: data.items || [], conversation: data.conversation || snapshot.conversation };
+  if (data) {
+    snapshot = {
+      items: data.items || [],
+      conversation: data.conversation || snapshot.conversation,
+      session: data.session || null,
+      templates: data.templates || [],
+      defaultTemplateId: data.defaultTemplateId || '',
+    };
+  }
   const items = mergePending(id, snapshot.items);
-  const signature = items.map((item) => `${item.id}:${item.text}:${item.origin}:${item.delivery_status || ''}:${item.pending ? 'p' : ''}:${item.failed ? 'f' : ''}`).join('|');
+  const session = snapshot.session || {};
+  const gateSig = `${session.requiresTemplate ? 1 : 0}:${session.firstContact ? 1 : 0}:${snapshot.defaultTemplateId}:${(snapshot.templates || []).length}`;
+  const signature = items
+    .map(
+      (item) =>
+        `${item.id}:${item.text}:${item.origin}:${item.delivery_status || ''}:${item.pending ? 'p' : ''}:${item.failed ? 'f' : ''}`,
+    )
+    .join('|');
   const box = document.querySelector('.bubbles');
-  const sameThread = shownId === id && box && document.querySelector('#send-form');
-  if (sameThread && signature === painted) return;
+  const sameThread = shownId === id && box && (document.querySelector('#send-form') || document.querySelector('#template-form'));
+  if (sameThread && signature === painted && gateSig === paintedGate) return;
   const html = bubbleHtml(items);
-  if (sameThread) {
+  if (sameThread && gateSig === paintedGate) {
     const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     box.innerHTML = html || '<p class="muted">Sem mensagens.</p>';
     if (stick) box.scrollTop = box.scrollHeight;
     painted = signature;
     return;
   }
-  const conversation = (data && data.conversation) || snapshot.conversation || {};
+  const conversation = snapshot.conversation || {};
   document.querySelector('#thread').innerHTML = threadShell(
     conversation.contact_name || 'Conversa',
     conversation.contact_phone || '',
     `<div class="bubbles">${html || '<p class="muted">Sem mensagens.</p>'}</div>`,
     Number(conversation.human_handoff) === 1,
+    session,
+    snapshot.templates || [],
+    snapshot.defaultTemplateId || '',
   );
   const scroller = document.querySelector('.bubbles');
   if (scroller) scroller.scrollTop = scroller.scrollHeight;
-  bindComposer((text) => api(`/api/conversations/${encodeURIComponent(id)}/send`, { method: 'POST', body: { text } }));
+  if (session.requiresTemplate) bindTemplateComposer(id);
+  else bindComposer((text) => api(`/api/conversations/${encodeURIComponent(id)}/send`, { method: 'POST', body: { text } }));
   bindHandoff(id);
   bindBack();
   syncThreadMode();
   shownId = id;
   painted = signature;
+  paintedGate = gateSig;
 }
 
 function bubbleHtml(items) {
@@ -273,9 +296,49 @@ function deliveryReason(code) {
   return 'A Meta recusou este envio.';
 }
 
-function threadShell(name, phone, body, human) {
+function threadShell(name, phone, body, human, session = {}, templates = [], defaultTemplateId = '') {
   const state = human ? 'Você responde. A IA está pausada nesta conversa.' : 'A IA responde esta conversa.';
   const title = name || 'Conversa';
+  const locked = Boolean(session.requiresTemplate);
+  const options = templates
+    .map(
+      (item) =>
+        `<option value="${escapeHtml(item.id)}" ${item.id === defaultTemplateId ? 'selected' : ''}>${escapeHtml(
+          item.name,
+        )}</option>`,
+    )
+    .join('');
+  const selectedBody = templates.find((item) => item.id === defaultTemplateId)?.body || templates[0]?.body || '';
+  const composer = locked
+    ? `<div class="template-gate">
+        <strong>${session.firstContact ? 'Primeiro contato' : 'Janela fechada'}</strong>
+        <p>${escapeHtml(
+          session.message ||
+            'A primeira mensagem precisa ser um template Meta. Mensagens livres ficam bloqueadas até o envio.',
+        )}</p>
+        ${
+          options
+            ? `<form class="template-composer" id="template-form">
+                <label>Template Meta</label>
+                <select name="templateId" id="template-select">${options}</select>
+                <p class="muted template-preview" id="template-preview">${escapeHtml(selectedBody)}</p>
+                <button class="btn" type="submit">Enviar template</button>
+              </form>`
+            : '<p class="muted">Nenhum template aprovado na Névoa. Cadastre e aprove um modelo de primeiro contato.</p>'
+        }
+        <form class="composer is-locked" id="send-form" aria-disabled="true">
+          <input name="text" placeholder="Mensagem livre bloqueada até enviar o template" disabled />
+          <button class="btn" type="submit" disabled aria-label="Enviar bloqueado">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </form>
+      </div>`
+    : `<form class="composer" id="send-form">
+        <input name="text" placeholder="Mensagem" autocomplete="off" required />
+        <button class="btn" type="submit" aria-label="Enviar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </form>`;
   return `
     <header class="wa-head">
       <button class="icon-btn back" id="back-list" type="button" aria-label="Voltar às conversas">
@@ -292,12 +355,7 @@ function threadShell(name, phone, body, human) {
       </div>
     </header>
     ${body}
-    <form class="composer" id="send-form">
-      <input name="text" placeholder="Mensagem" autocomplete="off" required />
-      <button class="btn" type="submit" aria-label="Enviar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      </button>
-    </form>`;
+    ${composer}`;
 }
 
 function bindBack() {
@@ -305,10 +363,42 @@ function bindBack() {
     selected = '';
     shownId = '';
     painted = '';
+    paintedGate = '';
     const thread = document.querySelector('#thread');
     if (thread) thread.innerHTML = emptyThread();
     markSelected('');
     syncThreadMode();
+  });
+}
+
+function bindTemplateComposer(conversationId) {
+  const select = document.querySelector('#template-select');
+  const preview = document.querySelector('#template-preview');
+  select?.addEventListener('change', () => {
+    const row = (snapshot.templates || []).find((item) => item.id === select.value);
+    if (preview) preview.textContent = row?.body || '';
+  });
+  const form = document.querySelector('#template-form');
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button[type=submit]');
+    const templateId = String(new FormData(form).get('templateId') || '');
+    if (!templateId) return;
+    if (button) button.disabled = true;
+    try {
+      await api(`/api/conversations/${encodeURIComponent(conversationId)}/template`, {
+        method: 'POST',
+        body: { templateId },
+      });
+      toast('Template enviado');
+      painted = '';
+      paintedGate = '';
+      await openConversation(conversationId);
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      if (button) button.disabled = false;
+    }
   });
 }
 

@@ -6,6 +6,47 @@ export function escapeHtml(value) {
     .replaceAll('"', '&quot;');
 }
 
+export function viewLoading(label = 'Carregando…') {
+  return `
+    <div class="view-pane view-loading" aria-busy="true">
+      <div class="loading-block">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <p class="muted">${escapeHtml(label)}</p>
+      </div>
+    </div>`;
+}
+
+export function panelLoading(label = 'Carregando…') {
+  return `
+    <div class="panel-loading" aria-busy="true">
+      <span class="loading-spinner" aria-hidden="true"></span>
+      <p class="muted">${escapeHtml(label)}</p>
+    </div>`;
+}
+
+/** Poll that pauses when the tab is hidden. Returns a stop function. */
+export function createPoll(fn, intervalMs = 8000) {
+  let timer = 0;
+  let stopped = false;
+  const run = () => {
+    if (stopped || document.hidden) return;
+    Promise.resolve()
+      .then(fn)
+      .catch(() => {});
+  };
+  const onVisibility = () => {
+    if (!stopped && !document.hidden) run();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  timer = setInterval(run, intervalMs);
+  return () => {
+    stopped = true;
+    if (timer) clearInterval(timer);
+    timer = 0;
+    document.removeEventListener('visibilitychange', onVisibility);
+  };
+}
+
 export function toast(message) {
   const node = document.createElement('div');
   node.className = 'toast';

@@ -188,6 +188,7 @@ const SCHEMA = `
     questionnaire_id TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
     expected_type TEXT NOT NULL DEFAULT 'any',
+    export_field TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   );
@@ -301,6 +302,9 @@ async function migrate(): Promise<void> {
     `CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_answers_question
      ON questionnaire_answers(cycle_id, question_id)`,
   );
+  await run(
+    `ALTER TABLE questionnaire_questions ADD COLUMN IF NOT EXISTS export_field TEXT NOT NULL DEFAULT ''`,
+  );
 }
 
 async function seedSettings(): Promise<void> {
@@ -325,6 +329,7 @@ async function seedSettings(): Promise<void> {
     timezone: env('TIMEZONE', 'America/Sao_Paulo'),
     public_base_url: '',
     questionnaire_template_id: '',
+    first_contact_template_id: '',
     agent_transcribe_model: env('OPENAI_TRANSCRIBE_MODEL', 'whisper-1'),
   };
   for (const [key, value] of Object.entries(defaults)) {

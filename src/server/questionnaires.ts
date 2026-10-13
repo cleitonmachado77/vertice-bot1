@@ -1,15 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { many, one, run } from './db.js';
+import { isRfqFieldKey } from './rfq-fields.js';
 
 const now = () => new Date().toISOString();
 const FREQUENCIES = new Set(['daily', 'weekdays', 'weekly']);
 const EXPECTED = new Set(['any', 'text', 'audio', 'image', 'video']);
+
+/** Texto curto recomendado para o template Meta de primeiro contato do questionário. */
+export const QUESTIONNAIRE_FIRST_CONTACT_PHRASE =
+  'Oi {{1}}! Aqui é a Vértice. Pode responder o questionário de acompanhamento?';
 
 export type QuestionnaireQuestion = {
   id: string;
   questionnaire_id: string;
   body: string;
   expected_type: string;
+  export_field: string;
   sort_order: number;
 };
 
@@ -35,7 +41,7 @@ export type QuestionnaireInput = {
   weekday: number;
   sendTime: string;
   active: boolean;
-  questions: { id?: string; body: string; expectedType: string }[];
+  questions: { id?: string; body: string; expectedType: string; exportField?: string }[];
   contactIds: string[];
 };
 
@@ -45,7 +51,7 @@ export async function listQuestionnaires(): Promise<Questionnaire[]> {
      FROM questionnaires ORDER BY name, created_at`,
   );
   const questions = await many<QuestionnaireQuestion>(
-    `SELECT id, questionnaire_id, body, expected_type, sort_order
+    `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order
      FROM questionnaire_questions ORDER BY sort_order, created_at`,
   );
   const assignments = await many<{ questionnaire_id: string; contact_id: string }>(
@@ -68,7 +74,7 @@ export async function getQuestionnaire(id: string): Promise<Questionnaire | unde
   );
   if (!row) return undefined;
   const questions = await many<QuestionnaireQuestion>(
-    `SELECT id, questionnaire_id, body, expected_type, sort_order
+    `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order
      FROM questionnaire_questions WHERE questionnaire_id = $1
      ORDER BY sort_order, created_at`,
     [id],
@@ -90,11 +96,18 @@ export async function saveQuestionnaire(input: QuestionnaireInput): Promise<Ques
   if (input.weekday < 0 || input.weekday > 6) throw new Error('Dia da semana inválido');
 
   const questions = input.questions
-    .map((item) => ({
-      id: item.id || randomUUID(),
-      body: item.body.trim(),
-      expectedType: EXPECTED.has(item.expectedType) ? item.expectedType : 'any',
-    }))
+    .map((item) => {
+      const exportField = String(item.exportField || '').trim();
+      if (!isRfqFieldKey(exportField)) {
+        throw new Error(`Campo de exportação inválido: ${exportField}`);
+      }
+      return {
+        id: item.id || randomUUID(),
+        body: item.body.trim(),
+        expectedType: EXPECTED.has(item.expectedType) ? item.expectedType : 'any',
+        exportField,
+      };
+    })
     .filter((item) => item.body);
   if (!questions.length) throw new Error('Inclua ao menos uma pergunta');
 
@@ -136,13 +149,14 @@ export async function saveQuestionnaire(input: QuestionnaireInput): Promise<Ques
 
   for (const [index, item] of questions.entries()) {
     await run(
-      `INSERT INTO questionnaire_questions(id, questionnaire_id, body, expected_type, sort_order, created_at)
-       VALUES($1, $2, $3, $4, $5, $6)
+      `INSERT INTO questionnaire_questions(id, questionnaire_id, body, expected_type, export_field, sort_order, created_at)
+       VALUES($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT(id) DO UPDATE SET
          body = excluded.body,
          expected_type = excluded.expected_type,
+         export_field = excluded.export_field,
          sort_order = excluded.sort_order`,
-      [item.id, id, item.body, item.expectedType, index, stamp],
+      [item.id, id, item.body, item.expectedType, item.exportField, index, stamp],
     );
   }
 

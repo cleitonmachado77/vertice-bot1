@@ -1,5 +1,6 @@
 import { api } from '../api.js';
-import { escapeHtml, toast } from '../ui.js';
+import { escapeHtml, toast, panelLoading } from '../ui.js';
+import { getNavToken, isNavActive } from '../nav.js';
 
 const FREQUENCIES = [
   ['daily', 'Todos os dias'],
@@ -17,145 +18,99 @@ const TYPES = [
 
 let editingId = '';
 let tab = 'modelos';
+let rfqFields = [];
 
-export async function renderQuestionnaires(root) {
+export async function renderQuestionnaires(root, token = getNavToken()) {
   root.innerHTML = `
-    <div class="top">
-      <div>
-        <p class="kicker">Acompanhamento</p>
-        <h1>Questionários</h1>
+    <div class="view-pane">
+      <div class="top">
+        <div>
+          <p class="kicker">Acompanhamento</p>
+          <h1>Questionários</h1>
+        </div>
       </div>
-    </div>
-    <nav class="settings-tabs" aria-label="Seções de questionários">
-      <a class="settings-tab${tab === 'modelos' ? ' active' : ''}" href="#/questionnaires" data-tab="modelos">Modelos</a>
-      <a class="settings-tab${tab === 'dados' ? ' active' : ''}" href="#/questionnaires" data-tab="dados">Dados</a>
-    </nav>
-    <div id="questionnaires-panel"></div>`;
+      <nav class="settings-tabs" aria-label="Seções de questionários">
+        <a class="settings-tab${tab === 'modelos' ? ' active' : ''}" href="#/questionnaires" data-tab="modelos">Modelos</a>
+        <a class="settings-tab${tab === 'dados' ? ' active' : ''}" href="#/questionnaires" data-tab="dados">Dados</a>
+      </nav>
+      <div id="questionnaires-panel">${panelLoading()}</div>
+    </div>`;
 
   root.querySelectorAll('[data-tab]').forEach((link) => {
     link.addEventListener('click', async (event) => {
       event.preventDefault();
       tab = link.dataset.tab;
-      await renderQuestionnaires(root);
+      await renderQuestionnaires(root, token);
     });
   });
 
+  if (!isNavActive(token)) return;
   const panel = root.querySelector('#questionnaires-panel');
-  if (tab === 'dados') await renderData(panel);
-  else await renderModels(panel);
+  if (tab === 'dados') await renderData(panel, token);
+  else await renderModels(panel, token);
 }
 
-async function renderModels(root) {
+async function renderModels(root, token = getNavToken()) {
+  if (!root.querySelector('#questionnaire-form')) root.innerHTML = panelLoading('Carregando modelos…');
   const [data, contacts, templates] = await Promise.all([
     api('/api/questionnaires'),
     api('/api/contacts'),
     api('/api/questionnaires/templates').catch(() => ({ items: [], selectedId: '' })),
   ]);
+  if (!isNavActive(token)) return;
+  rfqFields = data.rfqFields || rfqFields;
   const editing = editingId ? data.items.find((item) => item.id === editingId) : null;
   if (editingId && !editing) editingId = '';
   const contactItems = contacts.items || [];
 
   const item = editing || {};
+  const selectedTemplateId = data.templateId || templates.selectedId || '';
   root.innerHTML = `
     <div class="q-board">
-      <form class="card stack" id="template-form">
+      <form class="card stack" id="questionnaire-form" data-greeting="${escapeHtml(item.greeting || '')}">
         <div class="card-head">
-          <h2>1. Template de primeiro envio</h2>
-          <p class="muted">No horário agendado o sistema envia este template Meta, não o texto do questionário.</p>
+          <h2>${editing ? 'Editar modelo' : 'Novo modelo'}</h2>
+          <p class="muted">Template, agenda, contatos e perguntas.</p>
         </div>
-        <label>Template</label>
-        <select name="templateId">
-          <option value="">Usar o primeiro template aprovado</option>
-          ${(templates.items || [])
-            .map(
-              (row) =>
-                `<option value="${escapeHtml(row.id)}" ${
-                  row.id === (data.templateId || templates.selectedId) ? 'selected' : ''
-                }>${escapeHtml(row.name)}</option>`,
-            )
-            .join('')}
-        </select>
+
+        <div class="field-block" style="border-top: 0; padding-top: 0;">
+          <div class="field-block-head">
+            <span class="field-title">Template Meta</span>
+          </div>
+          <select name="templateId" id="template-select">
+            <option value="">Automático</option>
+            ${(templates.items || [])
+              .map((row) => {
+                const pending = row.status === 'PENDING_APPROVAL' ? ' (pendente)' : '';
+                return `<option value="${escapeHtml(row.id)}" ${
+                  row.id === selectedTemplateId ? 'selected' : ''
+                }>${escapeHtml(row.name)}${pending}</option>`;
+              })
+              .join('')}
+          </select>
+        </div>
+
+        ${modelFields(item)}
+        ${assignFields(item, contactItems)}
+
         <div class="row form-actions">
-          <button class="btn" type="submit">Salvar template</button>
-          <button class="btn-ghost" type="button" id="run-dispatch">Disparar agora</button>
+          <button class="btn" type="submit">${editing ? 'Salvar' : 'Criar questionário'}</button>
+          ${editing ? '<button class="btn-ghost" id="cancel-edit" type="button">Cancelar</button>' : ''}
         </div>
-        <p class="muted" id="dispatch-hint"></p>
       </form>
 
       <section class="card stack" id="questionnaire-list">
         <div class="card-head">
-          <h2>2. Questionários cadastrados</h2>
-          <p class="muted">Selecione um modelo para editar ou exclua o que não usar mais.</p>
+          <h2>Cadastrados</h2>
+          <p class="muted">Edite ou exclua um modelo.</p>
         </div>
         <div class="stack q-list-scroll">
           ${data.items.map((row) => listCard(row, contactItems)).join('') || '<p class="muted">Nenhum questionário ainda.</p>'}
         </div>
       </section>
-
-      <form id="questionnaire-form" class="q-form-grid">
-        <section class="card stack">
-          <div class="card-head">
-            <h2>3. ${editing ? 'Editar modelo' : 'Novo modelo'}</h2>
-            <p class="muted">${editing ? 'Nome, saudação e agenda de envio.' : 'Defina o nome e quando o envio deve acontecer.'}</p>
-          </div>
-          ${modelFields(item)}
-          <div class="row form-actions">
-            <button class="btn" type="submit">${editing ? 'Salvar' : 'Criar questionário'}</button>
-            ${editing ? '<button class="btn-ghost" id="cancel-edit" type="button">Cancelar</button>' : ''}
-          </div>
-        </section>
-
-        <section class="card stack">
-          <div class="card-head">
-            <h2>4. Contatos e perguntas</h2>
-            <p class="muted">O agente entende respostas em texto, áudio, imagem ou vídeo.</p>
-          </div>
-          ${assignFields(item, contactItems)}
-        </section>
-      </form>
     </div>`;
 
-  document.querySelector('#template-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    try {
-      await api('/api/questionnaires/settings', {
-        method: 'PUT',
-        body: { templateId: form.get('templateId') || '' },
-      });
-      toast('Template de primeiro envio salvo');
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-
-  document.querySelector('#run-dispatch')?.addEventListener('click', async () => {
-    const hint = document.querySelector('#dispatch-hint');
-    const button = document.querySelector('#run-dispatch');
-    button.disabled = true;
-    hint.textContent = 'Disparando…';
-    try {
-      const [status, result] = await Promise.all([
-        api('/api/questionnaires/dispatch-status'),
-        api('/api/questionnaires/dispatch', { method: 'POST', body: {} }),
-      ]);
-      const q = result.questionnaires || {};
-      hint.textContent = `Relógio ${status.clock.date} ${status.clock.time} (${status.clock.timezone}) · enviados ${result.sent} · falhas ${result.failed} · aguardando ${result.waiting} · questionários ${q.sent || 0}/${q.failed || 0}`;
-      const failed = (result.items || []).find((item) => item.status === 'failed');
-      if (failed) toast(failed.detail);
-      else if (result.sent) toast(`${result.sent} envio(s) concluído(s)`);
-      else if (!status.templates?.length) toast(status.templateError || 'Nenhum template Meta aprovado');
-      else if (!(status.due || []).some((item) => item.dueNow)) toast('Nenhum questionário vencido neste horário');
-      else toast('Nada novo para enviar');
-    } catch (error) {
-      hint.textContent = '';
-      toast(error.message);
-    } finally {
-      button.disabled = false;
-    }
-  });
-
-  bindForm(document.querySelector('#questionnaire-form'), editing?.id || '', contactItems);
+  bindForm(document.querySelector('#questionnaire-form'), editing?.id || '');
   document.querySelector('#cancel-edit')?.addEventListener('click', async () => {
     editingId = '';
     await renderQuestionnaires(document.querySelector('#view'));
@@ -184,11 +139,16 @@ async function renderModels(root) {
   });
 }
 
-async function renderData(root) {
+async function renderData(root, token = getNavToken()) {
+  const keepFilter = root.dataset.filterId || '';
+  if (!root.querySelector('#data-filter')) root.innerHTML = panelLoading('Carregando dados…');
   const [questionnaires, data] = await Promise.all([
     api('/api/questionnaires'),
     api('/api/questionnaires/data'),
   ]);
+  if (!isNavActive(token)) return;
+  rfqFields = questionnaires.rfqFields || data.rfqFields || rfqFields;
+  if (keepFilter) root.dataset.filterId = keepFilter;
   const filterId = root.dataset.filterId || '';
   const all = data.items || [];
   const items = all.filter((item) => !filterId || item.questionnaire_id === filterId);
@@ -233,6 +193,9 @@ async function renderData(root) {
               <strong>${completed}</strong>
             </div>
           </div>
+          <button class="btn" type="button" id="download-rfq" ${filterId ? '' : 'disabled'} title="${
+            filterId ? 'Baixar planilha RFQ consolidada' : 'Selecione um questionário para exportar'
+          }">Baixar planilha</button>
         </div>
       </section>
 
@@ -264,7 +227,36 @@ async function renderData(root) {
 
   root.querySelector('#data-filter')?.addEventListener('change', async (event) => {
     root.dataset.filterId = event.target.value;
-    await renderData(root);
+    await renderData(root, token);
+  });
+  root.querySelector('#download-rfq')?.addEventListener('click', async () => {
+    if (!filterId) {
+      toast('Selecione um questionário para exportar');
+      return;
+    }
+    try {
+      const response = await fetch(`/api/questionnaires/${encodeURIComponent(filterId)}/export`, {
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || 'Falha ao exportar planilha');
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || 'rfq_export.xlsx';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      const warnings = decodeURIComponent(response.headers.get('x-export-warnings') || '');
+      toast(warnings ? `Planilha baixada. Atenção: ${warnings}` : 'Planilha baixada');
+    } catch (error) {
+      toast(error.message);
+    }
   });
 }
 
@@ -309,18 +301,12 @@ function modelFields(item = {}) {
     (label, index) => `<option value="${index}" ${Number(item.weekday ?? 1) === index ? 'selected' : ''}>${label}</option>`,
   ).join('');
   return `
-    <div>
-      <label>Nome</label>
-      <input name="name" required value="${escapeHtml(item.name || '')}" placeholder="Acompanhamento diário" />
-    </div>
-    <div>
-      <label>Saudação (referência interna)</label>
-      <textarea class="short" name="greeting" placeholder="Olá {{1}}, bom dia! Aqui é a Vértice.">${escapeHtml(item.greeting || '')}</textarea>
-    </div>
     <div class="field-block">
       <div class="field-block-head">
         <span class="field-title">Agenda</span>
       </div>
+      <label>Nome</label>
+      <input name="name" required value="${escapeHtml(item.name || '')}" placeholder="Acompanhamento diário" />
       <div class="grid-2 schedule-grid">
         <div>
           <label>Frequência</label>
@@ -331,16 +317,17 @@ function modelFields(item = {}) {
           <select name="weekday">${days}</select>
         </div>
         <div>
-          <label>Horário (Brasília)</label>
+          <label>Horário</label>
           <input name="sendTime" value="${escapeHtml(item.send_time || '09:00')}" placeholder="09:00" />
         </div>
       </div>
-      <label class="check"><input name="active" type="checkbox" ${item.active === 0 ? '' : 'checked'}/> Questionário ativo</label>
+      <label class="check"><input name="active" type="checkbox" ${item.active === 0 ? '' : 'checked'}/> Ativo</label>
     </div>`;
 }
 
 function assignFields(item = {}, contacts = []) {
-  const questions = (item.questions || []).map(questionCard).join('') || questionCard();
+  const questions =
+    [...(item.questions || [])].reverse().map(questionCard).join('') || questionCard();
   const selected = new Set(item.contactIds || []);
   const contactChecks = contacts.length
     ? contacts
@@ -357,12 +344,12 @@ function assignFields(item = {}, contacts = []) {
         </label>`,
         )
         .join('')
-    : '<p class="muted">Nenhum contato cadastrado ainda.</p>';
+    : '<p class="muted">Nenhum contato cadastrado.</p>';
 
   return `
-    <div class="field-block" style="border-top: 0; padding-top: 0;">
+    <div class="field-block">
       <div class="field-block-head">
-        <span class="field-title">Contatos atribuídos</span>
+        <span class="field-title">Contatos</span>
       </div>
       <div class="contact-assign-list">${contactChecks}</div>
     </div>
@@ -372,27 +359,30 @@ function assignFields(item = {}, contacts = []) {
         <button class="btn-ghost add-question" type="button">Adicionar</button>
       </div>
       <div class="stack questions">${questions}</div>
-    </div>
-    ${
-      item.preview
-        ? `<div class="field-block">
-            <div class="field-block-head"><span class="field-title">Prévia das perguntas</span></div>
-            <pre class="preview-box">${escapeHtml(item.preview)}</pre>
-          </div>`
-        : ''
-    }`;
+    </div>`;
 }
 
 function questionCard(item = {}) {
   const type = item.expected_type || 'any';
+  const exportField = item.export_field || '';
   const options = TYPES.map(
     ([value, label]) => `<option value="${value}" ${value === type ? 'selected' : ''}>${label}</option>`,
   ).join('');
+  const fieldOptions = [
+    `<option value="">Sem campo na planilha</option>`,
+    ...rfqFields.map(
+      (field) =>
+        `<option value="${escapeHtml(field.key)}" ${field.key === exportField ? 'selected' : ''}>${escapeHtml(
+          field.header,
+        )} — ${escapeHtml(field.label)}</option>`,
+    ),
+  ].join('');
   return `
     <article class="q-item" data-id="${escapeHtml(item.id || '')}">
       <textarea class="short" name="body" placeholder="Como foi seu dia?" required>${escapeHtml(item.body || '')}</textarea>
       <div class="q-item-meta">
         <select name="expectedType" aria-label="Tipo esperado">${options}</select>
+        <select name="exportField" aria-label="Campo da planilha RFQ">${fieldOptions}</select>
         <button class="btn-danger remove-question" type="button">Remover</button>
       </div>
     </article>`;
@@ -438,8 +428,8 @@ function bindForm(form, id) {
     if (weekday) weekday.hidden = frequency.value !== 'weekly';
   });
   form.querySelector('.add-question')?.addEventListener('click', () => {
-    questions.insertAdjacentHTML('beforeend', questionCard());
-    bindQuestion(questions.lastElementChild);
+    questions.insertAdjacentHTML('afterbegin', questionCard());
+    bindQuestion(questions.firstElementChild);
   });
   questions.querySelectorAll('.q-item').forEach(bindQuestion);
   form.addEventListener('submit', (event) => save(event, id));
@@ -450,8 +440,8 @@ function bindQuestion(card) {
     const list = card.parentElement;
     card.remove();
     if (list && !list.querySelector('.q-item')) {
-      list.insertAdjacentHTML('beforeend', questionCard());
-      bindQuestion(list.lastElementChild);
+      list.insertAdjacentHTML('afterbegin', questionCard());
+      bindQuestion(list.firstElementChild);
     }
   });
 }
@@ -464,22 +454,29 @@ async function save(event, id) {
     id: card.dataset.id || undefined,
     body: card.querySelector('[name=body]').value,
     expectedType: card.querySelector('[name=expectedType]').value,
+    exportField: card.querySelector('[name=exportField]')?.value || '',
   }));
   const contactIds = [...form.querySelectorAll('[name=contactIds]:checked')].map((input) => input.value);
   try {
-    await api(id ? `/api/questionnaires/${encodeURIComponent(id)}` : '/api/questionnaires', {
-      method: id ? 'PUT' : 'POST',
-      body: {
-        name: data.get('name'),
-        greeting: data.get('greeting'),
-        frequency: data.get('frequency'),
-        weekday: Number(data.get('weekday') || 1),
-        sendTime: data.get('sendTime'),
-        active: data.get('active') === 'on',
-        contactIds,
-        questions,
-      },
-    });
+    await Promise.all([
+      api('/api/questionnaires/settings', {
+        method: 'PUT',
+        body: { templateId: String(data.get('templateId') || '') },
+      }),
+      api(id ? `/api/questionnaires/${encodeURIComponent(id)}` : '/api/questionnaires', {
+        method: id ? 'PUT' : 'POST',
+        body: {
+          name: data.get('name'),
+          greeting: form.dataset.greeting || '',
+          frequency: data.get('frequency'),
+          weekday: Number(data.get('weekday') || 1),
+          sendTime: data.get('sendTime'),
+          active: data.get('active') === 'on',
+          contactIds,
+          questions,
+        },
+      }),
+    ]);
     editingId = '';
     toast(id ? 'Questionário salvo' : 'Questionário criado');
     await renderQuestionnaires(document.querySelector('#view'));

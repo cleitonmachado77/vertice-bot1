@@ -1,8 +1,18 @@
 import { api } from '../api.js';
-import { escapeHtml, toast } from '../ui.js';
+import { escapeHtml, toast, panelLoading } from '../ui.js';
+import { getNavToken, isNavActive } from '../nav.js';
 
-export async function renderAgent(root) {
+export async function renderAgent(root, token = getNavToken()) {
+  if (!root.querySelector('#agent-form')) root.innerHTML = panelLoading('Carregando agente…');
   const agent = await api('/api/agent');
+  if (!isNavActive(token)) return;
+  const models = Array.isArray(agent.models) && agent.models.length ? agent.models : [agent.model].filter(Boolean);
+  const modelOptions = models
+    .map(
+      (id) =>
+        `<option value="${escapeHtml(id)}" ${id === agent.model ? 'selected' : ''}>${escapeHtml(id)}</option>`,
+    )
+    .join('');
   root.innerHTML = `
     <div class="split-board">
       <form class="card stack" id="agent-form">
@@ -12,7 +22,15 @@ export async function renderAgent(root) {
         </div>
         <div class="grid-2">
           <div><label>Nome</label><input name="name" value="${escapeHtml(agent.name)}" /></div>
-          <div><label>Modelo</label><input name="model" value="${escapeHtml(agent.model)}" /></div>
+          <div>
+            <label>Modelo</label>
+            <select name="model" required>${modelOptions}</select>
+            <p class="muted" id="models-hint">${
+              agent.modelsError
+                ? escapeHtml(agent.modelsError)
+                : `${models.length} modelo(s) disponíveis na API`
+            }</p>
+          </div>
         </div>
         <label>Prompt geral</label>
         <textarea name="prompt">${escapeHtml(agent.prompt)}</textarea>
@@ -28,7 +46,10 @@ export async function renderAgent(root) {
         <textarea name="fallback">${escapeHtml(agent.fallback)}</textarea>
         <p class="muted">No inbox, cada conversa fica em IA até você passar a chave para Humano.</p>
         <label class="check"><input name="active" type="checkbox" ${agent.active ? 'checked' : ''}/> Agente ativo</label>
-        <button class="btn" type="submit">Salvar agente</button>
+        <div class="row form-actions">
+          <button class="btn" type="submit">Salvar agente</button>
+          <button class="btn-ghost" type="button" id="refresh-models">Atualizar modelos</button>
+        </div>
       </form>
       <form class="card stack" id="preview-form">
         <div class="card-head">
@@ -40,6 +61,11 @@ export async function renderAgent(root) {
         <pre id="preview-result">A resposta aparece aqui.</pre>
       </form>
     </div>`;
+
+  root.querySelector('#refresh-models')?.addEventListener('click', async () => {
+    toast('Atualizando lista de modelos…');
+    await renderAgent(root, token);
+  });
 
   root.querySelector('#agent-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -61,6 +87,7 @@ export async function renderAgent(root) {
         },
       });
       toast('Agente salvo');
+      await renderAgent(root, token);
     } catch (error) {
       toast(error.message);
     }

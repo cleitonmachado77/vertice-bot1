@@ -3,6 +3,7 @@ import { getSetting } from './db.js';
 import { normalizeMediaType, understandInbound, type MediaUnderstanding } from './media-understand.js';
 import {
   markCycleCompleted,
+  markCycleNotified,
   missingQuestions,
   upsertAnswers,
   type ActiveCycleContext,
@@ -51,23 +52,32 @@ export async function draftQuestionnaireReply(input: {
       `${index + 1}. [${item.id}] ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`,
   );
 
+  const sendTime = input.context.questionnaire.send_time || '';
   const system = [
     'Você é um atendente humano da Vértice acompanhando um questionário no WhatsApp.',
     'Fale em português do Brasil, de forma natural, curta e personalizada.',
     '',
-    'Sua função é INTERPRETAR a mensagem do usuário e decidir a melhor ação. Não use regras rígidas de palavras-chave.',
-    'Exemplos do que a pessoa pode fazer (e você decide caso a caso):',
+    'Você tem autonomia para interpretar o cenário e decidir o próximo passo. Não use regras rígidas de palavras-chave.',
+    '',
+    'Horário agendado do disparo NÃO atrasa a coleta:',
+    sendTime
+      ? `- Este questionário tem envio previsto às ${sendTime}, mas isso é só um lembrete automático para quem ainda não falou.`
+      : '- Pode existir um horário de disparo automático, mas isso é só um lembrete para quem ainda não falou.',
+    '- Se a pessoa mandar respostas (ou começar a responder) ANTES desse horário, trate agora: salve o que for resposta e peça na hora o que ainda falta.',
+    '- Nunca diga que vai esperar o horário do disparo. Nunca peça para a pessoa aguardar o envio automático.',
+    '',
+    'Exemplos de cenários (decida caso a caso):',
     '- Confirmar que quer continuar → apresente o questionário completo, numerado.',
     '- Pedir só uma pergunta (“qual é a terceira?”) → responda só essa, com o texto da pergunta.',
-    '- Enviar respostas (texto, áudio, imagem ou vídeo) → extraia e salve o que for resposta real.',
-    '- Mandar resposta incompleta → confirme o que entendeu e peça o que falta.',
+    '- Enviar respostas cedo (ex.: 2 primeiras de manhã) → salve essas respostas, confirme o que entendeu e pergunte imediatamente as que faltam.',
+    '- Mandar resposta incompleta → confirme o que entendeu e peça o que falta na mesma mensagem.',
     '- Fazer pergunta fora do questionário → responda de forma útil e, se ainda faltarem respostas, reconduza com delicadeza.',
     '',
     'Importante:',
     '- Só preencha "answers" quando a mensagem realmente contiver conteúdo de resposta às perguntas.',
     '- Se a mensagem for só intenção, dúvida ou conversa (sem resposta às perguntas), deixe "answers": [].',
     '- Quando for apresentar o questionário, inclua TODAS as perguntas numeradas na "reply".',
-    '- Quando for lembrar o que falta, liste só as faltantes.',
+    '- Quando já houver respostas salvas e ainda faltarem itens, a "reply" DEVE listar as perguntas faltantes.',
     '- Aceite texto, áudio (já transcrito), imagem (já descrita) e vídeo.',
     '- Não invente respostas. Não mencione que você é um modelo.',
     '',
@@ -141,11 +151,21 @@ export async function draftQuestionnaireReply(input: {
 
     const missing = missingQuestions(questions, answers);
     const complete = missing.length === 0;
-    if (complete) await markCycleCompleted(input.context.cycle.id);
 
-    const reply =
+    let reply =
       extracted.reply.trim() ||
       defaultReply(questions, answers, missing, complete, media, input.contactName);
+    // Se salvou resposta e ainda falta algo, garanta que a reply peça o que falta agora.
+    if (!complete && answers.length > 0) {
+      reply = ensureMissingAsked(reply, missing, answers, media, input.contactName, questions);
+    }
+
+    const presented = coversQuestions(reply, answers.length ? missing : questions);
+    await syncCycleProgress(
+      input.context.cycle.id,
+      complete,
+      accepted.length > 0 || alreadySaved.length > 0 || presented,
+    );
 
     return {
       text: reply.slice(0, 1500),
@@ -169,7 +189,7 @@ export async function draftQuestionnaireReply(input: {
         );
         const missing = missingQuestions(questions, answers);
         const complete = missing.length === 0;
-        if (complete) await markCycleCompleted(input.context.cycle.id);
+        await syncCycleProgress(input.context.cycle.id, complete, true);
         return {
           text: defaultReply(questions, answers, missing, complete, media, input.contactName),
           source: 'fallback',
@@ -316,6 +336,38 @@ function defaultReply(
           : 'Recebi sua mensagem.';
   const pending = missing.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
   return `${thanks} Ainda falta:\n${pending}`;
+}
+
+/** Garante que, após salvar respostas parciais, a mensagem peça as faltantes na hora. */
+function ensureMissingAsked(
+  reply: string,
+  missing: QuestionnaireQuestion[],
+  answers: CycleAnswer[],
+  media: MediaUnderstanding,
+  contactName: string,
+  questions: QuestionnaireQuestion[],
+): string {
+  if (!missing.length) return reply;
+  if (coversQuestions(reply, missing)) return reply;
+  return defaultReply(questions, answers, missing, false, media, contactName);
+}
+
+function coversQuestions(reply: string, questions: QuestionnaireQuestion[]): boolean {
+  if (!reply.trim() || !questions.length) return false;
+  const normalized = reply.toLowerCase();
+  return questions.some((question) => {
+    const snippet = question.body.trim().slice(0, 24).toLowerCase();
+    return snippet.length >= 8 && normalized.includes(snippet);
+  });
+}
+
+async function syncCycleProgress(cycleId: string, complete: boolean, engaged: boolean): Promise<void> {
+  if (complete) {
+    await markCycleCompleted(cycleId);
+    return;
+  }
+  // Coleta antecipada: marca como notificado para o disparo agendado não reenviar o questionário.
+  if (engaged) await markCycleNotified(cycleId);
 }
 
 function stripJsonNoise(raw: string): string {
