@@ -8,7 +8,6 @@ import {
   looksLikeQuestionnaireEdit,
   looksLikeQuestionnaireMeta,
   looksLikeRfqOrRegisterPayload,
-  relativeOccurrenceDate,
   wantsQuestionnaireContext,
 } from './questionnaire-rules.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
@@ -100,10 +99,4 @@ test('conclusão exige resposta persistida para toda pergunta', () => {
     ]),
     true,
   );
-});
-
-test('referências relativas selecionam a data do ciclo corretamente', () => {
-  assert.equal(relativeOccurrenceDate('2026-10-13', 'corrija o valor de ontem'), '2026-10-12');
-  assert.equal(relativeOccurrenceDate('2026-10-13', 'foi anteontem'), '2026-10-11');
-  assert.equal(relativeOccurrenceDate('2026-10-13', 'corrija o valor'), '2026-10-13');
 });

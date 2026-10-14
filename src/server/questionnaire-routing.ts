@@ -105,6 +105,16 @@ export async function resolveActiveCycleForConversation(input: {
   return { ambiguous: candidates };
 }
 
+/** Ciclos do contato numa data (cria se ainda não existir e o plano roda nesse dia). */
+export async function listCycleContextsForDate(
+  contactId: string,
+  date: string,
+  weekday: number,
+  includeCompleted = false,
+): Promise<ActiveCycleContext[]> {
+  return listActiveCycleContexts(contactId, date, weekday, includeCompleted);
+}
+
 async function listActiveCycleContexts(
   contactId: string,
   date: string,

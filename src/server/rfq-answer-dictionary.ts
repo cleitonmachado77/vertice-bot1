@@ -1,3 +1,5 @@
+import { zonedNow } from './clock.js';
+import { formatBrDate, parseOccurrenceDateRef } from './questionnaire-dates.js';
 import { foldText } from './questionnaire-rules.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
 import { PRODUCT_CANONICAL } from './rfq-product-catalog.js';
@@ -28,7 +30,7 @@ type FieldRule = {
 const QTY_UNIT = String.raw`(?:kg|kgs|kilos?|quilos?|ton(?:elada)?s?|g|gramas?|sacas?|sc|litros?|lts?|l\b|un(?:id(?:ades?)?)?|unidades?|pcs?|caixas?|cx|fardos?|bags?)`;
 const QTY_VALUE = String.raw`\d+(?:[.,]\d+)?`;
 const DATE =
-  String.raw`(?:\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?|\d{4}-\d{2}-\d{2}|(?:hoje|amanha|ontem|anteontem))`;
+  String.raw`(?:\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?|\d{4}-\d{2}-\d{2}|(?:hoje|amanha|ontem|anteontem|depois\s+de\s+amanha|apos\s+amanha)|(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)(?:-feira)?)`;
 
 const PAYMENT_CANONICAL: Array<{ match: RegExp; value: string }> = [
   { match: /\bpix\b/, value: 'PIX' },
@@ -123,32 +125,8 @@ function formatMoney(value: string): string {
 }
 
 function extractDate(text: string): string {
-  const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  if (iso) {
-    const [, y, m, d] = iso[1].match(/^(\d{4})-(\d{2})-(\d{2})$/) || [];
-    if (y) return `${d}/${m}/${y}`;
-  }
-  const br = text.match(/\b(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b/);
-  if (br) {
-    const day = br[1].padStart(2, '0');
-    const month = br[2].padStart(2, '0');
-    const year = br[3]
-      ? br[3].length === 2
-        ? `20${br[3]}`
-        : br[3]
-      : String(new Date().getFullYear());
-    return `${day}/${month}/${year}`;
-  }
-  const relative = foldText(text).match(/\b(hoje|amanha|ontem|anteontem)\b/);
-  if (relative) {
-    const map: Record<string, string> = {
-      hoje: 'hoje',
-      amanha: 'amanhã',
-      ontem: 'ontem',
-      anteontem: 'anteontem',
-    };
-    return map[relative[1]] || relative[1];
-  }
+  const ref = parseOccurrenceDateRef(zonedNow().date, text);
+  if (ref.explicit) return formatBrDate(ref.date);
   return text.trim();
 }
 

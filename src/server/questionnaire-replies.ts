@@ -1,6 +1,6 @@
 import type { MediaUnderstanding } from './media-understand.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
-import { coversQuestions, foldText } from './questionnaire-rules.js';
+import { foldText } from './questionnaire-rules.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
 
 export type EditAction = 'append' | 'correct' | 'delete' | 'update';
@@ -47,6 +47,11 @@ export function defaultQuestionnaireReply(
   return `${thanks} Ainda falta:\n${questionList(missing)}`;
 }
 
+/**
+ * Rede de segurança: a IA conduz o pedido das faltantes.
+ * Só substitui a reply se estiver vazia, pedir confirmação indevida
+ * ou fingir que o questionário já acabou.
+ */
 export function ensureMissingAsked(input: {
   reply: string;
   missing: QuestionnaireQuestion[];
@@ -56,7 +61,12 @@ export function ensureMissingAsked(input: {
   questions: QuestionnaireQuestion[];
 }): string {
   if (!input.missing.length) return input.reply;
-  if (asksConfirmation(input.reply) || !coversQuestions(input.reply, input.missing)) {
+  const trimmed = input.reply.trim();
+  if (
+    !trimmed ||
+    asksConfirmation(trimmed) ||
+    claimsCompleteWhileIncomplete(trimmed)
+  ) {
     return defaultQuestionnaireReply(
       input.questions,
       input.answers,
@@ -66,7 +76,20 @@ export function ensureMissingAsked(input: {
       input.contactName,
     );
   }
-  return input.reply;
+  return trimmed;
+}
+
+/** “Anotei tudo” (etc.) com itens ainda faltando — não pode seguir assim. */
+export function claimsCompleteWhileIncomplete(reply: string): boolean {
+  if (asksForMore(reply)) return false;
+  const text = foldText(reply);
+  return (
+    /anotei tudo/.test(text) ||
+    /registre(i|amos) tudo/.test(text) ||
+    /ja anotei tud/.test(text) ||
+    /questionario (esta )?conclu/.test(text) ||
+    /coleta conclu/.test(text)
+  );
 }
 
 export function completionReply(contactName: string): string {

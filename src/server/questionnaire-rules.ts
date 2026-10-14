@@ -142,13 +142,13 @@ export function coversQuestions(reply: string, questions: QuestionnaireQuestion[
   });
 }
 
-export function relativeOccurrenceDate(today: string, text: string): string {
-  const normalized = foldText(text);
-  const offset = /\banteontem\b/.test(normalized) ? 2 : /\bontem\b/.test(normalized) ? 1 : 0;
-  if (!offset) return today;
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(today);
-  if (!match) return today;
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-  date.setUTCDate(date.getUTCDate() - offset);
-  return date.toISOString().slice(0, 10);
-}
+export {
+  formatBrDate,
+  parseOccurrenceDateRef,
+  relativeOccurrenceDate,
+  temporalRelation,
+  temporalRelationLabel,
+  weekdayFromIsoDate,
+  type OccurrenceDateRef,
+  type TemporalRelation,
+} from './questionnaire-dates.js';

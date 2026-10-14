@@ -50,7 +50,7 @@ test('atalho heurístico cobre kg + produto sem LLM', () => {
   );
 });
 
-test('atalho heurístico parcial pede o que falta', () => {
+test('atalho heurístico parcial captura só o que veio (reply fica com a IA no fluxo)', () => {
   const qty = question('kg', 'Quantos kg vc recebeu?', 'quantity');
   const product = question('produto', 'Qual produto vc recebeu?', 'products');
   const result = tryHeuristicQuestionnaireCapture({
@@ -65,7 +65,7 @@ test('atalho heurístico parcial pede o que falta', () => {
   assert.equal(result.complete, false);
   assert.equal(result.accepted.length, 1);
   assert.equal(result.accepted[0].text, '10 kg');
-  assert.match(result.reply, /ainda falta/i);
+  assert.equal(result.accepted[0].questionId, 'kg');
 });
 
 test('atalho heurístico ignora conversa sem resposta', () => {

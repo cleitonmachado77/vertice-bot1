@@ -6,8 +6,13 @@ import {
   type QuestionnaireDraft,
 } from './questionnaire-agent.js';
 import {
+  parseOccurrenceDateRef,
+  weekdayFromIsoDate,
+} from './questionnaire-dates.js';
+import {
   looksLikeQuestionnaireEdit,
-  relativeOccurrenceDate,
+  looksLikeRfqOrRegisterPayload,
+  wantsQuestionnaireContext,
 } from './questionnaire-rules.js';
 import {
   clearConversationCompletedEditContext,
@@ -16,6 +21,7 @@ import {
   type ActiveCycleContext,
 } from './questionnaire-cycles.js';
 import {
+  listCycleContextsForDate,
   resolveActiveCycleForConversation,
   type ActiveCycleResolution,
 } from './questionnaire-routing.js';
@@ -110,17 +116,39 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   );
   const clock = zonedNow();
   const editLike = looksLikeQuestionnaireEdit(inboundType, inboundText, mediaUrl);
-  const targetDate = relativeOccurrenceDate(clock.date, inboundText);
+  const dateRef = parseOccurrenceDateRef(clock.date, inboundText);
+  const targetDate = dateRef.date;
+  const pointedToOtherDay = dateRef.explicit && targetDate !== clock.date;
+  const otherDayIntent =
+    pointedToOtherDay &&
+    (editLike ||
+      wantsQuestionnaireContext(inboundType, inboundText, mediaUrl) ||
+      looksLikeRfqOrRegisterPayload(inboundType, inboundText, mediaUrl));
   let resolution: ActiveCycleResolution = { ambiguous: [] };
-  // Sempre carrega ciclos do dia (inclui concluídos): o agente de questionário decide pelo contexto.
+  // Sempre carrega ciclos do dia alvo (inclui concluídos): o agente de questionário decide pelo contexto.
   const completed = contactId
     ? await listCompletedCycleContexts(contactId, [targetDate])
     : [];
   const explicitlyNamed = selectExplicitlyNamedCycle(completed, inboundText);
   let cycle = explicitlyNamed;
 
-  if (!cycle && editLike && targetDate !== clock.date) {
-    if (completed.length === 1) {
+  // Passado/futuro explícito (ontem, amanhã, 15/10, sexta…): grava naquela data.
+  if (!cycle && !resolution.ambiguous.length && contactId && otherDayIntent) {
+    const otherDay = await listCycleContextsForDate(
+      contactId,
+      targetDate,
+      weekdayFromIsoDate(targetDate),
+      true,
+    );
+    if (otherDay.length === 1) {
+      cycle = otherDay[0];
+    } else if (otherDay.length > 1) {
+      resolution = { ambiguous: otherDay };
+      await setConversationCycleCandidates(
+        input.conversationId,
+        otherDay.map((item) => item.cycle.id),
+      );
+    } else if (completed.length === 1) {
       cycle = completed[0];
     } else if (completed.length > 1) {
       resolution = { ambiguous: completed };
@@ -131,7 +159,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     }
   }
 
-  if (!cycle && !resolution.ambiguous.length && contactId) {
+  if (!cycle && !resolution.ambiguous.length && contactId && !otherDayIntent) {
     resolution = await resolveActiveCycleForConversation({
       contactId,
       conversationId: input.conversationId,
@@ -143,7 +171,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     cycle = resolution.context;
   }
 
-  if (!cycle && !resolution.ambiguous.length && completed.length) {
+  if (!cycle && !resolution.ambiguous.length && completed.length && !otherDayIntent) {
     if (completed.length === 1) {
       cycle = completed[0];
     } else {
@@ -186,6 +214,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
           mediaUrl,
           history: history.map((item) => ({ direction: item.direction, text: item.text })),
           forceCompletedEdit: resolution.completedEditContext,
+          today: clock.date,
         })
       : null;
 
