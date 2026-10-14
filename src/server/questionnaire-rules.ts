@@ -58,6 +58,60 @@ export function looksLikeQuestionnaireEdit(
   );
 }
 
+/** Perguntas sobre o próprio questionário (listar, lembrar, etc.). */
+export function looksLikeQuestionnaireMeta(inbound: string): boolean {
+  const text = foldText(inbound);
+  if (!text || text.length < 4) return false;
+  if (/questionario/.test(text)) return true;
+  if (
+    /perguntas?/.test(text) &&
+    /(quais|qual|lembre|lembrar|lista|sao|seria|mostrar|manda|falar|diz|me fala)/.test(text)
+  ) {
+    return true;
+  }
+  return /me lembre/.test(text) && /pergunt/.test(text);
+}
+
+/**
+ * Conteúdo que parece resposta/registro RFQ (kg, produto, “registrar”…).
+ * Mais restrito que looksLikeAnswerPayload para não sequestrar conversa livre.
+ */
+export function looksLikeRfqOrRegisterPayload(
+  inboundType: string,
+  inbound: string,
+  mediaUrl = '',
+): boolean {
+  if (inboundType && inboundType !== 'text' && mediaUrl) return true;
+  const text = foldText(inbound);
+  if (!text || text.length < 4) return false;
+  if (looksLikeQuestionnaireMeta(inbound)) return false;
+  if (
+    /\b\d+([.,]\d+)?\s?(kg|g|ton|t\b|un|unid|l\b|ml|m3|m2|m²)\b/.test(text) ||
+    /\b(registrar|registre|anota|anotar|recebi|receber|entrega|entregue|comprei|compra)\b/.test(
+      text,
+    ) ||
+    /\b(plastico|cobre|aluminio|ferro|papel|papelao|vidro|borracha|oleo|bateria|sucata)\b/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  return looksLikeQuestionnaireEdit(inboundType, inbound, mediaUrl);
+}
+
+/** Deve preferir o agente de questionário em vez do modo livre. */
+export function wantsQuestionnaireContext(
+  inboundType: string,
+  inbound: string,
+  mediaUrl = '',
+): boolean {
+  return (
+    looksLikeQuestionnaireEdit(inboundType, inbound, mediaUrl) ||
+    looksLikeQuestionnaireMeta(inbound) ||
+    looksLikeRfqOrRegisterPayload(inboundType, inbound, mediaUrl)
+  );
+}
+
 export function looksLikeAnswerPayload(media: MediaUnderstanding, inbound: string): boolean {
   if (media.type !== 'text' && (media.mediaUrl || media.summary)) return true;
   const text = (media.summary || inbound || '').trim();

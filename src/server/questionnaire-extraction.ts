@@ -11,16 +11,26 @@ import {
 } from './rfq-answer-dictionary.js';
 
 export type ExtractedAnswer = { questionId: string; text: string; type: string };
-export type Extracted = { reply: string; answers: ExtractedAnswer[]; complete: boolean };
+export type Extracted = {
+  reply: string;
+  answers: ExtractedAnswer[];
+  complete: boolean;
+  /** false = mensagem sem relação com o questionário → agente geral. */
+  related: boolean;
+};
 
 export function parseExtracted(raw: string, media: MediaUnderstanding): Extracted {
   const jsonText = extractJson(raw);
-  if (!jsonText) return { reply: stripJsonNoise(raw), answers: [], complete: false };
+  if (!jsonText) {
+    return { reply: stripJsonNoise(raw), answers: [], complete: false, related: true };
+  }
   try {
     const data = JSON.parse(jsonText) as {
       reply?: unknown;
       answers?: unknown;
       complete?: unknown;
+      related?: unknown;
+      deferFree?: unknown;
     };
     const answers = Array.isArray(data.answers)
       ? data.answers
@@ -34,13 +44,22 @@ export function parseExtracted(raw: string, media: MediaUnderstanding): Extracte
           })
           .filter((item) => item.questionId && item.text)
       : [];
+    const related =
+      data.related === false || data.deferFree === true
+        ? false
+        : data.related === true || answers.length > 0
+          ? true
+          : data.related === undefined
+            ? true
+            : Boolean(data.related);
     return {
-      reply: String(data.reply || '').trim() || stripJsonNoise(raw),
+      reply: String(data.reply || '').trim() || (related ? stripJsonNoise(raw) : ''),
       answers,
       complete: Boolean(data.complete),
+      related,
     };
   } catch {
-    return { reply: stripJsonNoise(raw), answers: [], complete: false };
+    return { reply: stripJsonNoise(raw), answers: [], complete: false, related: true };
   }
 }
 

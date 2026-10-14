@@ -5,8 +5,19 @@ import {
   cleanAnswerForQuestion,
   heuristicExtractAnswers,
   normalizeExtractedAnswers,
+  parseExtracted,
 } from './questionnaire-extraction.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
+import type { MediaUnderstanding } from './media-understand.js';
+
+const textMedia = (summary = ''): MediaUnderstanding => ({
+  type: 'text',
+  summary,
+  transcript: '',
+  caption: '',
+  mediaUrl: '',
+  understood: true,
+});
 
 const question = (
   id: string,
@@ -108,4 +119,14 @@ test('separa kg e produto quando a mensagem mistura os dois', () => {
     { questionId: 'kg', text: '399 kg', type: 'text' },
     { questionId: 'produto', text: 'cobre', type: 'text' },
   ]);
+});
+
+test('parseExtracted respeita related=false para deferir ao agente geral', () => {
+  const parsed = parseExtracted(
+    '{"related":false,"reply":"","answers":[],"complete":false}',
+    textMedia('oi'),
+  );
+  assert.equal(parsed.related, false);
+  assert.equal(parsed.reply, '');
+  assert.equal(parsed.answers.length, 0);
 });

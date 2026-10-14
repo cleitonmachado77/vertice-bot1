@@ -112,7 +112,8 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   const editLike = looksLikeQuestionnaireEdit(inboundType, inboundText, mediaUrl);
   const targetDate = relativeOccurrenceDate(clock.date, inboundText);
   let resolution: ActiveCycleResolution = { ambiguous: [] };
-  const completed = contactId && editLike
+  // Sempre carrega ciclos do dia (inclui concluídos): o agente de questionário decide pelo contexto.
+  const completed = contactId
     ? await listCompletedCycleContexts(contactId, [targetDate])
     : [];
   const explicitlyNamed = selectExplicitlyNamedCycle(completed, inboundText);
@@ -137,7 +138,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
       date: clock.date,
       weekday: clock.weekday,
       inbound: inboundText,
-      includeCompletedContext: editLike,
+      includeCompletedContext: true,
     });
     cycle = resolution.context;
   }
@@ -198,7 +199,11 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     await clearConversationCompletedEditContext(input.conversationId);
   }
 
-  if (!draft?.text && !cycle) {
+  const questionnaireDeferred =
+    Boolean(draft && 'deferToFree' in draft && (draft as QuestionnaireDraft).deferToFree);
+
+  // Sem ciclo, ou questionário julgou fora de contexto → agente geral.
+  if ((!cycle && !draft?.text) || questionnaireDeferred) {
     draft = await draftReply({
       contactName: contact?.name || input.contactName || conversation?.contact_name || '',
       contactPhone: phone,

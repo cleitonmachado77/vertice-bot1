@@ -6,7 +6,10 @@ import {
   isNonAnswerText,
   looksLikeQuestionnaireAnswer,
   looksLikeQuestionnaireEdit,
+  looksLikeQuestionnaireMeta,
+  looksLikeRfqOrRegisterPayload,
   relativeOccurrenceDate,
+  wantsQuestionnaireContext,
 } from './questionnaire-rules.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
@@ -34,6 +37,22 @@ test('conversa comum não é tratada como edição de ciclo concluído', () => {
   assert.equal(looksLikeQuestionnaireEdit('text', 'qual é o horário de atendimento?'), false);
   assert.equal(looksLikeQuestionnaireEdit('text', 'na verdade foram 135 kg'), true);
   assert.equal(looksLikeQuestionnaireEdit('text', 'apague a resposta de ontem'), true);
+});
+
+test('atalhos de meta/RFQ ainda ajudam; conversa livre não', () => {
+  assert.equal(looksLikeQuestionnaireMeta('me lembre quais sao as perguntas mesmo?'), true);
+  assert.equal(looksLikeQuestionnaireMeta('quais as perguntas do meu questionario?'), true);
+  assert.equal(looksLikeQuestionnaireMeta('qual é o horário de atendimento?'), false);
+  assert.equal(
+    looksLikeRfqOrRegisterPayload('text', 'Amanhã vou receber 30 kg de plástico, pode registrar'),
+    true,
+  );
+  assert.equal(looksLikeRfqOrRegisterPayload('text', 'oi'), false);
+  assert.equal(wantsQuestionnaireContext('text', 'oi'), false);
+  assert.equal(
+    wantsQuestionnaireContext('text', 'Amanhã vou receber 30 kg de plástico, pode registrar'),
+    true,
+  );
 });
 
 test('respostas negativas são conteúdo válido', () => {

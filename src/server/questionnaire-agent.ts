@@ -16,6 +16,8 @@ import {
   isFullyAnswered,
   looksLikeAnswerPayload,
   looksLikeQuestionnaireEdit,
+  looksLikeQuestionnaireMeta,
+  looksLikeRfqOrRegisterPayload,
 } from './questionnaire-rules.js';
 import {
   acceptedLabel,
@@ -48,6 +50,8 @@ export type QuestionnaireDraft = {
   source: 'model' | 'fallback' | 'none';
   detail: string;
   completed: boolean;
+  /** Mensagem sem relação com o questionário — reply.ts deve usar o agente geral. */
+  deferToFree?: boolean;
 };
 
 export async function draftQuestionnaireReply(input: {
@@ -58,6 +62,8 @@ export async function draftQuestionnaireReply(input: {
   mediaUrl: string;
   history: { direction: string; text: string }[];
   forceCompletedEdit?: boolean;
+  /** Só lista as perguntas (ex.: “quais são as perguntas?”). */
+  listQuestionsOnly?: boolean;
 }): Promise<QuestionnaireDraft> {
   const fallback = getSetting('agent_fallback');
   if (getSetting('agent_active') !== '1') {
@@ -81,12 +87,21 @@ export async function draftQuestionnaireReply(input: {
     return `${index + 1}. [${item.id}]${fieldHint} ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`;
   });
 
+  const amending = input.context.cycle.status === 'completed';
+  const captureTargets = amending || input.forceCompletedEdit ? questions : input.context.missing;
   const sendTime = input.context.questionnaire.send_time || '';
   const system = [
     'Você é um atendente humano da Vértice acompanhando um questionário no WhatsApp.',
     'Fale em português do Brasil, de forma natural, curta e personalizada.',
     '',
-    'Você tem autonomia para interpretar o cenário e decidir o próximo passo. Não use regras rígidas de palavras-chave.',
+    'Prioridade absoluta: CONTEXTO e intenção da mensagem em relação às perguntas abaixo.',
+    'NÃO dependa de palavras-chave, sinônimos pré-mapeados ou frases “oficiais”.',
+    'Leia o histórico recente. Se a mensagem IMPLICAR resposta, correção, complemento, listagem ou dúvida sobre qualquer pergunta — mesmo com outras palavras — trate no questionário (related:true).',
+    'Exemplos de implicação: “chega amanhã uns 40 do plástico”, “foi o mesmo do João”, “pode anotar o que falei”, “muda só a quantidade” — tudo isso pode ser answer se encaixar nas perguntas.',
+    '',
+    amending
+      ? 'Estado: o ciclo de hoje já foi marcado como concluído, mas você CONTINUA atento. Pode atualizar respostas ou listar perguntas se o contexto pedir — sem exigir termos especiais de edição.'
+      : 'Estado: ciclo em andamento — colete o que faltar com naturalidade.',
     '',
     'Horário agendado do disparo NÃO atrasa a coleta:',
     sendTime
@@ -95,22 +110,24 @@ export async function draftQuestionnaireReply(input: {
     '- Se a pessoa mandar respostas (ou começar a responder) ANTES desse horário, trate agora: salve o que for resposta e peça na hora o que ainda falta.',
     '- Nunca diga que vai esperar o horário do disparo. Nunca peça para a pessoa aguardar o envio automático.',
     '',
-    'Exemplos de cenários (decida caso a caso):',
+    'Exemplos de cenários (decida caso a caso pelo contexto):',
+    '- Pedir para lembrar/listar as perguntas → related:true e liste na reply (numeradas).',
+    '- Conteúdo que responde às perguntas (direto ou por paráfrase) → related:true e preencha answers com o questionId certo.',
     '- Confirmar que quer continuar → apresente o questionário completo, numerado.',
     '- Pedir só uma pergunta (“qual é a terceira?”) → responda só essa, com o texto da pergunta.',
-    '- Responder várias perguntas numa mensagem só → salve TODAS em "answers" com o questionId correto de cada uma.',
-    '- Enviar respostas parciais → salve o que veio em "answers" e na reply peça SÓ o que ainda falta (sem repetir o que já entendeu).',
-    '- Fazer pergunta fora do questionário → responda de forma útil e, se ainda faltarem respostas, reconduza com delicadeza.',
+    '- Responder várias perguntas numa mensagem só → salve TODAS em "answers" com o questionId correto.',
+    '- Conversa sem relação com o questionário (ex.: “oi”, horário comercial genérico, assunto outro) → related:false, reply:"", answers:[].',
     '',
     'Importante:',
-    '- Só preencha "answers" quando a mensagem realmente contiver conteúdo de resposta às perguntas.',
-    '- Se a mensagem for só intenção, dúvida ou conversa (sem resposta às perguntas), deixe "answers": [].',
-    '- Use SEMPRE o questionId exato listado em "Ainda faltam" / perguntas (nunca invente id).',
-    '- O campo "answers" é obrigatório para gravar no sistema — a reply sozinha NÃO salva nada.',
+    '- related=true sempre que o sentido da mensagem tocar nas perguntas — termos exatos NÃO são necessários.',
+    '- related=false SOMENTE se for claramente outro assunto — aí outro agente responde.',
+    '- Só preencha "answers" quando houver conteúdo de resposta às perguntas.',
+    '- Use SEMPRE o questionId exato listado (nunca invente id).',
+    '- O campo "answers" é obrigatório para gravar — a reply sozinha NÃO salva nada.',
     '- Quando for apresentar o questionário, inclua TODAS as perguntas numeradas na "reply".',
     '- Quando já houver respostas salvas e ainda faltarem itens, a "reply" DEVE listar apenas as faltantes.',
-    '- NUNCA peça confirmação de respostas já capturadas. Não invente etapa de “confirmar”.',
-    '- Se a mensagem cobrir todas as perguntas pendentes: preencha TODOS os "answers", "complete": true, e na reply diga só algo curto como “Anotei tudo, obrigado!” — NÃO repita nem liste as respostas.',
+    '- NUNCA peça confirmação de respostas já capturadas.',
+    '- Se cobrir todas as pendentes: answers completos, complete:true, reply curta (“Anotei tudo, obrigado!”).',
     ...rfqSeparationPromptLines(),
     '- Aceite texto, áudio (já transcrito), imagem (já descrita) e vídeo.',
     '- Não invente respostas. Não mencione que você é um modelo.',
@@ -130,10 +147,10 @@ export async function draftQuestionnaireReply(input: {
     already || '(nenhuma)',
     '',
     'Ainda faltam:',
-    pending.join('\n') || '(nenhuma)',
+    pending.join('\n') || '(nenhuma — ciclo concluído; ainda assim pode atualizar pelo contexto)',
     '',
     'Responda APENAS com JSON válido:',
-    '{"reply":"mensagem natural para o usuário","answers":[{"questionId":"id","text":"conteúdo da resposta","type":"text|audio|image|video"}],"complete":false}',
+    '{"related":true,"reply":"mensagem natural","answers":[{"questionId":"id","text":"conteúdo","type":"text|audio|image|video"}],"complete":false}',
   ].join('\n');
 
   const history = input.history
@@ -157,12 +174,38 @@ export async function draftQuestionnaireReply(input: {
     .filter(Boolean)
     .join('\n');
 
-  const amending = input.context.cycle.status === 'completed';
   const wantsEdit =
     input.forceCompletedEdit ||
-    looksLikeQuestionnaireEdit(media.type, input.inbound, media.mediaUrl || input.mediaUrl);
+    looksLikeQuestionnaireEdit(media.type, input.inbound, media.mediaUrl || input.mediaUrl) ||
+    looksLikeRfqOrRegisterPayload(
+      media.type,
+      input.inbound,
+      media.mediaUrl || input.mediaUrl,
+    );
 
-  // Ciclo fechado + pedido de editar/complementar/apagar.
+  // Atalhos rápidos (não substituem o julgamento por contexto no LLM).
+  if (input.listQuestionsOnly || looksLikeQuestionnaireMeta(input.inbound)) {
+    const lines = questions.map((item, index) => `${index + 1}) ${item.body}`);
+    const saved = already ? `\n\nJá registradas hoje:\n${already}` : '';
+    return {
+      text: [
+        `As perguntas de “${input.context.questionnaire.name}” são:`,
+        ...lines,
+        saved,
+        '',
+        amending
+          ? 'Se quiser atualizar alguma, diga o número da pergunta e a nova resposta.'
+          : 'Pode responder quando quiser — pode mandar tudo de uma vez.',
+      ]
+        .filter((line) => line !== undefined)
+        .join('\n')
+        .trim(),
+      source: 'fallback',
+      detail: 'listagem de perguntas',
+      completed: amending,
+    };
+  }
+
   if (amending && wantsEdit) {
     const edited = await applyQuestionnaireEdit({
       cycleId: input.context.cycle.id,
@@ -174,17 +217,36 @@ export async function draftQuestionnaireReply(input: {
       contactName: input.contactName,
       occurrenceDate: input.context.cycle.occurrence_date,
     });
-    return (
-      edited || {
-        text: 'Pode repetir a alteração? Quero registrar certinho no questionário.',
-        source: 'fallback' as const,
-        detail: 'edição sem mudança clara',
+    if (edited && edited.detail !== 'edição sem mudança clara') return edited;
+
+    const capture = tryHeuristicQuestionnaireCapture({
+      questions,
+      missing: questions,
+      alreadySaved,
+      media,
+      inbound: input.inbound,
+      contactName: input.contactName,
+    });
+    if (capture) {
+      await persistAcceptedAnswers({
+        cycleId: input.context.cycle.id,
+        questions,
+        alreadySaved,
+        accepted: capture.accepted,
+        media,
+        mediaUrl: input.mediaUrl,
+      });
+      return {
+        text: capture.reply.slice(0, 1500),
+        source: 'fallback',
+        detail: capture.complete
+          ? 'registro em ciclo concluído'
+          : 'registro parcial em ciclo concluído',
         completed: true,
-      }
-    );
+      };
+    }
   }
 
-  // Ciclo aberto, mas já há respostas e o usuário pede correção/exclusão.
   if (!amending && alreadySaved.length && isCorrectionOrDeleteRequest(input.inbound)) {
     const edited = await applyQuestionnaireEdit({
       cycleId: input.context.cycle.id,
@@ -199,20 +261,13 @@ export async function draftQuestionnaireReply(input: {
     if (edited) return edited;
   }
 
-  if (amending) {
-    // Conversa comum após o ciclo — deixa o agente geral responder.
-    return { text: '', source: 'none', detail: 'ciclo já concluído', completed: true };
-  }
-
-  // Atalho seguro: respostas claras sem chamar o LLM.
   if (
-    !wantsEdit &&
     !isCorrectionOrDeleteRequest(input.inbound) &&
     looksLikeAnswerPayload(media, input.inbound)
   ) {
     const capture = tryHeuristicQuestionnaireCapture({
       questions,
-      missing: input.context.missing,
+      missing: captureTargets,
       alreadySaved,
       media,
       inbound: input.inbound,
@@ -231,7 +286,7 @@ export async function draftQuestionnaireReply(input: {
         text: capture.reply.slice(0, 1500),
         source: 'fallback',
         detail: capture.complete ? 'atalho heuristico concluido' : 'atalho heuristico parcial',
-        completed: capture.complete,
+        completed: capture.complete || amending,
       };
     }
   }
@@ -249,18 +304,28 @@ export async function draftQuestionnaireReply(input: {
     });
     const extracted = parseExtracted(raw, media);
 
+    if (!extracted.related && extracted.answers.length === 0) {
+      return {
+        text: '',
+        source: 'model',
+        detail: 'contexto fora do questionário',
+        completed: amending,
+        deferToFree: true,
+      };
+    }
+
     // Mídia sem texto: se o modelo não mapeou, tenta associar à próxima pergunta faltante.
     let provisional =
       extracted.answers.length > 0
-        ? normalizeExtractedAnswers(extracted.answers, questions, input.context.missing)
+        ? normalizeExtractedAnswers(extracted.answers, questions, captureTargets)
         : media.type !== 'text' && media.mediaUrl
-          ? autoAssignMedia(input.context.missing, media)
+          ? autoAssignMedia(captureTargets, media)
           : [];
 
     let accepted = filterAccepted(provisional, questions, media);
 
     const acceptedIds = new Set(accepted.map((item) => item.questionId));
-    let pendingAfterExtraction = input.context.missing.filter(
+    let pendingAfterExtraction = captureTargets.filter(
       (question) => !acceptedIds.has(question.id),
     );
 
@@ -268,7 +333,7 @@ export async function draftQuestionnaireReply(input: {
     if (
       pendingAfterExtraction.length &&
       looksLikeAnswerPayload(media, input.inbound) &&
-      (accepted.length < input.context.missing.length || mentionsUnderstoodAnswers(extracted.reply))
+      (accepted.length < captureTargets.length || mentionsUnderstoodAnswers(extracted.reply))
     ) {
       const heuristicExtra = filterAccepted(
         normalizeExtractedAnswers(
@@ -282,7 +347,7 @@ export async function draftQuestionnaireReply(input: {
       if (heuristicExtra.length) {
         accepted = mergeExtracted(accepted, heuristicExtra);
         const acceptedNow = new Set(accepted.map((item) => item.questionId));
-        pendingAfterExtraction = input.context.missing.filter(
+        pendingAfterExtraction = captureTargets.filter(
           (question) => !acceptedNow.has(question.id),
         );
       }

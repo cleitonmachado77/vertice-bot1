@@ -74,7 +74,12 @@ export async function resolveActiveCycleForConversation(input: {
     }
   }
 
-  const candidates = await listActiveCycleContexts(input.contactId, input.date, input.weekday);
+  const candidates = await listActiveCycleContexts(
+    input.contactId,
+    input.date,
+    input.weekday,
+    Boolean(input.includeCompletedContext),
+  );
   if (!candidates.length) return { ambiguous: [] };
   const active = candidates.find((item) => item.cycle.id === stored?.active_cycle_id);
   if (active) return { context: active, ambiguous: [] };
@@ -104,12 +109,13 @@ async function listActiveCycleContexts(
   contactId: string,
   date: string,
   weekday: number,
+  includeCompleted = false,
 ): Promise<ActiveCycleContext[]> {
   const result: ActiveCycleContext[] = [];
   for (const item of await listAssignedQuestionnaires(contactId)) {
     if (!runsOnWeekday(item, weekday)) continue;
     const cycle = await getOrCreateCycle(item.questionnaire_id, contactId, date);
-    if (cycle.status === 'completed') continue;
+    if (cycle.status === 'completed' && !includeCompleted) continue;
     const questionnaire = await getQuestionnaireForCycle(cycle);
     if (!questionnaire?.questions.length) continue;
     result.push(toCycleContext(cycle, questionnaire, await listCycleAnswers(cycle.id)));
