@@ -34,6 +34,19 @@ export function stopInbox() {
   pulling = false;
 }
 
+export function updateInboxHandoffBadge(count) {
+  const badge = document.querySelector('#inbox-handoff-badge');
+  if (!badge) return;
+  const n = Number(count) || 0;
+  if (n > 0) {
+    badge.hidden = false;
+    badge.textContent = n > 99 ? '99+' : String(n);
+  } else {
+    badge.hidden = true;
+    badge.textContent = '';
+  }
+}
+
 export async function renderInbox(root, focus = '', token = getNavToken()) {
   stopInbox();
   navToken = token;
@@ -44,6 +57,7 @@ export async function renderInbox(root, focus = '', token = getNavToken()) {
           <h2>Conversas</h2>
           <input id="conv-search" type="search" placeholder="Pesquisar conversa" />
         </div>
+        <div id="handoff-banner" class="handoff-banner" hidden></div>
         <div class="wa-scroll" id="conv-list"><p class="muted">Carregando conversas…</p></div>
       </aside>
       <div class="thread" id="thread">${emptyThread()}</div>
@@ -54,10 +68,7 @@ export async function renderInbox(root, focus = '', token = getNavToken()) {
   const data = await api('/api/conversations');
   if (!isNavActive(token) || token !== navToken) return;
 
-  listPainted = listKey(data.items);
-  const listEl = document.querySelector('#conv-list');
-  if (listEl) listEl.innerHTML = drawList(data.items);
-  bindList(root);
+  paintConversationList(root, data.items || []);
   if (focus.startsWith('c/')) await openContact(focus.slice(2), token);
   else if (focus) await openConversation(focus, token);
   else if (selected) await openConversation(selected, token);
@@ -78,13 +89,7 @@ async function beat(root, localToken, token) {
   if (localToken !== watchToken || !isNavActive(token)) return;
   const nextList = listKey(list.items);
   if (nextList !== listPainted) {
-    listPainted = nextList;
-    const listEl = document.querySelector('#conv-list');
-    if (listEl) {
-      listEl.innerHTML = drawList(list.items);
-      bindList(root);
-      applySearch();
-    }
+    paintConversationList(root, list.items || []);
   }
   if (!selected) return;
   if (sends === 0 && !pulling && Date.now() - lastPull >= NEVOA_MS) {
@@ -106,7 +111,52 @@ async function beat(root, localToken, token) {
 }
 
 function listKey(items) {
-  return items.map((item) => `${item.id}:${item.preview}:${item.last_message_at}`).join('|');
+  return (items || [])
+    .map(
+      (item) =>
+        `${item.id}:${item.preview}:${item.last_message_at}:${Number(item.human_handoff) || 0}:${Number(item.awaiting_human) || 0}`,
+    )
+    .join('|');
+}
+
+function isAwaitingHuman(item) {
+  return Number(item?.awaiting_human) === 1;
+}
+
+function handoffCount(items) {
+  return (items || []).filter((item) => isAwaitingHuman(item)).length;
+}
+
+function sortedConversations(items) {
+  return [...(items || [])].sort((a, b) => {
+    const ha = isAwaitingHuman(a) ? 1 : 0;
+    const hb = isAwaitingHuman(b) ? 1 : 0;
+    if (ha !== hb) return hb - ha;
+    return String(b.last_message_at || '').localeCompare(String(a.last_message_at || ''));
+  });
+}
+
+function paintConversationList(root, items) {
+  const ordered = sortedConversations(items);
+  listPainted = listKey(items);
+  const waiting = handoffCount(ordered);
+  updateInboxHandoffBadge(waiting);
+  const banner = document.querySelector('#handoff-banner');
+  if (banner) {
+    if (waiting > 0) {
+      banner.hidden = false;
+      banner.innerHTML = `<strong>${waiting}</strong> conversa${waiting > 1 ? 's' : ''} aguardando atendimento humano`;
+    } else {
+      banner.hidden = true;
+      banner.innerHTML = '';
+    }
+  }
+  const listEl = document.querySelector('#conv-list');
+  if (listEl) {
+    listEl.innerHTML = drawList(ordered);
+    bindList(root);
+    applySearch();
+  }
 }
 
 function drawList(items) {
@@ -114,13 +164,21 @@ function drawList(items) {
   return items
     .map((item) => {
       const name = item.contact_name || item.contact_phone || 'Contato';
+      const needsHuman = isAwaitingHuman(item);
       return `
-      <div class="conv-row">
+      <div class="conv-row${needsHuman ? ' needs-human' : ''}">
         <button type="button" data-id="${escapeHtml(item.id)}" class="${item.id === selected ? 'active' : ''}">
           <span class="avatar" style="background:${avatarColor(name)}">${escapeHtml(initials(name))}</span>
           <span class="wa-copy">
-            <span class="wa-line"><strong>${escapeHtml(name)}</strong><time>${escapeHtml(formatClock(item.last_message_at))}</time></span>
-            <span class="wa-preview">${escapeHtml(item.preview || 'Sem mensagens')}</span>
+            <span class="wa-line">
+              <strong>${escapeHtml(name)}</strong>
+              <time>${escapeHtml(formatClock(item.last_message_at))}</time>
+            </span>
+            <span class="wa-preview">${
+              needsHuman
+                ? '<span class="handoff-tag">Aguardando humano</span> '
+                : ''
+            }${escapeHtml(item.preview || 'Sem mensagens')}</span>
           </span>
         </button>
         <button type="button" class="conv-remove" data-remove="${escapeHtml(item.id)}" aria-label="Apagar conversa">${trashIcon()}</button>
@@ -417,13 +475,18 @@ function bindHandoff(conversationId) {
         method: 'PUT',
         body: { human },
       });
-      if (snapshot.conversation) snapshot.conversation.human_handoff = human ? 1 : 0;
+      if (snapshot.conversation) {
+        snapshot.conversation.human_handoff = human ? 1 : 0;
+        // Toggle manual não gera alerta — só a IA pedindo humano.
+        snapshot.conversation.awaiting_human = 0;
+      }
       const state = document.querySelector('#handoff-state');
       if (state) {
         state.textContent = human
           ? 'Você responde. A IA está pausada nesta conversa.'
           : 'A IA responde esta conversa.';
       }
+      clearAwaitingHumanUi(conversationId);
     } catch (error) {
       paintMode(group, previous);
       toast(error.message);
@@ -436,6 +499,35 @@ function bindHandoff(conversationId) {
 function paintMode(group, human) {
   for (const button of group.querySelectorAll('button[data-mode]')) {
     button.setAttribute('aria-pressed', String((button.dataset.mode === 'humano') === human));
+  }
+}
+
+function clearAwaitingHumanUi(conversationId) {
+  if (snapshot.conversation?.id === conversationId || selected === conversationId) {
+    if (snapshot.conversation) snapshot.conversation.awaiting_human = 0;
+  }
+  const row = document
+    .querySelector(`#conv-list button[data-id="${CSS.escape(conversationId)}"]`)
+    ?.closest('.conv-row');
+  if (row) {
+    row.classList.remove('needs-human');
+    const preview = row.querySelector('.wa-preview');
+    if (preview) {
+      const text = preview.textContent.replace(/^Aguardando humano\s*/, '');
+      preview.textContent = text;
+    }
+  }
+  const waiting = document.querySelectorAll('#conv-list .conv-row.needs-human').length;
+  updateInboxHandoffBadge(waiting);
+  const banner = document.querySelector('#handoff-banner');
+  if (banner) {
+    if (waiting > 0) {
+      banner.hidden = false;
+      banner.innerHTML = `<strong>${waiting}</strong> conversa${waiting > 1 ? 's' : ''} aguardando atendimento humano`;
+    } else {
+      banner.hidden = true;
+      banner.innerHTML = '';
+    }
   }
 }
 
@@ -483,6 +575,9 @@ function bindComposer(send) {
     if (selected) showThread(selected);
     sends += 1;
     send(text)
+      .then(() => {
+        if (draft.conversationId) clearAwaitingHumanUi(draft.conversationId);
+      })
       .catch((error) => {
         draft.failed = true;
         painted = '';

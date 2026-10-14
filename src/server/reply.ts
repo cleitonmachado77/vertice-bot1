@@ -19,8 +19,16 @@ import {
   resolveActiveCycleForConversation,
   type ActiveCycleResolution,
 } from './questionnaire-routing.js';
+import { looksLikeHumanHandoff } from './human-handoff.js';
 import { enqueueOutbound } from './outbound-outbox.js';
-import { getContact, getConversation, hasEvent, insertEvent, recentMessages } from './store.js';
+import {
+  getContact,
+  getConversation,
+  hasEvent,
+  insertEvent,
+  recentMessages,
+  setAwaitingHuman,
+} from './store.js';
 
 const RECENT_MS = 30 * 60 * 1000;
 
@@ -223,6 +231,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     return empty(draft?.detail || 'Sem resposta');
   }
 
+  const handoff = looksLikeHumanHandoff(draft.text);
   await withTransaction(async () => {
     await enqueueOutbound({
       dedupeKey: marker,
@@ -239,18 +248,21 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
         messageId: input.messageId,
         mode: cycle ? 'questionnaire' : 'free',
         cycleId: cycle?.cycle.id,
+        humanHandoff: handoff,
       },
     });
+    if (handoff && contactId) await setAwaitingHuman(contactId, true);
     await insertEvent({
       id: marker,
       event: 'message.received',
       status: 'queued',
-      summary: draft.detail,
+      summary: handoff ? `${draft.detail} · handoff humano` : draft.detail,
       payload: { messageId: input.messageId, conversationId: input.conversationId },
       result: {
         action: 'reply',
         source: draft.source,
         text: draft.text,
+        humanHandoff: handoff,
         mode: cycle
           ? 'questionnaire'
           : resolution.ambiguous.length

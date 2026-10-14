@@ -7,7 +7,8 @@ import {
   markCyclePrompted,
   setConversationCycleContext,
 } from './questionnaire-cycles.js';
-import { getContact, upsertConversation } from './store.js';
+import { looksLikeHumanHandoff } from './human-handoff.js';
+import { getContact, setAwaitingHuman, upsertConversation } from './store.js';
 import { ensureConversation, recordOutbound } from './thread.js';
 
 export type OutboundKind = 'text' | 'template';
@@ -167,6 +168,14 @@ async function finalizeOutbound(job: OutboundJob, response: unknown): Promise<vo
         origin: job.origin,
         raw: { ...parseObject(job.raw_json), outboxId: job.id, provider: response },
       });
+    }
+    if (
+      job.origin === 'agent' &&
+      contactId &&
+      job.kind === 'text' &&
+      looksLikeHumanHandoff(job.text || '')
+    ) {
+      await setAwaitingHuman(contactId, true);
     }
     if (job.cycle_id && job.origin === 'scheduled') await markCycleNotified(job.cycle_id);
     else if (job.cycle_id) await markCyclePrompted(job.cycle_id);

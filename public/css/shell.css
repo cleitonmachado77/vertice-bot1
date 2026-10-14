@@ -96,6 +96,30 @@
   border-radius: 999px;
   background: var(--brand);
 }
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #ea580c;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.shell.collapsed .nav-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  margin-left: 0;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  font-size: 0.58rem;
+  line-height: 14px;
+}
 
 .side-foot {
   display: flex;

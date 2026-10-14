@@ -11,6 +11,7 @@ import {
   resolveFirstContactTemplate,
   sendFirstContactTemplate,
 } from './first-contact.js';
+import { setAwaitingHuman } from './store.js';
 import { ensureConversation, findConversationId, getSessionGate, recordOutbound } from './thread.js';
 
 function isVisible(contact: ContactRecord | undefined): contact is ContactRecord {
@@ -159,6 +160,7 @@ export function registerContactRoutes(): void {
         channelId,
       });
       await recordOutbound({ conversationId, text: message, origin: 'manual', raw: sent });
+      await setAwaitingHuman(contact.id, false);
       json(ctx.res, 200, { ok: true, conversationId });
     } catch (error) {
       fail(ctx, error);

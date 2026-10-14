@@ -61,6 +61,7 @@
   padding: 12px 44px 12px 16px;
   border: 0;
   border-bottom: 1px solid #f3f4f6;
+  border-left: 3px solid transparent;
   border-radius: 0;
   background: transparent;
   color: inherit;
@@ -72,6 +73,36 @@
 }
 .conv-row > button[data-id]:hover { background: #f9fafb; }
 .conv-row > button[data-id].active { background: #f3f4f6; }
+.conv-row.needs-human > button[data-id] {
+  background: #fff7ed;
+  border-left-color: #ea580c;
+}
+.conv-row.needs-human > button[data-id]:hover,
+.conv-row.needs-human > button[data-id].active {
+  background: #ffedd5;
+}
+.handoff-banner {
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.handoff-banner strong { font-weight: 700; }
+.handoff-tag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #ffedd5;
+  color: #c2410c;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  vertical-align: 1px;
+}
 .wa-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .wa-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .wa-line strong {

@@ -11,6 +11,7 @@ import {
   listConversations,
   listEvents,
   listMessages,
+  setAwaitingHuman,
   setHumanHandoff,
 } from './store.js';
 import { hideConversation } from './conversation-visibility.js';
@@ -206,6 +207,8 @@ export function registerPanelRoutes(): void {
         origin: 'manual',
         raw: sent,
       });
+      // Humano respondeu: tira o alerta da Inbox, mantém o modo Humano.
+      if (conversation.contact_id) await setAwaitingHuman(conversation.contact_id, false);
       return { ok: true };
     });
   });

@@ -1,5 +1,6 @@
 import { unhideConversation } from './conversation-visibility.js';
 import { many, one, run } from './db.js';
+import { looksLikeHumanHandoff } from './human-handoff.js';
 import { looksLikePhoneName, phonesMatch } from './phone.js';
 
 const now = () => new Date().toISOString();
@@ -24,6 +25,7 @@ export type ContactRecord = {
   instructions: string;
   bot_enabled: number;
   human_handoff: number;
+  awaiting_human: number;
   blocked: number;
   hidden: number;
   tags_json: string;
@@ -42,6 +44,7 @@ export type ConversationRecord = {
   last_message_at: string;
   channel_id: string;
   human_handoff: number;
+  awaiting_human: number;
   updated_at: string;
 };
 
@@ -141,7 +144,20 @@ export async function getContact(id: string): Promise<ContactRecord | undefined>
 }
 
 export async function setHumanHandoff(contactId: string, active: boolean): Promise<void> {
-  await run('UPDATE contacts SET human_handoff = $1 WHERE id = $2', [active ? 1 : 0, contactId]);
+  if (active) {
+    await run('UPDATE contacts SET human_handoff = 1 WHERE id = $1', [contactId]);
+    return;
+  }
+  await run('UPDATE contacts SET human_handoff = 0, awaiting_human = 0 WHERE id = $1', [contactId]);
+}
+
+/** Alerta na Inbox: IA pediu humano e ninguém respondeu ainda. */
+export async function setAwaitingHuman(contactId: string, active: boolean): Promise<void> {
+  if (active) {
+    await run('UPDATE contacts SET awaiting_human = 1, human_handoff = 1 WHERE id = $1', [contactId]);
+    return;
+  }
+  await run('UPDATE contacts SET awaiting_human = 0 WHERE id = $1', [contactId]);
 }
 
 export async function hideContact(id: string, phone: string): Promise<void> {
@@ -255,12 +271,15 @@ const personKey = `COALESCE(NULLIF(conversations.contact_id, ''), NULLIF(convers
 
 export async function listConversations(): Promise<ConversationRecord[]> {
   const rows = await many<ConversationRecord>(
-    `SELECT id, contact_id, contact_name, contact_phone, status, preview, last_message_at, channel_id, updated_at, human_handoff
+    `SELECT id, contact_id, contact_name, contact_phone, status, preview, last_message_at, channel_id,
+            updated_at, human_handoff, awaiting_human
      FROM (
        SELECT DISTINCT ON (${personKey})
               conversations.id, conversations.contact_id, conversations.contact_name, conversations.contact_phone,
               conversations.status, conversations.preview, conversations.last_message_at, conversations.channel_id,
-              conversations.updated_at, COALESCE(contacts.human_handoff, 0) AS human_handoff
+              conversations.updated_at,
+              COALESCE(contacts.human_handoff, 0) AS human_handoff,
+              COALESCE(contacts.awaiting_human, 0) AS awaiting_human
        FROM conversations
        LEFT JOIN contacts ON contacts.id = conversations.contact_id
        WHERE conversations.hidden = 0
@@ -268,14 +287,17 @@ export async function listConversations(): Promise<ConversationRecord[]> {
      ) people
      ORDER BY last_message_at DESC`,
   );
-  return attachContactNames(rows);
+  const named = await attachContactNames(rows);
+  return syncHandoffFromPreviews(named);
 }
 
 export async function getConversation(id: string): Promise<ConversationRecord | undefined> {
   const row = await one<ConversationRecord>(
     `SELECT conversations.id, conversations.contact_id, conversations.contact_name, conversations.contact_phone,
             conversations.status, conversations.preview, conversations.last_message_at, conversations.channel_id,
-            conversations.updated_at, COALESCE(contacts.human_handoff, 0) AS human_handoff
+            conversations.updated_at,
+            COALESCE(contacts.human_handoff, 0) AS human_handoff,
+            COALESCE(contacts.awaiting_human, 0) AS awaiting_human
      FROM conversations
      LEFT JOIN contacts ON contacts.id = conversations.contact_id
      WHERE conversations.id = $1`,
@@ -287,9 +309,13 @@ export async function getConversation(id: string): Promise<ConversationRecord | 
 
 async function attachContactNames(rows: ConversationRecord[]): Promise<ConversationRecord[]> {
   if (!rows.length) return rows;
-  const contacts = await many<{ id: string; name: string; phone: string; human_handoff: number }>(
-    'SELECT id, name, phone, human_handoff FROM contacts WHERE hidden = 0',
-  );
+  const contacts = await many<{
+    id: string;
+    name: string;
+    phone: string;
+    human_handoff: number;
+    awaiting_human: number;
+  }>('SELECT id, name, phone, human_handoff, awaiting_human FROM contacts WHERE hidden = 0');
   return rows.map((row) => {
     const byId = contacts.find((item) => item.id === row.contact_id);
     const byPhone = contacts.find((item) => phonesMatch(item.phone, row.contact_phone));
@@ -298,8 +324,27 @@ async function attachContactNames(rows: ConversationRecord[]): Promise<Conversat
       ...row,
       contact_name: named?.name || (!looksLikePhoneName(row.contact_name) ? row.contact_name : byId?.name || byPhone?.name || row.contact_name || row.contact_phone),
       human_handoff: byId?.human_handoff ?? byPhone?.human_handoff ?? row.human_handoff,
+      awaiting_human: byId?.awaiting_human ?? byPhone?.awaiting_human ?? row.awaiting_human ?? 0,
     };
   });
+}
+
+/** Recupera handoffs já enviados pela IA quando o alerta ainda não estava ligado. */
+async function syncHandoffFromPreviews(
+  rows: ConversationRecord[],
+): Promise<ConversationRecord[]> {
+  const pending = rows.filter(
+    (row) =>
+      Number(row.awaiting_human) !== 1 &&
+      row.contact_id &&
+      looksLikeHumanHandoff(row.preview || ''),
+  );
+  if (!pending.length) return rows;
+  await Promise.all(pending.map((row) => setAwaitingHuman(row.contact_id, true)));
+  const activated = new Set(pending.map((row) => row.contact_id));
+  return rows.map((row) =>
+    activated.has(row.contact_id) ? { ...row, human_handoff: 1, awaiting_human: 1 } : row,
+  );
 }
 
 export async function upsertMessage(input: {

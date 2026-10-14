@@ -343,6 +343,7 @@ async function migrate(): Promise<void> {
   );
   await run(`CREATE INDEX IF NOT EXISTS idx_contact_messages_contact ON contact_messages(contact_id)`);
   await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS human_handoff INTEGER NOT NULL DEFAULT 0`);
+  await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS awaiting_human INTEGER NOT NULL DEFAULT 0`);
   await run(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'contact'`);
   await run(
     `UPDATE messages SET origin = 'whatsapp' WHERE direction = 'OUTBOUND' AND origin = 'contact'`,

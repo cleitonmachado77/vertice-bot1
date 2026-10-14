@@ -5,7 +5,7 @@ import { renderOverview, stopOverview } from './views/overview.js';
 import { renderContacts, stopContacts } from './views/contacts.js';
 import { renderContact } from './views/contact.js';
 import { renderQuestionnaires } from './views/questionnaires.js';
-import { renderInbox, stopInbox } from './views/inbox.js';
+import { renderInbox, stopInbox, updateInboxHandoffBadge } from './views/inbox.js';
 import { renderSettings } from './views/settings.js';
 
 const routes = {
@@ -91,6 +91,7 @@ async function draw() {
   } else {
     syncChrome(current.name, route.title);
   }
+  refreshInboxHandoffBadge();
 
   const view = document.querySelector('#view');
   if (!view || !isNavActive(token)) return;
@@ -141,12 +142,24 @@ function syncChrome(active, title) {
   });
 }
 
+function refreshInboxHandoffBadge() {
+  api('/api/conversations')
+    .then((data) => {
+      const waiting = (data.items || []).filter((item) => Number(item.awaiting_human) === 1).length;
+      updateInboxHandoffBadge(waiting);
+    })
+    .catch(() => {});
+}
+
 function shell(active, title) {
   const links = Object.entries(routes)
-    .map(
-      ([key, route]) =>
-        `<a class="${key === active ? 'active' : ''}" href="#/${key}">${icon(key)}<span>${escapeHtml(route.title)}</span></a>`,
-    )
+    .map(([key, route]) => {
+      const badge =
+        key === 'inbox'
+          ? '<span class="nav-badge" id="inbox-handoff-badge" hidden></span>'
+          : '';
+      return `<a class="${key === active ? 'active' : ''}" href="#/${key}">${icon(key)}<span>${escapeHtml(route.title)}</span>${badge}</a>`;
+    })
     .join('');
   return `
     <div class="shell${active === 'inbox' ? ' is-inbox' : ''}">
