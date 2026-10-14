@@ -131,10 +131,11 @@ export async function draftQuestionnaireReply(input: {
   if (input.listQuestionsOnly || looksLikeQuestionnaireMeta(input.inbound)) {
     const lines = questions.map((item, index) => `${index + 1}) ${item.body}`);
     const savedList = formatAnswers(questions, alreadySaved);
-    const saved = savedList ? `\n\nJá registradas hoje:\n${savedList}` : '';
+    const dayLabel = formatBrDate(cycleDate);
+    const saved = savedList ? `\n\nJá registradas em ${dayLabel}:\n${savedList}` : '';
     return {
       text: [
-        `As perguntas de “${input.context.questionnaire.name}” são:`,
+        `As perguntas de “${input.context.questionnaire.name}” (${dayLabel}) são:`,
         ...lines,
         saved,
         '',

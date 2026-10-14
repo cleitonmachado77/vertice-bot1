@@ -53,26 +53,88 @@ export function formatBrDate(isoDate: string): string {
   return `${String(parts.d).padStart(2, '0')}/${String(parts.m).padStart(2, '0')}/${parts.y}`;
 }
 
+export type DatedSegment = OccurrenceDateRef & {
+  /** Trecho da mensagem referente a esta data. */
+  text: string;
+};
+
+type DateMarker = {
+  index: number;
+  length: number;
+  date: string;
+  label: string;
+};
+
 /**
  * Interpreta passado / presente / futuro na mensagem para escolher a data do ciclo.
- * Prioridade: data absoluta > relativa (ontem/hoje/amanhã…) > dia da semana.
+ * Com várias datas, usa a primeira citação (veja também splitDatedSegments).
  */
 export function parseOccurrenceDateRef(today: string, text: string): OccurrenceDateRef {
-  const normalized = foldText(text);
+  const [first] = splitDatedSegments(today, text);
+  return {
+    date: first.date,
+    explicit: first.explicit,
+    relation: first.relation,
+    label: first.label,
+  };
+}
+
+/**
+ * Parte a mensagem em trechos por data citada (ex.: “dia 16/10 … e dia 10/10 …”).
+ * Uma data só → um segmento com o texto inteiro.
+ */
+export function splitDatedSegments(today: string, text: string): DatedSegment[] {
+  const original = String(text || '').trim();
+  const normalized = foldText(original);
   if (!normalized) {
-    return { date: today, explicit: false, relation: 'present', label: 'hoje' };
+    return [{ date: today, explicit: false, relation: 'present', label: 'hoje', text: '' }];
   }
 
-  const absolute = parseAbsoluteDate(normalized, today);
-  if (absolute) return withRelation(today, absolute.date, true, absolute.label);
+  const markers = findDateMarkers(today, normalized);
+  if (!markers.length) {
+    return [
+      {
+        date: today,
+        explicit: false,
+        relation: 'present',
+        label: 'hoje',
+        text: original,
+      },
+    ];
+  }
 
-  const relative = parseRelativeDate(normalized, today);
-  if (relative) return withRelation(today, relative.date, true, relative.label);
+  const uniqueDates = new Set(markers.map((item) => item.date));
+  if (uniqueDates.size === 1) {
+    const marker = markers[0];
+    return [
+      {
+        ...withRelation(today, marker.date, true, marker.label),
+        text: original,
+      },
+    ];
+  }
 
-  const weekday = parseWeekdayDate(normalized, today);
-  if (weekday) return withRelation(today, weekday.date, true, weekday.label);
+  const segments: DatedSegment[] = [];
+  for (let i = 0; i < markers.length; i += 1) {
+    const start = i === 0 ? 0 : markers[i].index;
+    const end = i + 1 < markers.length ? markers[i + 1].index : normalized.length;
+    let chunk = normalized.slice(start, end).trim();
+    chunk = chunk.replace(/^(e|e\s+tambem|,)\s+/i, '').trim();
+    if (!chunk) continue;
+    const prev = segments[segments.length - 1];
+    if (prev && prev.date === markers[i].date) {
+      prev.text = `${prev.text} ${chunk}`.trim();
+      continue;
+    }
+    segments.push({
+      ...withRelation(today, markers[i].date, true, markers[i].label),
+      text: chunk,
+    });
+  }
 
-  return { date: today, explicit: false, relation: 'present', label: 'hoje' };
+  return segments.length
+    ? segments
+    : [{ date: today, explicit: false, relation: 'present', label: 'hoje', text: original }];
 }
 
 /** Compat: só a data ISO alvo. */
@@ -95,86 +157,122 @@ function withRelation(
   return { date, explicit, relation: temporalRelation(today, date), label };
 }
 
-function parseRelativeDate(
-  normalized: string,
-  today: string,
-): { date: string; label: string } | undefined {
-  if (/\bdepois\s+de\s+amanha\b/.test(normalized) || /\bapos\s+amanha\b/.test(normalized)) {
-    return { date: shiftIsoDate(today, 2), label: 'depois de amanhã' };
+function findDateMarkers(today: string, normalized: string): DateMarker[] {
+  const markers: DateMarker[] = [];
+
+  for (const match of normalized.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g)) {
+    if (match.index === undefined) continue;
+    const date = `${match[1]}-${match[2]}-${match[3]}`;
+    if (!isValidIso(date)) continue;
+    markers.push({
+      index: match.index,
+      length: match[0].length,
+      date,
+      label: formatBrDate(date),
+    });
   }
-  if (/\banteontem\b/.test(normalized)) {
-    return { date: shiftIsoDate(today, -2), label: 'anteontem' };
+
+  for (const match of normalized.matchAll(
+    /\b(?:dia\s+)?(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b/g,
+  )) {
+    if (match.index === undefined) continue;
+    const resolved = resolveBrDate(today, match[1], match[2], match[3]);
+    if (!resolved) continue;
+    markers.push({
+      index: match.index,
+      length: match[0].length,
+      date: resolved.date,
+      label: resolved.label,
+    });
   }
-  if (/\bontem\b/.test(normalized)) {
-    return { date: shiftIsoDate(today, -1), label: 'ontem' };
+
+  const relatives: { re: RegExp; days: number; label: string }[] = [
+    { re: /\bdepois\s+de\s+amanha\b/g, days: 2, label: 'depois de amanhã' },
+    { re: /\bapos\s+amanha\b/g, days: 2, label: 'depois de amanhã' },
+    { re: /\banteontem\b/g, days: -2, label: 'anteontem' },
+    { re: /\bontem\b/g, days: -1, label: 'ontem' },
+    { re: /\bamanha\b/g, days: 1, label: 'amanhã' },
+    { re: /\bhoje\b/g, days: 0, label: 'hoje' },
+  ];
+  for (const item of relatives) {
+    for (const match of normalized.matchAll(item.re)) {
+      if (match.index === undefined) continue;
+      const date = shiftIsoDate(today, item.days);
+      markers.push({
+        index: match.index,
+        length: match[0].length,
+        date,
+        label: item.label,
+      });
+    }
   }
-  if (/\bamanha\b/.test(normalized)) {
-    return { date: shiftIsoDate(today, 1), label: 'amanhã' };
+
+  for (const item of WEEKDAY_NAMES) {
+    const re = new RegExp(item.re.source, 'g');
+    for (const match of normalized.matchAll(re)) {
+      if (match.index === undefined) continue;
+      const window = normalized.slice(Math.max(0, match.index - 16), match.index + match[0].length + 16);
+      const past = /\b(passad[oa]|anterior|ultima|ultimo)\b/.test(window);
+      const next = /\b(proxim[oa]|que\s+vem)\b/.test(window);
+      const todayWeekday = weekdayFromIsoDate(today);
+      let delta = (item.day - todayWeekday + 7) % 7;
+      if (past) delta = delta === 0 ? -7 : delta - 7;
+      else if (next) delta = delta === 0 ? 7 : delta;
+      const date = shiftIsoDate(today, delta);
+      const prefix = past ? 'passada' : next ? 'próxima' : '';
+      markers.push({
+        index: match.index,
+        length: match[0].length,
+        date,
+        label: prefix ? `${item.label} ${prefix}` : item.label,
+      });
+    }
   }
-  if (/\bhoje\b/.test(normalized)) {
-    return { date: today, label: 'hoje' };
+
+  markers.sort((a, b) => a.index - b.index || b.length - a.length);
+  const filtered: DateMarker[] = [];
+  for (const marker of markers) {
+    const overlaps = filtered.some(
+      (item) =>
+        !(marker.index + marker.length <= item.index || marker.index >= item.index + item.length),
+    );
+    if (!overlaps) filtered.push(marker);
   }
-  return undefined;
+  return filtered;
 }
 
-function parseAbsoluteDate(
-  normalized: string,
+function resolveBrDate(
   today: string,
+  dayRaw: string,
+  monthRaw: string,
+  yearRaw?: string,
 ): { date: string; label: string } | undefined {
-  const iso = normalized.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (iso) {
-    const date = `${iso[1]}-${iso[2]}-${iso[3]}`;
-    if (isValidIso(date)) return { date, label: formatBrDate(date) };
-  }
-
-  const br = normalized.match(/\b(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?\b/);
-  if (!br) return undefined;
   const todayParts = parseIso(today);
   if (!todayParts) return undefined;
-  const day = Number(br[1]);
-  const month = Number(br[2]);
-  let year = br[3]
-    ? br[3].length === 2
-      ? 2000 + Number(br[3])
-      : Number(br[3])
+  const day = Number(dayRaw);
+  const month = Number(monthRaw);
+  let year = yearRaw
+    ? yearRaw.length === 2
+      ? 2000 + Number(yearRaw)
+      : Number(yearRaw)
     : todayParts.y;
-  if (!Number.isFinite(day) || !Number.isFinite(month) || month < 1 || month > 12 || day < 1 || day > 31) {
+  if (
+    !Number.isFinite(day) ||
+    !Number.isFinite(month) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
     return undefined;
   }
   let date = toIso(year, month, day);
   if (!isValidIso(date)) return undefined;
-  // Sem ano: se a data caiu há mais de ~180 dias, assume ano seguinte (intenção futura).
-  if (!br[3] && compareIsoDates(date, shiftIsoDate(today, -180)) < 0) {
+  if (!yearRaw && compareIsoDates(date, shiftIsoDate(today, -180)) < 0) {
     date = toIso(year + 1, month, day);
     if (!isValidIso(date)) return undefined;
   }
   return { date, label: formatBrDate(date) };
-}
-
-function parseWeekdayDate(
-  normalized: string,
-  today: string,
-): { date: string; label: string } | undefined {
-  const hit = WEEKDAY_NAMES.find((item) => item.re.test(normalized));
-  if (!hit) return undefined;
-  const past = /\b(passad[oa]|anterior|ultima|ultimo)\b/.test(normalized);
-  const next = /\b(proxim[oa]|que\s+vem)\b/.test(normalized);
-  const todayWeekday = weekdayFromIsoDate(today);
-  let delta = (hit.day - todayWeekday + 7) % 7;
-  if (past) {
-    delta = delta === 0 ? -7 : delta - 7;
-  } else if (next) {
-    delta = delta === 0 ? 7 : delta;
-  } else if (delta === 0) {
-    // "na segunda" dito na própria segunda → hoje.
-    delta = 0;
-  }
-  const date = shiftIsoDate(today, delta);
-  const prefix = past ? 'passada' : next ? 'próxima' : '';
-  return {
-    date,
-    label: prefix ? `${hit.label} ${prefix}` : hit.label,
-  };
 }
 
 function foldText(value: string): string {

@@ -7,8 +7,10 @@ import {
 } from './questionnaire-agent.js';
 import {
   parseOccurrenceDateRef,
+  splitDatedSegments,
   weekdayFromIsoDate,
 } from './questionnaire-dates.js';
+import { draftMultiDayQuestionnaireReply } from './questionnaire-multi-day.js';
 import {
   looksLikeQuestionnaireEdit,
   looksLikeRfqOrRegisterPayload,
@@ -116,24 +118,48 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   );
   const clock = zonedNow();
   const editLike = looksLikeQuestionnaireEdit(inboundType, inboundText, mediaUrl);
+  const dateSegments = splitDatedSegments(clock.date, inboundText);
   const dateRef = parseOccurrenceDateRef(clock.date, inboundText);
   const targetDate = dateRef.date;
+  const questionnaireIntent =
+    editLike ||
+    wantsQuestionnaireContext(inboundType, inboundText, mediaUrl) ||
+    looksLikeRfqOrRegisterPayload(inboundType, inboundText, mediaUrl);
+  const multiDayDates = [
+    ...new Set(dateSegments.filter((item) => item.explicit).map((item) => item.date)),
+  ];
+  const multiDayIntent = multiDayDates.length > 1 && questionnaireIntent;
   const pointedToOtherDay = dateRef.explicit && targetDate !== clock.date;
-  const otherDayIntent =
-    pointedToOtherDay &&
-    (editLike ||
-      wantsQuestionnaireContext(inboundType, inboundText, mediaUrl) ||
-      looksLikeRfqOrRegisterPayload(inboundType, inboundText, mediaUrl));
+  const otherDayIntent = pointedToOtherDay && questionnaireIntent && !multiDayIntent;
   let resolution: ActiveCycleResolution = { ambiguous: [] };
+  const contactName =
+    contact?.name || input.contactName || conversation?.contact_name || '';
+  const historyRows = history.map((item) => ({ direction: item.direction, text: item.text }));
+
+  let cycle: ActiveCycleContext | undefined;
+  let draft: QuestionnaireDraft | Draft | null = null;
+
+  // Várias datas na mesma mensagem → um ciclo por data.
+  if (multiDayIntent && contactId) {
+    draft = await draftMultiDayQuestionnaireReply({
+      contactId,
+      contactName,
+      segments: dateSegments,
+      inboundType,
+      mediaUrl,
+      history: historyRows,
+      today: clock.date,
+    });
+  }
+
   // Sempre carrega ciclos do dia alvo (inclui concluídos): o agente de questionário decide pelo contexto.
-  const completed = contactId
-    ? await listCompletedCycleContexts(contactId, [targetDate])
-    : [];
+  const completed =
+    !draft && contactId ? await listCompletedCycleContexts(contactId, [targetDate]) : [];
   const explicitlyNamed = selectExplicitlyNamedCycle(completed, inboundText);
-  let cycle = explicitlyNamed;
+  cycle = explicitlyNamed;
 
   // Passado/futuro explícito (ontem, amanhã, 15/10, sexta…): grava naquela data.
-  if (!cycle && !resolution.ambiguous.length && contactId && otherDayIntent) {
+  if (!draft && !cycle && !resolution.ambiguous.length && contactId && otherDayIntent) {
     const otherDay = await listCycleContextsForDate(
       contactId,
       targetDate,
@@ -159,7 +185,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     }
   }
 
-  if (!cycle && !resolution.ambiguous.length && contactId && !otherDayIntent) {
+  if (!draft && !cycle && !resolution.ambiguous.length && contactId && !otherDayIntent) {
     resolution = await resolveActiveCycleForConversation({
       contactId,
       conversationId: input.conversationId,
@@ -171,7 +197,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     cycle = resolution.context;
   }
 
-  if (!cycle && !resolution.ambiguous.length && completed.length && !otherDayIntent) {
+  if (!draft && !cycle && !resolution.ambiguous.length && completed.length && !otherDayIntent) {
     if (completed.length === 1) {
       cycle = completed[0];
     } else {
@@ -183,40 +209,42 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     }
   }
 
-  let draft: QuestionnaireDraft | Draft | null = resolution.ambiguous.length
-    ? {
-        text: [
-          'Encontrei mais de um questionário possível. Qual deseja responder ou atualizar?',
-          ...resolution.ambiguous.map((item, index) => `${index + 1}) ${item.questionnaire.name}`),
-        ].join('\n'),
-        source: 'fallback' as const,
-        detail: 'seleção de questionário necessária',
-        completed: false,
-      }
-    : resolution.selectionConsumed && cycle
+  if (!draft) {
+    draft = resolution.ambiguous.length
       ? {
-          text: cycle.cycle.status === 'completed'
-            ? `Certo! O que deseja corrigir em “${cycle.questionnaire.name}”? Informe o número da pergunta e a nova resposta.`
-            : [
-                `Certo! Vamos responder “${cycle.questionnaire.name}”:`,
-                ...cycle.missing.map((item, index) => `${index + 1}) ${item.body}`),
-              ].join('\n'),
+          text: [
+            'Encontrei mais de um questionário possível. Qual deseja responder ou atualizar?',
+            ...resolution.ambiguous.map((item, index) => `${index + 1}) ${item.questionnaire.name}`),
+          ].join('\n'),
           source: 'fallback' as const,
-          detail: 'questionário selecionado',
+          detail: 'seleção de questionário necessária',
           completed: false,
         }
-    : cycle
-      ? await draftQuestionnaireReply({
-          context: cycle,
-          contactName: contact?.name || input.contactName || conversation?.contact_name || '',
-          inbound: inboundText,
-          inboundType,
-          mediaUrl,
-          history: history.map((item) => ({ direction: item.direction, text: item.text })),
-          forceCompletedEdit: resolution.completedEditContext,
-          today: clock.date,
-        })
-      : null;
+      : resolution.selectionConsumed && cycle
+        ? {
+            text: cycle.cycle.status === 'completed'
+              ? `Certo! O que deseja corrigir em “${cycle.questionnaire.name}”? Informe o número da pergunta e a nova resposta.`
+              : [
+                  `Certo! Vamos responder “${cycle.questionnaire.name}”:`,
+                  ...cycle.missing.map((item, index) => `${index + 1}) ${item.body}`),
+                ].join('\n'),
+            source: 'fallback' as const,
+            detail: 'questionário selecionado',
+            completed: false,
+          }
+        : cycle
+          ? await draftQuestionnaireReply({
+              context: cycle,
+              contactName,
+              inbound: inboundText,
+              inboundType,
+              mediaUrl,
+              history: historyRows,
+              forceCompletedEdit: resolution.completedEditContext,
+              today: clock.date,
+            })
+          : null;
+  }
 
   if (
     resolution.completedEditContext &&

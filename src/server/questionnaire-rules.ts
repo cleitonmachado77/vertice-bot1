@@ -146,9 +146,11 @@ export {
   formatBrDate,
   parseOccurrenceDateRef,
   relativeOccurrenceDate,
+  splitDatedSegments,
   temporalRelation,
   temporalRelationLabel,
   weekdayFromIsoDate,
+  type DatedSegment,
   type OccurrenceDateRef,
   type TemporalRelation,
 } from './questionnaire-dates.js';

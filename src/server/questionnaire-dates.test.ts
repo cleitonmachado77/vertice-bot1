@@ -4,9 +4,11 @@ import {
   formatBrDate,
   parseOccurrenceDateRef,
   relativeOccurrenceDate,
+  splitDatedSegments,
   temporalRelation,
   weekdayFromIsoDate,
 } from './questionnaire-dates.js';
+import { synthesizeMultiDayReply } from './questionnaire-multi-day.js';
 
 const TODAY = '2026-10-14'; // quarta-feira
 
@@ -61,4 +63,45 @@ test('helpers de calendário', () => {
   assert.equal(temporalRelation(TODAY, '2026-10-13'), 'past');
   assert.equal(temporalRelation(TODAY, TODAY), 'present');
   assert.equal(temporalRelation(TODAY, '2026-10-15'), 'future');
+});
+
+test('mensagem com duas datas vira dois segmentos', () => {
+  const segments = splitDatedSegments(
+    TODAY,
+    'dia 16/10 vou receber 70kg de ARROZ e dia 10/10 eu recebi 35 gramas de fermento em pó',
+  );
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0].date, '2026-10-16');
+  assert.match(segments[0].text, /70kg|arroz/i);
+  assert.equal(segments[1].date, '2026-10-10');
+  assert.match(segments[1].text, /35|fermento/i);
+  assert.equal(segments[0].relation, 'future');
+  assert.equal(segments[1].relation, 'past');
+});
+
+test('synthesizeMultiDayReply resume conclusão em vários dias', () => {
+  const text = synthesizeMultiDayReply([
+    {
+      date: '2026-10-16',
+      label: '16/10/2026',
+      draft: {
+        text: 'Perfeito, Cleiton! Anotei tudo, obrigado.',
+        source: 'fallback',
+        detail: 'ok',
+        completed: true,
+      },
+    },
+    {
+      date: '2026-10-10',
+      label: '10/10/2026',
+      draft: {
+        text: 'Perfeito! Anotei tudo, obrigado.',
+        source: 'fallback',
+        detail: 'ok',
+        completed: true,
+      },
+    },
+  ]);
+  assert.match(text, /16\/10\/2026/);
+  assert.match(text, /10\/10\/2026/);
 });
