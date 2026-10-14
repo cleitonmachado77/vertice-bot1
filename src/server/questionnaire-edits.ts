@@ -21,6 +21,10 @@ import { isFullyAnswered } from './questionnaire-rules.js';
 import type { QuestionnaireDraft } from './questionnaire-agent.js';
 import type { MediaUnderstanding } from './media-understand.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
+import {
+  detectRfqFieldFromQuestion,
+  rfqSeparationPromptLines,
+} from './rfq-answer-dictionary.js';
 
 type AnswerEditPlan = {
   answers: ExtractedAnswer[];
@@ -132,8 +136,13 @@ async function planAnswerEdit(input: {
             '{"action":"append|correct|delete|update","clearAll":false,"clearQuestionIds":[],"answers":[{"questionId":"id-exato","text":"valor","type":"text"}]}',
             'Complemento: mescle com o valor anterior. Correção: substitua o valor errado.',
             'Exclusão: use clearAll ou clearQuestionIds. Nunca invente fatos.',
+            ...rfqSeparationPromptLines(),
             'Perguntas:',
-            ...input.questions.map((item, index) => `${index + 1}. id=${item.id} | ${item.body}`),
+            ...input.questions.map((item, index) => {
+              const field = detectRfqFieldFromQuestion(item);
+              const fieldHint = field ? ` | campo=${field}` : '';
+              return `${index + 1}. id=${item.id}${fieldHint} | ${item.body}`;
+            }),
             'Respostas já salvas:',
             formatAnswers(input.questions, input.alreadySaved) || '(nenhuma)',
           ].join('\n'),

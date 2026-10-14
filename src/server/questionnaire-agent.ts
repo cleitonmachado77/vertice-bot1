@@ -7,6 +7,7 @@ import {
   missingQuestions,
   upsertAnswers,
   type ActiveCycleContext,
+  type CycleAnswer,
 } from './questionnaire-cycles.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
 import { applyQuestionnaireEdit, isCorrectionOrDeleteRequest } from './questionnaire-edits.js';
@@ -25,7 +26,12 @@ import {
   normalizeExtractedAnswers,
   parseExtracted,
   salvageExtractAnswers,
+  type ExtractedAnswer,
 } from './questionnaire-extraction.js';
+import {
+  detectRfqFieldFromQuestion,
+  rfqSeparationPromptLines,
+} from './rfq-answer-dictionary.js';
 import {
   asksConfirmation,
   asksForMore,
@@ -69,10 +75,11 @@ export async function draftQuestionnaireReply(input: {
   const questions = input.context.questionnaire.questions;
   const alreadySaved = input.context.answers;
   const already = formatAnswers(questions, alreadySaved);
-  const pending = input.context.missing.map(
-    (item, index) =>
-      `${index + 1}. [${item.id}] ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`,
-  );
+  const pending = input.context.missing.map((item, index) => {
+    const field = detectRfqFieldFromQuestion(item);
+    const fieldHint = field ? ` campo=${field};` : '';
+    return `${index + 1}. [${item.id}]${fieldHint} ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`;
+  });
 
   const sendTime = input.context.questionnaire.send_time || '';
   const system = [
@@ -104,6 +111,7 @@ export async function draftQuestionnaireReply(input: {
     '- Quando já houver respostas salvas e ainda faltarem itens, a "reply" DEVE listar apenas as faltantes.',
     '- NUNCA peça confirmação de respostas já capturadas. Não invente etapa de “confirmar”.',
     '- Se a mensagem cobrir todas as perguntas pendentes: preencha TODOS os "answers", "complete": true, e na reply diga só algo curto como “Anotei tudo, obrigado!” — NÃO repita nem liste as respostas.',
+    ...rfqSeparationPromptLines(),
     '- Aceite texto, áudio (já transcrito), imagem (já descrita) e vídeo.',
     '- Não invente respostas. Não mencione que você é um modelo.',
     '',
@@ -111,7 +119,11 @@ export async function draftQuestionnaireReply(input: {
     `Contato: ${input.contactName || 'não informado'}`,
     'Perguntas do questionário:',
     questions
-      .map((item, index) => `${index + 1}. id=${item.id} | aceita=${item.expected_type} | ${item.body}`)
+      .map((item, index) => {
+        const field = detectRfqFieldFromQuestion(item);
+        const fieldHint = field ? ` | campo=${field}` : '';
+        return `${index + 1}. id=${item.id}${fieldHint} | aceita=${item.expected_type} | ${item.body}`;
+      })
       .join('\n'),
     '',
     'Respostas já salvas:',
@@ -192,13 +204,49 @@ export async function draftQuestionnaireReply(input: {
     return { text: '', source: 'none', detail: 'ciclo já concluído', completed: true };
   }
 
+  // Atalho seguro: respostas claras sem chamar o LLM.
+  if (
+    !wantsEdit &&
+    !isCorrectionOrDeleteRequest(input.inbound) &&
+    looksLikeAnswerPayload(media, input.inbound)
+  ) {
+    const capture = tryHeuristicQuestionnaireCapture({
+      questions,
+      missing: input.context.missing,
+      alreadySaved,
+      media,
+      inbound: input.inbound,
+      contactName: input.contactName,
+    });
+    if (capture) {
+      await persistAcceptedAnswers({
+        cycleId: input.context.cycle.id,
+        questions,
+        alreadySaved,
+        accepted: capture.accepted,
+        media,
+        mediaUrl: input.mediaUrl,
+      });
+      return {
+        text: capture.reply.slice(0, 1500),
+        source: 'fallback',
+        detail: capture.complete ? 'atalho heuristico concluido' : 'atalho heuristico parcial',
+        completed: capture.complete,
+      };
+    }
+  }
+
   try {
     const messages: ChatMessage[] = [
       { role: 'system', content: system },
       ...history,
       { role: 'user', content: userContent },
     ];
-    const raw = await completeChat(messages, { temperature: 0.35, timeoutMs: 40_000 });
+    const raw = await completeChat(messages, {
+      temperature: 0.35,
+      timeoutMs: 40_000,
+      maxTokens: 220,
+    });
     const extracted = parseExtracted(raw, media);
 
     // Mídia sem texto: se o modelo não mapeou, tenta associar à próxima pergunta faltante.
@@ -212,71 +260,58 @@ export async function draftQuestionnaireReply(input: {
     let accepted = filterAccepted(provisional, questions, media);
 
     const acceptedIds = new Set(accepted.map((item) => item.questionId));
-    const pendingAfterExtraction = input.context.missing.filter(
+    let pendingAfterExtraction = input.context.missing.filter(
       (question) => !acceptedIds.has(question.id),
     );
 
-    // Se o modelo “entendeu” na reply mas não preencheu answers, faz uma extração só para gravar.
+    // Heurística antes do salvage LLM (evita 2ª chamada na maioria dos casos).
     if (
       pendingAfterExtraction.length &&
       looksLikeAnswerPayload(media, input.inbound) &&
       (accepted.length < input.context.missing.length || mentionsUnderstoodAnswers(extracted.reply))
     ) {
-      const salvaged = await salvageExtractAnswers({
-        missing: pendingAfterExtraction,
-        userMessage: input.inbound,
-        media,
-      });
-      let extra = filterAccepted(
-        normalizeExtractedAnswers(salvaged, questions, pendingAfterExtraction),
+      const heuristicExtra = filterAccepted(
+        normalizeExtractedAnswers(
+          heuristicExtractAnswers(pendingAfterExtraction, media.summary || input.inbound),
+          questions,
+          pendingAfterExtraction,
+        ),
         questions,
         media,
       );
-      // Fallback determinístico: o LLM às vezes lista na reply e deixa answers vazio.
-      if (!extra.length && accepted.length === 0) {
-        extra = filterAccepted(
-          normalizeExtractedAnswers(
-            heuristicExtractAnswers(pendingAfterExtraction, media.summary || input.inbound),
-            questions,
-            pendingAfterExtraction,
-          ),
+      if (heuristicExtra.length) {
+        accepted = mergeExtracted(accepted, heuristicExtra);
+        const acceptedNow = new Set(accepted.map((item) => item.questionId));
+        pendingAfterExtraction = input.context.missing.filter(
+          (question) => !acceptedNow.has(question.id),
+        );
+      }
+
+      if (
+        pendingAfterExtraction.length &&
+        (accepted.length === 0 || mentionsUnderstoodAnswers(extracted.reply))
+      ) {
+        const salvaged = await salvageExtractAnswers({
+          missing: pendingAfterExtraction,
+          userMessage: input.inbound,
+          media,
+        });
+        const extra = filterAccepted(
+          normalizeExtractedAnswers(salvaged, questions, pendingAfterExtraction),
           questions,
           media,
         );
-      }
-      if (extra.length) {
-        accepted = mergeExtracted(accepted, extra);
+        if (extra.length) accepted = mergeExtracted(accepted, extra);
       }
     }
 
-    const persisted = await withTransaction(async () => {
-      const answers = accepted.length
-        ? await upsertAnswers(
-            input.context.cycle.id,
-            accepted.map((item) => ({
-              questionId: item.questionId,
-              text: item.text,
-              type: item.type,
-              mediaUrl: item.type === 'text' ? '' : media.mediaUrl || input.mediaUrl,
-            })),
-          )
-        : alreadySaved;
-      let missing = missingQuestions(questions, answers);
-      const complete = isFullyAnswered(questions, answers);
-      if (!complete && missing.length === 0) {
-        missing = questions.filter(
-          (question) =>
-            !answers.some(
-              (row) => row.question_id === question.id && row.answer_text.trim(),
-            ),
-        );
-      }
-      await syncCycleProgress(
-        input.context.cycle.id,
-        complete,
-        accepted.length > 0 || alreadySaved.length > 0,
-      );
-      return { answers, missing, complete };
+    const persisted = await persistAcceptedAnswers({
+      cycleId: input.context.cycle.id,
+      questions,
+      alreadySaved,
+      accepted,
+      media,
+      mediaUrl: input.mediaUrl,
     });
     const { answers, missing, complete } = persisted;
 
@@ -319,6 +354,105 @@ export async function draftQuestionnaireReply(input: {
     const detail = error instanceof Error ? error.message : 'Falha no modelo';
     throw new QuestionnaireTemporarilyUnavailableError(detail || fallback || 'Falha no modelo');
   }
+}
+
+/** Extrai respostas sem LLM; null se a mensagem não casar com o questionário. */
+export function tryHeuristicQuestionnaireCapture(input: {
+  questions: QuestionnaireQuestion[];
+  missing: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+  media: MediaUnderstanding;
+  inbound: string;
+  contactName: string;
+}): { accepted: ExtractedAnswer[]; reply: string; complete: boolean } | null {
+  if (!input.missing.length) return null;
+  let accepted = filterAccepted(
+    normalizeExtractedAnswers(
+      heuristicExtractAnswers(input.missing, input.media.summary || input.inbound),
+      input.questions,
+      input.missing,
+    ),
+    input.questions,
+    input.media,
+  );
+  if (!accepted.length && input.media.type !== 'text' && input.media.mediaUrl) {
+    accepted = filterAccepted(
+      autoAssignMedia(input.missing, input.media),
+      input.questions,
+      input.media,
+    );
+  }
+  if (!accepted.length) return null;
+
+  const merged = mergeAnswersForCheck(input.alreadySaved, accepted);
+  const missing = missingQuestions(input.questions, merged);
+  const complete = isFullyAnswered(input.questions, merged);
+  const reply = complete
+    ? completionReply(input.contactName)
+    : defaultQuestionnaireReply(
+        input.questions,
+        merged,
+        missing,
+        false,
+        input.media,
+        input.contactName,
+      );
+  return { accepted, reply, complete };
+}
+
+function mergeAnswersForCheck(
+  alreadySaved: CycleAnswer[],
+  accepted: ExtractedAnswer[],
+): CycleAnswer[] {
+  const byId = new Map(alreadySaved.map((item) => [item.question_id, item]));
+  for (const item of accepted) {
+    byId.set(item.questionId, {
+      id: item.questionId,
+      cycle_id: '',
+      question_id: item.questionId,
+      answer_text: item.text,
+      answer_type: item.type,
+      media_url: '',
+    });
+  }
+  return [...byId.values()];
+}
+
+async function persistAcceptedAnswers(input: {
+  cycleId: string;
+  questions: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+  accepted: ExtractedAnswer[];
+  media: MediaUnderstanding;
+  mediaUrl: string;
+}): Promise<{ answers: CycleAnswer[]; missing: QuestionnaireQuestion[]; complete: boolean }> {
+  return withTransaction(async () => {
+    const answers = input.accepted.length
+      ? await upsertAnswers(
+          input.cycleId,
+          input.accepted.map((item) => ({
+            questionId: item.questionId,
+            text: item.text,
+            type: item.type,
+            mediaUrl: item.type === 'text' ? '' : input.media.mediaUrl || input.mediaUrl,
+          })),
+        )
+      : input.alreadySaved;
+    let missing = missingQuestions(input.questions, answers);
+    const complete = isFullyAnswered(input.questions, answers);
+    if (!complete && missing.length === 0) {
+      missing = input.questions.filter(
+        (question) =>
+          !answers.some((row) => row.question_id === question.id && row.answer_text.trim()),
+      );
+    }
+    await syncCycleProgress(
+      input.cycleId,
+      complete,
+      input.accepted.length > 0 || input.alreadySaved.length > 0,
+    );
+    return { answers, missing, complete };
+  });
 }
 
 async function syncCycleProgress(cycleId: string, complete: boolean, engaged: boolean): Promise<void> {

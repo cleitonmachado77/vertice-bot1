@@ -62,10 +62,12 @@ export async function buildRfqExport(questionnaireId: string): Promise<RfqExport
     workbook.getWorksheet('Requests for Quotations') || workbook.worksheets[0];
   if (!sheet) throw new Error('Planilha modelo sem aba válida');
 
-  // Remove linhas de exemplo/descrição; mantém só o cabeçalho.
-  if (sheet.rowCount > 1) {
-    sheet.spliceRows(2, sheet.rowCount - 1);
+  // Remove linhas de exemplo/descrição do template; mantém só cabeçalhos limpos.
+  clearTemplateBody(sheet);
+  for (const field of RFQ_FIELDS) {
+    sheet.getRow(1).getCell(field.column).value = field.header;
   }
+  sheet.getRow(1).commit();
 
   let written = 0;
   for (const row of rows) {
@@ -102,6 +104,16 @@ export async function buildRfqExport(questionnaireId: string): Promise<RfqExport
     rows: written,
     warnings: [...new Set(warnings)].slice(0, 12),
   };
+}
+
+function clearTemplateBody(sheet: ExcelJS.Worksheet): void {
+  const last = Math.max(sheet.rowCount, 20);
+  if (last > 1) sheet.spliceRows(2, last - 1);
+  for (let r = 2; r <= 20; r++) {
+    const row = sheet.getRow(r);
+    for (const field of RFQ_FIELDS) row.getCell(field.column).value = null;
+    row.commit();
+  }
 }
 
 async function loadCycleRows(questionnaireId: string): Promise<RfqExportRow[]> {

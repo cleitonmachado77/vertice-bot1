@@ -8,7 +8,7 @@ import {
 import { markStaleOutboundUncertain, processNextOutbound } from './outbound-outbox.js';
 import { handleInbound } from './pipeline.js';
 
-const POLL_MS = 750;
+const POLL_MS = 300;
 let timer: NodeJS.Timeout | undefined;
 let running = false;
 

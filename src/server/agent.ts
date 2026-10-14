@@ -175,20 +175,22 @@ export async function previewReply(sample: string): Promise<Draft> {
 
 export async function completeChat(
   messages: ChatMessage[],
-  options: { temperature?: number; timeoutMs?: number } = {},
+  options: { temperature?: number; timeoutMs?: number; maxTokens?: number } = {},
 ): Promise<string> {
   const base = getSetting('agent_base_url').replace(/\/$/, '');
+  const body: Record<string, unknown> = {
+    model: getSetting('agent_model'),
+    temperature: options.temperature ?? Number(getSetting('agent_temperature') || '0.4'),
+    messages,
+  };
+  if (options.maxTokens && options.maxTokens > 0) body.max_tokens = options.maxTokens;
   const response = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${getSetting('agent_api_key')}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: getSetting('agent_model'),
-      temperature: options.temperature ?? Number(getSetting('agent_temperature') || '0.4'),
-      messages,
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(options.timeoutMs ?? 20_000),
   });
   const payload = (await response.json()) as {

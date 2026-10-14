@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   autoAssignMedia,
+  cleanAnswerForQuestion,
   heuristicExtractAnswers,
   normalizeExtractedAnswers,
 } from './questionnaire-extraction.js';
@@ -10,10 +11,11 @@ import type { QuestionnaireQuestion } from './questionnaires.js';
 const question = (
   id: string,
   expected_type = 'any',
+  body = `Pergunta ${id} completa`,
 ): QuestionnaireQuestion => ({
   id,
   questionnaire_id: 'q1',
-  body: `Pergunta ${id} completa`,
+  body,
   expected_type,
   export_field: '',
   sort_order: 0,
@@ -48,7 +50,7 @@ test('fallback de quantidade não inventa resposta de fornecedor', () => {
   const supplier = { ...question('fornecedor'), body: 'Qual foi o fornecedor?' };
   assert.deepEqual(
     heuristicExtractAnswers([quantity, supplier], 'Recebi 10 kg'),
-    [{ questionId: 'quantidade', text: 'Recebi 10 kg', type: 'text' }],
+    [{ questionId: 'quantidade', text: '10 kg', type: 'text' }],
   );
   assert.deepEqual(heuristicExtractAnswers([supplier], 'Recebi 10 kg'), []);
 });
@@ -77,4 +79,33 @@ test('aceita mídia sem descrição quando o tipo esperado é explícito', () =>
     understood: false,
   });
   assert.equal(result[0]?.questionId, 'photo');
+});
+
+test('separa kg e produto quando a mensagem mistura os dois', () => {
+  const qty = question('kg', 'any', 'Quantos kg vc recebeu?');
+  const product = question('produto', 'any', 'Qual produto vc recebeu?');
+  assert.equal(cleanAnswerForQuestion('399kg de cobre', product), 'cobre');
+  assert.equal(cleanAnswerForQuestion('Eu recebi 399kg de cobre', product), 'cobre');
+  assert.equal(cleanAnswerForQuestion('hoje recebi 250 kg de Alumínio', product), 'alumínio');
+  assert.equal(cleanAnswerForQuestion('Alumínio', product), 'alumínio');
+  assert.equal(cleanAnswerForQuestion('cobre 399kg', product), 'cobre');
+  assert.equal(cleanAnswerForQuestion('399kg de cobre', qty), '399 kg');
+  assert.deepEqual(
+    normalizeExtractedAnswers(
+      [
+        { questionId: 'kg', text: '399kg de cobre', type: 'text' },
+        { questionId: 'produto', text: '399kg de cobre', type: 'text' },
+      ],
+      [qty, product],
+      [qty, product],
+    ),
+    [
+      { questionId: 'kg', text: '399 kg', type: 'text' },
+      { questionId: 'produto', text: 'cobre', type: 'text' },
+    ],
+  );
+  assert.deepEqual(heuristicExtractAnswers([qty, product], 'Eu recebi 399kg de cobre'), [
+    { questionId: 'kg', text: '399 kg', type: 'text' },
+    { questionId: 'produto', text: 'cobre', type: 'text' },
+  ]);
 });

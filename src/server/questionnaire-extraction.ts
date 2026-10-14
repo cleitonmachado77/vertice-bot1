@@ -2,6 +2,13 @@ import { completeChat } from './agent.js';
 import { normalizeMediaType, type MediaUnderstanding } from './media-understand.js';
 import { foldText, isNonAnswerText } from './questionnaire-rules.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
+import {
+  cleanRfqAnswer,
+  detectRfqFieldFromQuestion,
+  messageLooksLikeField,
+  rfqSeparationPromptLines,
+  type RfqFieldKey,
+} from './rfq-answer-dictionary.js';
 
 export type ExtractedAnswer = { questionId: string; text: string; type: string };
 export type Extracted = { reply: string; answers: ExtractedAnswer[]; complete: boolean };
@@ -52,17 +59,28 @@ export function autoAssignMedia(
 
 export function normalizeExtractedAnswers(
   answers: ExtractedAnswer[],
-  _questions: QuestionnaireQuestion[],
+  questions: QuestionnaireQuestion[],
   missing: QuestionnaireQuestion[],
 ): ExtractedAnswer[] {
+  const byId = new Map(questions.map((item) => [item.id, item]));
   const validIds = new Set(missing.map((item) => item.id));
   const used = new Set<string>();
   return answers.flatMap((answer) => {
-    const text = answer.text.trim();
+    const question = byId.get(answer.questionId);
+    const raw = answer.text.trim();
+    const text = question ? cleanAnswerForQuestion(raw, question) : raw;
     if (!text || !validIds.has(answer.questionId) || used.has(answer.questionId)) return [];
     used.add(answer.questionId);
     return [{ ...answer, text }];
   });
+}
+
+/** Normaliza a resposta conforme o campo RFQ / tipo da pergunta. */
+export function cleanAnswerForQuestion(text: string, question: QuestionnaireQuestion): string {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  const field = detectRfqFieldFromQuestion(question);
+  return cleanRfqAnswer(raw, field) || raw;
 }
 
 export function filterAccepted(
@@ -121,8 +139,13 @@ export async function salvageExtractAnswers(input: {
             '{"answers":[{"questionId":"id-exato","text":"resposta","type":"text"}]}',
             'Use somente os questionId listados. Não invente.',
             'Só omita uma pergunta se a mensagem claramente não falar dela.',
+            ...rfqSeparationPromptLines(),
             'Perguntas pendentes:',
-            ...input.missing.map((item, index) => `${index + 1}. id=${item.id} | ${item.body}`),
+            ...input.missing.map((item, index) => {
+              const field = detectRfqFieldFromQuestion(item);
+              const fieldHint = field ? ` | campo=${field}` : '';
+              return `${index + 1}. id=${item.id}${fieldHint} | ${item.body}`;
+            }),
           ].join('\n'),
         },
         { role: 'user', content: `Mensagem do usuário:\n${message}` },
@@ -141,25 +164,83 @@ export function heuristicExtractAnswers(
 ): ExtractedAnswer[] {
   const text = String(message || '').trim();
   if (!text || isNonAnswerText(text) || !missing.length) return [];
-  const hasQty = /\d+(\s*[.,]\d+)?\s*(kg|kgs|kilos?|quilos?)/i.test(text);
+
   if (missing.length === 1) {
-    const body = foldText(missing[0].body);
-    const isSupplier = /fornec|catador|nome|quem|entreg/.test(body);
-    if (isSupplier && hasQty) return [];
-    return [{ questionId: missing[0].id, text, type: 'text' }];
+    const only = missing[0];
+    const field = detectRfqFieldFromQuestion(only);
+    if (!fieldAllowsHeuristicText(field, text)) return [];
+    return [
+      {
+        questionId: only.id,
+        text: cleanAnswerForQuestion(text, only),
+        type: 'text',
+      },
+    ];
   }
 
   const results: ExtractedAnswer[] = [];
+  const usedFields = new Set<RfqFieldKey>();
   for (const question of missing) {
-    const body = foldText(question.body);
-    const isQty = /kg|quant|receb|peso|quilo|tonel/.test(body);
-    const isSupplier = /fornec|catador|nome|quem|entreg/.test(body);
-    if (isQty && hasQty) results.push({ questionId: question.id, text, type: 'text' });
-    else if (isSupplier && !hasQty) {
-      results.push({ questionId: question.id, text, type: 'text' });
+    const field = detectRfqFieldFromQuestion(question);
+    if (!field || usedFields.has(field)) continue;
+    if (!messageLooksLikeField(text, field)) continue;
+    // Datas: não atribuir a mesma mensagem a deadline e arrival sem pista no corpo.
+    if (field === 'order_deadline' || field === 'expected_arrival') {
+      const body = foldText(question.body);
+      const mentionsArrival = /chegad|entrega|previs|arrival|fornecimento/.test(body);
+      const mentionsDeadline = /deadline|prazo|compra|comprou/.test(body);
+      if (field === 'expected_arrival' && !mentionsArrival && mentionsDeadline) continue;
+      if (field === 'order_deadline' && !mentionsDeadline && mentionsArrival) continue;
     }
+    const cleaned = cleanAnswerForQuestion(text, question);
+    if (!cleaned) continue;
+    // Só grava produto/qty/preço se a limpeza realmente isolou o valor.
+    if (
+      (field === 'products' || field === 'quantity' || field === 'unit_price') &&
+      cleaned === text &&
+      !messageLooksLikeField(text, field)
+    ) {
+      continue;
+    }
+    usedFields.add(field);
+    results.push({ questionId: question.id, text: cleaned, type: 'text' });
   }
   return results;
+}
+
+function fieldAllowsHeuristicText(field: RfqFieldKey | '', text: string): boolean {
+  if (!field) {
+    // Sem vínculo RFQ: não engolir perguntas/conversa com '?'.
+    return !/\?\s*$/.test(text.trim());
+  }
+  if (
+    field === 'quantity' ||
+    field === 'unit_price' ||
+    field === 'taxes' ||
+    field === 'payment_terms' ||
+    field === 'order_deadline' ||
+    field === 'expected_arrival' ||
+    field === 'order_reference'
+  ) {
+    return messageLooksLikeField(text, field);
+  }
+  if (field === 'products') {
+    if (messageLooksLikeField(text, 'products')) return true;
+    // Nome solto de produto (fora do catálogo), desde que não seja só kg/preço/pergunta.
+    return (
+      !messageLooksLikeField(text, 'quantity') &&
+      !messageLooksLikeField(text, 'unit_price') &&
+      !/\?\s*$/.test(text.trim()) &&
+      /\p{L}{2,}/u.test(text)
+    );
+  }
+  if (field === 'vendor' || field === 'vendor_reference') {
+    if (messageLooksLikeField(text, 'quantity') || messageLooksLikeField(text, 'unit_price')) {
+      return false;
+    }
+    return !/\?\s*$/.test(text.trim()) && /\p{L}{2,}/u.test(text);
+  }
+  return false;
 }
 
 export function mergeExtracted(
