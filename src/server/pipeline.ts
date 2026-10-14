@@ -8,6 +8,7 @@ import {
   getContact,
   hasEvent,
   insertEvent,
+  setHumanUnread,
   upsertContact,
   upsertConversation,
   upsertMessage,
@@ -119,6 +120,7 @@ export async function processInbound(raw: unknown, deliveryId = ''): Promise<Dec
     return await finish(id, event, ignore(id, event, 'Bot pausado neste contato', conversationId, phone, channelId), data);
   }
   if (local?.human_handoff) {
+    if (contactId) await setHumanUnread(contactId, true);
     return await finish(id, event, ignore(id, event, 'Humano assumiu a conversa', conversationId, phone, channelId), data);
   }
   if (content.prompt.includes('Unsupported message')) {

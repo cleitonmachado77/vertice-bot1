@@ -32,6 +32,8 @@ export type Questionnaire = {
   active: number;
   created_at: string;
   updated_at: string;
+  /** Valores fixos da planilha RFQ (sem pergunta). Resposta do contato sobrescreve. */
+  defaultValues: Record<string, string>;
   questions: QuestionnaireQuestion[];
   contactIds: string[];
 };
@@ -45,14 +47,54 @@ export type QuestionnaireInput = {
   sendTime: string;
   templateId?: string;
   active: boolean;
+  defaultValues?: Record<string, string>;
   questions: { id?: string; body: string; expectedType: string; exportField?: string }[];
   contactIds: string[];
 };
 
+type QuestionnaireRow = Omit<Questionnaire, 'questions' | 'contactIds' | 'defaultValues'> & {
+  default_values_json?: string;
+};
+
+export function normalizeDefaultValues(raw: unknown): Record<string, string> {
+  if (!raw) return {};
+  let source: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      source = JSON.parse(raw || '{}');
+    } catch {
+      return {};
+    }
+  }
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+    const field = String(key || '').trim();
+    if (!field || !isRfqFieldKey(field)) continue;
+    const text = String(value ?? '').trim();
+    if (text) out[field] = text;
+  }
+  return out;
+}
+
+function hydrateQuestionnaire(
+  row: QuestionnaireRow,
+  questions: QuestionnaireQuestion[],
+  contactIds: string[],
+): Questionnaire {
+  const { default_values_json: rawDefaults, ...rest } = row;
+  return {
+    ...rest,
+    defaultValues: normalizeDefaultValues(rawDefaults),
+    questions,
+    contactIds,
+  };
+}
+
 export async function listQuestionnaires(): Promise<Questionnaire[]> {
-  const rows = await many<Omit<Questionnaire, 'questions' | 'contactIds'>>(
+  const rows = await many<QuestionnaireRow>(
     `SELECT id, name, greeting, frequency, weekday, send_time, template_id, version,
-            active, created_at, updated_at
+            active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json
      FROM questionnaires WHERE deleted_at = '' ORDER BY name, created_at`,
   );
   const questions = await many<QuestionnaireQuestion>(
@@ -62,22 +104,24 @@ export async function listQuestionnaires(): Promise<Questionnaire[]> {
   const assignments = await many<{ questionnaire_id: string; contact_id: string }>(
     'SELECT questionnaire_id, contact_id FROM questionnaire_assignments',
   );
-  return rows.map((row) => ({
-    ...row,
-    questions: questions.filter((item) => item.questionnaire_id === row.id),
-    contactIds: assignments
-      .filter((item) => item.questionnaire_id === row.id)
-      .map((item) => item.contact_id),
-  }));
+  return rows.map((row) =>
+    hydrateQuestionnaire(
+      row,
+      questions.filter((item) => item.questionnaire_id === row.id),
+      assignments
+        .filter((item) => item.questionnaire_id === row.id)
+        .map((item) => item.contact_id),
+    ),
+  );
 }
 
 export async function getQuestionnaire(
   id: string,
   includeDeleted = false,
 ): Promise<Questionnaire | undefined> {
-  const row = await one<Omit<Questionnaire, 'questions' | 'contactIds'>>(
+  const row = await one<QuestionnaireRow>(
     `SELECT id, name, greeting, frequency, weekday, send_time, template_id, version,
-            active, created_at, updated_at
+            active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json
      FROM questionnaires WHERE id = $1 AND ($2::boolean OR deleted_at = '')`,
     [id, includeDeleted],
   );
@@ -94,7 +138,7 @@ export async function getQuestionnaire(
       [id],
     )
   ).map((item) => item.contact_id);
-  return { ...row, questions, contactIds };
+  return hydrateQuestionnaire(row, questions, contactIds);
 }
 
 export async function saveQuestionnaire(input: QuestionnaireInput): Promise<Questionnaire> {
@@ -125,6 +169,7 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
   if (!questions.length) throw new Error('Inclua ao menos uma pergunta');
 
   const contactIds = [...new Set(input.contactIds.map((id) => id.trim()).filter(Boolean))];
+  const defaultValues = normalizeDefaultValues(input.defaultValues);
   const id = input.id || randomUUID();
   const stamp = now();
   const existing = input.id ? await getQuestionnaire(input.id) : undefined;
@@ -135,9 +180,9 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
   await run(
     `INSERT INTO questionnaires(
        id, name, greeting, frequency, weekday, send_time, template_id, version,
-       active, deleted_at, created_at, updated_at
+       active, deleted_at, created_at, updated_at, default_values_json
      )
-     VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10, $11)
+     VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10, $11, $12)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
        greeting = excluded.greeting,
@@ -148,7 +193,8 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
        version = excluded.version,
        active = excluded.active,
        deleted_at = '',
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at,
+       default_values_json = excluded.default_values_json`,
     [
       id,
       name,
@@ -161,6 +207,7 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
       input.active ? 1 : 0,
       existing?.created_at || stamp,
       stamp,
+      JSON.stringify(defaultValues),
     ],
   );
 
@@ -273,6 +320,7 @@ export async function getQuestionnaireRevision(revisionId: string): Promise<Ques
     active: 1,
     created_at: row.created_at,
     updated_at: row.created_at,
+    defaultValues: {},
     questions,
     contactIds: [],
   };

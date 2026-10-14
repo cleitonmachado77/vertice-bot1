@@ -344,6 +344,7 @@ async function migrate(): Promise<void> {
   await run(`CREATE INDEX IF NOT EXISTS idx_contact_messages_contact ON contact_messages(contact_id)`);
   await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS human_handoff INTEGER NOT NULL DEFAULT 0`);
   await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS awaiting_human INTEGER NOT NULL DEFAULT 0`);
+  await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS human_unread INTEGER NOT NULL DEFAULT 0`);
   await run(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'contact'`);
   await run(
     `UPDATE messages SET origin = 'whatsapp' WHERE direction = 'OUTBOUND' AND origin = 'contact'`,
@@ -400,6 +401,9 @@ async function migrate(): Promise<void> {
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS template_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`);
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS deleted_at TEXT NOT NULL DEFAULT ''`);
+  await run(
+    `ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS default_values_json TEXT NOT NULL DEFAULT '{}'`,
+  );
   await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS revision_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS last_prompted_at TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS last_inbound_at TEXT NOT NULL DEFAULT ''`);

@@ -92,6 +92,7 @@ async function renderModels(root, token = getNavToken()) {
 
         ${modelFields(item)}
         ${assignFields(item, contactItems)}
+        ${defaultValuesFields(item)}
 
         <div class="row form-actions">
           <button class="btn" type="submit">${editing ? 'Salvar' : 'Criar questionário'}</button>
@@ -427,6 +428,30 @@ function assignFields(item = {}, contacts = []) {
     </div>`;
 }
 
+/** Valores fixos da planilha RFQ; resposta do contato sobrescreve. */
+function defaultValuesFields(item = {}) {
+  const defaults = item.defaultValues || {};
+  const fields = (rfqFields || [])
+    .map((field) => {
+      const value = defaults[field.key] || '';
+      return `
+        <div>
+          <label>${escapeHtml(field.header)} <span class="muted">— ${escapeHtml(field.label)}</span></label>
+          <input name="default:${escapeHtml(field.key)}" value="${escapeHtml(value)}" placeholder="Opcional" autocomplete="off" />
+        </div>`;
+    })
+    .join('');
+  if (!fields) return '';
+  return `
+    <div class="field-block">
+      <div class="field-block-head">
+        <span class="field-title">Respostas padrão (RFQ)</span>
+      </div>
+      <p class="muted" style="margin: 0 0 10px;">Preencha campos fixos da planilha. Se o contato responder a pergunta ligada ao mesmo campo, a resposta dele prevalece.</p>
+      <div class="grid-2">${fields}</div>
+    </div>`;
+}
+
 function questionCard(item = {}) {
   const type = item.expected_type || 'any';
   const exportField = item.export_field || '';
@@ -522,6 +547,13 @@ async function save(event, id) {
     exportField: card.querySelector('[name=exportField]')?.value || '',
   }));
   const contactIds = [...form.querySelectorAll('[name=contactIds]:checked')].map((input) => input.value);
+  const defaultValues = {};
+  for (const [key, value] of data.entries()) {
+    if (!String(key).startsWith('default:')) continue;
+    const field = String(key).slice('default:'.length);
+    const text = String(value || '').trim();
+    if (field && text) defaultValues[field] = text;
+  }
   try {
     await api(id ? `/api/questionnaires/${encodeURIComponent(id)}` : '/api/questionnaires', {
       method: id ? 'PUT' : 'POST',
@@ -535,6 +567,7 @@ async function save(event, id) {
         active: data.get('active') === 'on',
         contactIds,
         questions,
+        defaultValues,
       },
     });
     editingId = '';

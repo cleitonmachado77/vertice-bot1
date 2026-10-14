@@ -256,6 +256,10 @@ async function saveFrom(ctx: Ctx, id = '') {
     sendTime: text(input.sendTime, '09:00'),
     templateId: text(input.templateId),
     active: input.active !== false,
+    defaultValues:
+      input.defaultValues && typeof input.defaultValues === 'object'
+        ? (input.defaultValues as Record<string, string>)
+        : {},
     contactIds,
     questions: questions.map((item) => {
       const row = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};

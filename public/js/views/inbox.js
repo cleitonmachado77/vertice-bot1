@@ -114,7 +114,7 @@ function listKey(items) {
   return (items || [])
     .map(
       (item) =>
-        `${item.id}:${item.preview}:${item.last_message_at}:${Number(item.human_handoff) || 0}:${Number(item.awaiting_human) || 0}`,
+        `${item.id}:${item.preview}:${item.last_message_at}:${Number(item.human_handoff) || 0}:${Number(item.awaiting_human) || 0}:${Number(item.human_unread) || 0}`,
     )
     .join('|');
 }
@@ -123,34 +123,61 @@ function isAwaitingHuman(item) {
   return Number(item?.awaiting_human) === 1;
 }
 
-function handoffCount(items) {
-  return (items || []).filter((item) => isAwaitingHuman(item)).length;
+function hasHumanUnread(item) {
+  return Number(item?.human_unread) === 1;
+}
+
+function isHumanMode(item) {
+  return Number(item?.human_handoff) === 1;
+}
+
+function needsAttention(item) {
+  if (isAwaitingHuman(item)) return true;
+  if (hasHumanUnread(item) && item.id !== selected) return true;
+  return false;
+}
+
+function attentionCount(items) {
+  return (items || []).filter((item) => needsAttention(item)).length;
 }
 
 function sortedConversations(items) {
   return [...(items || [])].sort((a, b) => {
-    const ha = isAwaitingHuman(a) ? 1 : 0;
-    const hb = isAwaitingHuman(b) ? 1 : 0;
+    const ha = needsAttention(a) ? 1 : 0;
+    const hb = needsAttention(b) ? 1 : 0;
     if (ha !== hb) return hb - ha;
+    const ua = hasHumanUnread(a) ? 1 : 0;
+    const ub = hasHumanUnread(b) ? 1 : 0;
+    if (ua !== ub) return ub - ua;
     return String(b.last_message_at || '').localeCompare(String(a.last_message_at || ''));
   });
+}
+
+function paintAttentionBanner(items) {
+  const waiting = (items || []).filter((item) => isAwaitingHuman(item)).length;
+  const unread = (items || []).filter(
+    (item) => hasHumanUnread(item) && item.id !== selected,
+  ).length;
+  const total = attentionCount(items);
+  updateInboxHandoffBadge(total);
+  const banner = document.querySelector('#handoff-banner');
+  if (!banner) return;
+  if (!total) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  const parts = [];
+  if (waiting) parts.push(`<strong>${waiting}</strong> aguardando atendimento humano`);
+  if (unread) parts.push(`<strong>${unread}</strong> com nova mensagem no modo humano`);
+  banner.hidden = false;
+  banner.innerHTML = parts.join(' · ');
 }
 
 function paintConversationList(root, items) {
   const ordered = sortedConversations(items);
   listPainted = listKey(items);
-  const waiting = handoffCount(ordered);
-  updateInboxHandoffBadge(waiting);
-  const banner = document.querySelector('#handoff-banner');
-  if (banner) {
-    if (waiting > 0) {
-      banner.hidden = false;
-      banner.innerHTML = `<strong>${waiting}</strong> conversa${waiting > 1 ? 's' : ''} aguardando atendimento humano`;
-    } else {
-      banner.hidden = true;
-      banner.innerHTML = '';
-    }
-  }
+  paintAttentionBanner(ordered);
   const listEl = document.querySelector('#conv-list');
   if (listEl) {
     listEl.innerHTML = drawList(ordered);
@@ -164,9 +191,26 @@ function drawList(items) {
   return items
     .map((item) => {
       const name = item.contact_name || item.contact_phone || 'Contato';
-      const needsHuman = isAwaitingHuman(item);
+      const awaiting = isAwaitingHuman(item);
+      const unread = hasHumanUnread(item) && item.id !== selected;
+      const humanMode = isHumanMode(item);
+      const rowClass = [
+        'conv-row',
+        awaiting || unread ? 'needs-human' : '',
+        humanMode ? 'human-mode' : '',
+        unread ? 'human-unread' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const tag = awaiting
+        ? '<span class="handoff-tag">Aguardando humano</span> '
+        : unread
+          ? '<span class="handoff-tag">Nova mensagem</span> '
+          : humanMode
+            ? '<span class="human-mode-tag">Modo humano</span> '
+            : '';
       return `
-      <div class="conv-row${needsHuman ? ' needs-human' : ''}">
+      <div class="${rowClass}" data-awaiting="${awaiting ? '1' : '0'}">
         <button type="button" data-id="${escapeHtml(item.id)}" class="${item.id === selected ? 'active' : ''}">
           <span class="avatar" style="background:${avatarColor(name)}">${escapeHtml(initials(name))}</span>
           <span class="wa-copy">
@@ -174,11 +218,7 @@ function drawList(items) {
               <strong>${escapeHtml(name)}</strong>
               <time>${escapeHtml(formatClock(item.last_message_at))}</time>
             </span>
-            <span class="wa-preview">${
-              needsHuman
-                ? '<span class="handoff-tag">Aguardando humano</span> '
-                : ''
-            }${escapeHtml(item.preview || 'Sem mensagens')}</span>
+            <span class="wa-preview">${tag}${escapeHtml(item.preview || 'Sem mensagens')}</span>
           </span>
         </button>
         <button type="button" class="conv-remove" data-remove="${escapeHtml(item.id)}" aria-label="Apagar conversa">${trashIcon()}</button>
@@ -268,6 +308,7 @@ async function openConversation(id, token = navToken) {
   syncThreadMode();
   const data = await api(`/api/conversations/${encodeURIComponent(id)}/messages`);
   if (!isNavActive(token)) return;
+  clearHumanUnreadUi(id);
   showThread(id, data);
   lastPull = 0;
 }
@@ -479,6 +520,7 @@ function bindHandoff(conversationId) {
         snapshot.conversation.human_handoff = human ? 1 : 0;
         // Toggle manual não gera alerta — só a IA pedindo humano.
         snapshot.conversation.awaiting_human = 0;
+        snapshot.conversation.human_unread = 0;
       }
       const state = document.querySelector('#handoff-state');
       if (state) {
@@ -487,6 +529,8 @@ function bindHandoff(conversationId) {
           : 'A IA responde esta conversa.';
       }
       clearAwaitingHumanUi(conversationId);
+      clearHumanUnreadUi(conversationId);
+      paintHumanModeUi(conversationId, human);
     } catch (error) {
       paintMode(group, previous);
       toast(error.message);
@@ -502,33 +546,84 @@ function paintMode(group, human) {
   }
 }
 
+function rowEl(conversationId) {
+  return document
+    .querySelector(`#conv-list button[data-id="${CSS.escape(conversationId)}"]`)
+    ?.closest('.conv-row');
+}
+
+function rewritePreviewTag(row) {
+  const preview = row.querySelector('.wa-preview');
+  if (!preview) return;
+  const text = preview.textContent
+    .replace(/^Aguardando humano\s*/, '')
+    .replace(/^Nova mensagem\s*/, '')
+    .replace(/^Modo humano\s*/, '');
+  const unread = row.classList.contains('human-unread');
+  const awaiting = row.dataset.awaiting === '1';
+  const humanMode = row.classList.contains('human-mode');
+  let tag = '';
+  if (awaiting) tag = '<span class="handoff-tag">Aguardando humano</span> ';
+  else if (unread) tag = '<span class="handoff-tag">Nova mensagem</span> ';
+  else if (humanMode) tag = '<span class="human-mode-tag">Modo humano</span> ';
+  preview.innerHTML = `${tag}${escapeHtml(text)}`;
+}
+
+function syncAttentionChrome() {
+  const unread = document.querySelectorAll('#conv-list .conv-row.human-unread').length;
+  const awaiting = document.querySelectorAll('#conv-list .conv-row[data-awaiting="1"]').length;
+  const needs = document.querySelectorAll('#conv-list .conv-row.needs-human').length;
+  updateInboxHandoffBadge(needs);
+  const banner = document.querySelector('#handoff-banner');
+  if (!banner) return;
+  if (!needs) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  const parts = [];
+  if (awaiting) parts.push(`<strong>${awaiting}</strong> aguardando atendimento humano`);
+  if (unread) parts.push(`<strong>${unread}</strong> com nova mensagem no modo humano`);
+  banner.hidden = false;
+  banner.innerHTML = parts.join(' · ') || `<strong>${needs}</strong> conversa(s) precisam de atenção`;
+}
+
 function clearAwaitingHumanUi(conversationId) {
   if (snapshot.conversation?.id === conversationId || selected === conversationId) {
     if (snapshot.conversation) snapshot.conversation.awaiting_human = 0;
   }
-  const row = document
-    .querySelector(`#conv-list button[data-id="${CSS.escape(conversationId)}"]`)
-    ?.closest('.conv-row');
+  const row = rowEl(conversationId);
   if (row) {
-    row.classList.remove('needs-human');
-    const preview = row.querySelector('.wa-preview');
-    if (preview) {
-      const text = preview.textContent.replace(/^Aguardando humano\s*/, '');
-      preview.textContent = text;
-    }
+    row.dataset.awaiting = '0';
+    if (!row.classList.contains('human-unread')) row.classList.remove('needs-human');
+    rewritePreviewTag(row);
   }
-  const waiting = document.querySelectorAll('#conv-list .conv-row.needs-human').length;
-  updateInboxHandoffBadge(waiting);
-  const banner = document.querySelector('#handoff-banner');
-  if (banner) {
-    if (waiting > 0) {
-      banner.hidden = false;
-      banner.innerHTML = `<strong>${waiting}</strong> conversa${waiting > 1 ? 's' : ''} aguardando atendimento humano`;
-    } else {
-      banner.hidden = true;
-      banner.innerHTML = '';
-    }
+  syncAttentionChrome();
+}
+
+function clearHumanUnreadUi(conversationId) {
+  if (snapshot.conversation?.id === conversationId || selected === conversationId) {
+    if (snapshot.conversation) snapshot.conversation.human_unread = 0;
   }
+  const row = rowEl(conversationId);
+  if (row) {
+    row.classList.remove('human-unread');
+    if (row.dataset.awaiting === '1') row.classList.add('needs-human');
+    else row.classList.remove('needs-human');
+    rewritePreviewTag(row);
+  }
+  syncAttentionChrome();
+}
+
+function paintHumanModeUi(conversationId, human) {
+  const row = rowEl(conversationId);
+  if (!row) return;
+  row.classList.toggle('human-mode', human);
+  if (!human) {
+    row.classList.remove('needs-human', 'human-unread');
+    row.dataset.awaiting = '0';
+  }
+  rewritePreviewTag(row);
 }
 
 function mergePending(id, items) {

@@ -30,6 +30,7 @@ export function resolveFirstContactTemplate(
   return (
     templates.find((item) => item.id === requestedId) ||
     templates.find((item) => item.id === configured) ||
+    templates.find((item) => /primeiro.?contato.?atendimento|primeiro_contato_atendimento/i.test(item.name)) ||
     templates.find((item) => /in[ií]cio|primeiro|boas.?vindas|relacionamento/i.test(item.name)) ||
     templates[0]
   );

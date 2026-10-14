@@ -26,6 +26,7 @@ export type ContactRecord = {
   bot_enabled: number;
   human_handoff: number;
   awaiting_human: number;
+  human_unread: number;
   blocked: number;
   hidden: number;
   tags_json: string;
@@ -45,6 +46,7 @@ export type ConversationRecord = {
   channel_id: string;
   human_handoff: number;
   awaiting_human: number;
+  human_unread: number;
   updated_at: string;
 };
 
@@ -145,10 +147,17 @@ export async function getContact(id: string): Promise<ContactRecord | undefined>
 
 export async function setHumanHandoff(contactId: string, active: boolean): Promise<void> {
   if (active) {
-    await run('UPDATE contacts SET human_handoff = 1 WHERE id = $1', [contactId]);
+    // Toggle manual: assume o operador; não mantém alerta de handoff/unread.
+    await run(
+      'UPDATE contacts SET human_handoff = 1, awaiting_human = 0, human_unread = 0 WHERE id = $1',
+      [contactId],
+    );
     return;
   }
-  await run('UPDATE contacts SET human_handoff = 0, awaiting_human = 0 WHERE id = $1', [contactId]);
+  await run(
+    'UPDATE contacts SET human_handoff = 0, awaiting_human = 0, human_unread = 0 WHERE id = $1',
+    [contactId],
+  );
 }
 
 /** Alerta na Inbox: IA pediu humano e ninguém respondeu ainda. */
@@ -158,6 +167,11 @@ export async function setAwaitingHuman(contactId: string, active: boolean): Prom
     return;
   }
   await run('UPDATE contacts SET awaiting_human = 0 WHERE id = $1', [contactId]);
+}
+
+/** Nova mensagem inbound enquanto a conversa está em modo Humano. */
+export async function setHumanUnread(contactId: string, active: boolean): Promise<void> {
+  await run('UPDATE contacts SET human_unread = $1 WHERE id = $2', [active ? 1 : 0, contactId]);
 }
 
 export async function hideContact(id: string, phone: string): Promise<void> {
@@ -272,14 +286,15 @@ const personKey = `COALESCE(NULLIF(conversations.contact_id, ''), NULLIF(convers
 export async function listConversations(): Promise<ConversationRecord[]> {
   const rows = await many<ConversationRecord>(
     `SELECT id, contact_id, contact_name, contact_phone, status, preview, last_message_at, channel_id,
-            updated_at, human_handoff, awaiting_human
+            updated_at, human_handoff, awaiting_human, human_unread
      FROM (
        SELECT DISTINCT ON (${personKey})
               conversations.id, conversations.contact_id, conversations.contact_name, conversations.contact_phone,
               conversations.status, conversations.preview, conversations.last_message_at, conversations.channel_id,
               conversations.updated_at,
               COALESCE(contacts.human_handoff, 0) AS human_handoff,
-              COALESCE(contacts.awaiting_human, 0) AS awaiting_human
+              COALESCE(contacts.awaiting_human, 0) AS awaiting_human,
+              COALESCE(contacts.human_unread, 0) AS human_unread
        FROM conversations
        LEFT JOIN contacts ON contacts.id = conversations.contact_id
        WHERE conversations.hidden = 0
@@ -297,7 +312,8 @@ export async function getConversation(id: string): Promise<ConversationRecord | 
             conversations.status, conversations.preview, conversations.last_message_at, conversations.channel_id,
             conversations.updated_at,
             COALESCE(contacts.human_handoff, 0) AS human_handoff,
-            COALESCE(contacts.awaiting_human, 0) AS awaiting_human
+            COALESCE(contacts.awaiting_human, 0) AS awaiting_human,
+            COALESCE(contacts.human_unread, 0) AS human_unread
      FROM conversations
      LEFT JOIN contacts ON contacts.id = conversations.contact_id
      WHERE conversations.id = $1`,
@@ -315,7 +331,8 @@ async function attachContactNames(rows: ConversationRecord[]): Promise<Conversat
     phone: string;
     human_handoff: number;
     awaiting_human: number;
-  }>('SELECT id, name, phone, human_handoff, awaiting_human FROM contacts WHERE hidden = 0');
+    human_unread: number;
+  }>('SELECT id, name, phone, human_handoff, awaiting_human, human_unread FROM contacts WHERE hidden = 0');
   return rows.map((row) => {
     const byId = contacts.find((item) => item.id === row.contact_id);
     const byPhone = contacts.find((item) => phonesMatch(item.phone, row.contact_phone));
@@ -325,6 +342,7 @@ async function attachContactNames(rows: ConversationRecord[]): Promise<Conversat
       contact_name: named?.name || (!looksLikePhoneName(row.contact_name) ? row.contact_name : byId?.name || byPhone?.name || row.contact_name || row.contact_phone),
       human_handoff: byId?.human_handoff ?? byPhone?.human_handoff ?? row.human_handoff,
       awaiting_human: byId?.awaiting_human ?? byPhone?.awaiting_human ?? row.awaiting_human ?? 0,
+      human_unread: byId?.human_unread ?? byPhone?.human_unread ?? row.human_unread ?? 0,
     };
   });
 }

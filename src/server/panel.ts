@@ -13,6 +13,7 @@ import {
   listMessages,
   setAwaitingHuman,
   setHumanHandoff,
+  setHumanUnread,
 } from './store.js';
 import { hideConversation } from './conversation-visibility.js';
 import {
@@ -158,6 +159,11 @@ export function registerPanelRoutes(): void {
     const pack = async () => {
       const conversation = await getConversation(ctx.params.id);
       if (!conversation) return { items: [], conversation: null, session: null, templates: [], defaultTemplateId: '' };
+      // Abrir a conversa limpa alerta de nova mensagem em modo humano.
+      if (conversation.contact_id && Number(conversation.human_unread) === 1) {
+        await setHumanUnread(conversation.contact_id, false);
+        conversation.human_unread = 0;
+      }
       const session = await getSessionGate(conversation.contact_id, conversation.contact_phone);
       const templates = session.requiresTemplate ? await listApprovedTemplates().catch(() => []) : [];
       return {

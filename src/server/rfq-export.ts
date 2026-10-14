@@ -55,7 +55,7 @@ export async function buildRfqExport(questionnaireId: string): Promise<RfqExport
     );
   }
 
-  const rows = await loadCycleRows(questionnaireId);
+  const rows = await loadCycleRows(questionnaireId, questionnaire.defaultValues || {});
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(templatePath);
   const sheet =
@@ -116,7 +116,10 @@ function clearTemplateBody(sheet: ExcelJS.Worksheet): void {
   }
 }
 
-async function loadCycleRows(questionnaireId: string): Promise<RfqExportRow[]> {
+async function loadCycleRows(
+  questionnaireId: string,
+  defaultValues: Record<string, string> = {},
+): Promise<RfqExportRow[]> {
   const data = await many<CycleRow>(
     `SELECT cyc.id AS cycle_id, cyc.occurrence_date, cyc.status,
             COALESCE(ct.name, '') AS contact_name, COALESCE(ct.phone, '') AS contact_phone,
@@ -133,6 +136,10 @@ async function loadCycleRows(questionnaireId: string): Promise<RfqExportRow[]> {
     [questionnaireId],
   );
 
+  const defaults = Object.fromEntries(
+    RFQ_FIELDS.map((field) => [field.key, String(defaultValues[field.key] || '').trim()]),
+  );
+
   const byCycle = new Map<string, RfqExportRow>();
   for (const item of data) {
     let row = byCycle.get(item.cycle_id);
@@ -143,16 +150,19 @@ async function loadCycleRows(questionnaireId: string): Promise<RfqExportRow[]> {
         contactName: item.contact_name,
         contactPhone: item.contact_phone,
         status: item.status,
-        values: Object.fromEntries(RFQ_FIELDS.map((field) => [field.key, ''])),
+        // Defaults primeiro; respostas do contato sobrescrevem abaixo.
+        values: { ...defaults },
         missingRequired: [],
       };
       byCycle.set(item.cycle_id, row);
     }
     if (item.export_field && item.answer_text.trim()) {
       const previous = row.values[item.export_field] || '';
-      row.values[item.export_field] = previous
-        ? `${previous} | ${item.answer_text.trim()}`
-        : item.answer_text.trim();
+      const answered = item.answer_text.trim();
+      const baseline = defaults[item.export_field] || '';
+      // Se só havia o padrão, substitui; se já havia outra resposta, concatena.
+      row.values[item.export_field] =
+        previous && previous !== baseline ? `${previous} | ${answered}` : answered;
     }
   }
 
