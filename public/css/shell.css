@@ -218,9 +218,11 @@ html[data-theme="light"] .theme-toggle .theme-icon-moon { display: block; }
   flex: 1;
   min-height: 0;
   overflow: auto;
-  width: min(1120px, calc(100% - 48px));
-  margin: 0 auto;
-  padding: 28px 0 48px;
+  width: 100%;
+  margin: 0;
+  /* Largura total do workspace para a scrollbar ficar na borda;
+     o conteúdo permanece centralizado (máx. 1120px, ~24px de cada lado). */
+  padding: 28px max(24px, calc((100% - 1120px) / 2)) 48px;
 }
 .main > .view-pane {
   animation: rise 0.22s ease both;
@@ -487,6 +489,6 @@ html[data-theme="light"] .theme-toggle .theme-icon-moon { display: block; }
     justify-content: flex-start;
     padding-inline: 14px;
   }
-  .main { width: min(1120px, calc(100% - 28px)); padding-top: 22px; }
+  .main { padding: 22px max(14px, calc((100% - 1120px) / 2)) 48px; }
   .topbar { padding-inline: 14px; }
 }
