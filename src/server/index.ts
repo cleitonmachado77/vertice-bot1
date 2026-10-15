@@ -5,9 +5,11 @@ import { registerContactRoutes } from './contact-routes.js';
 import { registerQuestionnaireRoutes } from './questionnaire-routes.js';
 import { registerHookRoutes } from './hooks.js';
 import { registerPanelRoutes } from './panel.js';
+import { registerFormsRoutes } from './forms-routes.js';
 import { registerRoteiroRoutes } from './roteiro-routes.js';
 import { startLiveSync } from './live-sync.js';
 import { startMessageWorker } from './message-worker.js';
+import { startOdooPullScheduler } from './odoo-scheduler.js';
 import { startScheduler } from './scheduler.js';
 
 loadEnv();
@@ -20,6 +22,7 @@ if (!webhookSecret) console.warn('webhook: NEVOA_WEBHOOK_SECRET ausente; entrada
 registerPanelRoutes();
 registerContactRoutes();
 registerQuestionnaireRoutes();
+registerFormsRoutes();
 registerRoteiroRoutes();
 registerHookRoutes();
 
@@ -28,4 +31,5 @@ listen(port);
 await startMessageWorker();
 startLiveSync();
 startScheduler();
-console.log(`Vertice Bot em http://localhost:${port}`);
+startOdooPullScheduler();
+console.log(`Vertice WEB em http://localhost:${port}`);

@@ -22,6 +22,10 @@ const types: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
 };
 
 export function route(method: string, pattern: string, handler: Handler): void {
@@ -102,6 +106,12 @@ export function listen(port: number): void {
 }
 
 async function serveStatic(pathname: string, res: ServerResponse): Promise<void> {
+  if (/^\/forms\/p\/[^/]+\/?$/.test(pathname)) {
+    const html = await readFile(path.join(publicDir, 'forms-public.html'));
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(html);
+    return;
+  }
   const requested = pathname === '/' ? '/index.html' : pathname;
   const filePath = path.normalize(path.join(publicDir, requested));
   if (!filePath.startsWith(publicDir)) {

@@ -309,6 +309,48 @@ const SCHEMA = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  CREATE TABLE IF NOT EXISTS forms_documents (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    header_json TEXT NOT NULL DEFAULT '{}',
+    public_token TEXT UNIQUE,
+    public_enabled INTEGER NOT NULL DEFAULT 0,
+    company_odoo_id TEXT NOT NULL DEFAULT '1',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS forms_document_lines (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    line_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS forms_partners (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    name_key TEXT NOT NULL DEFAULT '',
+    is_customer INTEGER NOT NULL DEFAULT 0,
+    is_vendor INTEGER NOT NULL DEFAULT 0,
+    odoo_id TEXT NOT NULL DEFAULT '',
+    company_odoo_id TEXT NOT NULL DEFAULT '1',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE TABLE IF NOT EXISTS forms_companies (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    vat TEXT NOT NULL DEFAULT '',
+    currency TEXT NOT NULL DEFAULT '',
+    partner_odoo_id TEXT NOT NULL DEFAULT '',
+    country_odoo_id TEXT NOT NULL DEFAULT '',
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
   CREATE INDEX IF NOT EXISTS idx_questionnaire_questions ON questionnaire_questions(questionnaire_id, sort_order);
@@ -319,6 +361,9 @@ const SCHEMA = `
     ON questionnaire_answers(cycle_id, question_id);
   CREATE INDEX IF NOT EXISTS idx_inbound_jobs_due ON inbound_jobs(status, available_at);
   CREATE INDEX IF NOT EXISTS idx_outbound_outbox_due ON outbound_outbox(status, available_at);
+  CREATE INDEX IF NOT EXISTS idx_forms_documents_kind ON forms_documents(kind, updated_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_forms_document_lines_doc ON forms_document_lines(document_id, sort_order);
+  CREATE INDEX IF NOT EXISTS idx_forms_partners_role ON forms_partners(is_customer, is_vendor);
 `;
 
 const DEFAULT_PROMPT = `Você é o assistente de WhatsApp da Vértice Inovação.
@@ -331,6 +376,69 @@ async function migrate(): Promise<void> {
   await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS prompt TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS instructions TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS message_id TEXT NOT NULL DEFAULT ''`);
+  await run(
+    `CREATE TABLE IF NOT EXISTS forms_partners (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      name_key TEXT NOT NULL DEFAULT '',
+      is_customer INTEGER NOT NULL DEFAULT 0,
+      is_vendor INTEGER NOT NULL DEFAULT 0,
+      odoo_id TEXT NOT NULL DEFAULT '',
+      company_odoo_id TEXT NOT NULL DEFAULT '1',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+  );
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS odoo_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS company_odoo_id TEXT NOT NULL DEFAULT '1'`);
+  await run(`ALTER TABLE forms_documents ADD COLUMN IF NOT EXISTS company_odoo_id TEXT NOT NULL DEFAULT '1'`);
+  await run(
+    `CREATE TABLE IF NOT EXISTS forms_companies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      vat TEXT NOT NULL DEFAULT '',
+      currency TEXT NOT NULL DEFAULT '',
+      partner_odoo_id TEXT NOT NULL DEFAULT '',
+      country_odoo_id TEXT NOT NULL DEFAULT '',
+      synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+  );
+  await run(`ALTER TABLE forms_companies ADD COLUMN IF NOT EXISTS country_odoo_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS vat TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS street TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS is_company INTEGER NOT NULL DEFAULT 0`);
+  await run(`UPDATE forms_documents SET company_odoo_id = '1' WHERE company_odoo_id IS NULL OR company_odoo_id = ''`);
+  await run(`UPDATE forms_partners SET company_odoo_id = '1' WHERE company_odoo_id IS NULL OR company_odoo_id = ''`);
+  await run(`ALTER TABLE forms_partners DROP CONSTRAINT IF EXISTS forms_partners_name_key_key`);
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_forms_partners_company_name
+     ON forms_partners(company_odoo_id, name_key)`,
+  );
+  await run(`CREATE INDEX IF NOT EXISTS idx_forms_documents_company ON forms_documents(company_odoo_id, kind)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_forms_partners_company ON forms_partners(company_odoo_id)`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS forms_odoo_refs (
+      id TEXT PRIMARY KEY,
+      ref_type TEXT NOT NULL,
+      odoo_id TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      name_key TEXT NOT NULL DEFAULT '',
+      meta_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_forms_odoo_refs_type_odoo
+     ON forms_odoo_refs(ref_type, odoo_id)`,
+  );
+  await run(
+    `CREATE INDEX IF NOT EXISTS idx_forms_odoo_refs_type_name ON forms_odoo_refs(ref_type, name_key)`,
+  );
   const constraints = await many<{ conname: string }>(
     `SELECT conname FROM pg_constraint WHERE conrelid = 'public.dispatches'::regclass AND contype = 'u'`,
   );
@@ -508,6 +616,11 @@ async function seedSettings(): Promise<void> {
     questionnaire_template_id: '',
     first_contact_template_id: '',
     agent_transcribe_model: env('OPENAI_TRANSCRIBE_MODEL', 'whisper-1'),
+    odoo_url: env('ODOO_URL', 'https://www.reciclarenda.com.br'),
+    odoo_db: env('ODOO_DB', ''),
+    odoo_login: env('ODOO_LOGIN', ''),
+    odoo_api_key: env('ODOO_API_KEY', ''),
+    odoo_active_company_id: env('ODOO_ACTIVE_COMPANY_ID', '1'),
   };
   for (const [key, value] of Object.entries(defaults)) {
     await run('INSERT INTO settings(key, value) VALUES($1, $2) ON CONFLICT(key) DO NOTHING', [key, value]);
