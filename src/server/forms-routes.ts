@@ -1,5 +1,6 @@
-import { hasSession } from './auth.js';
+import { requireAdm, requireAuth } from './auth.js';
 import { getSetting, setSetting } from './db.js';
+import { isAdm, type PublicUser } from './users.js';
 import {
   KIND_LABELS,
   PRODUCT_FIELDS,
@@ -29,12 +30,9 @@ import {
   createFormDocument,
   deleteFormDocument,
   disablePublicLink,
-  enablePublicLink,
-  getFormByPublicToken,
   getFormDocument,
   listFormDocuments,
   saveFormDocument,
-  savePublicForm,
   type FormSaveInput,
 } from './forms.js';
 import {
@@ -59,10 +57,13 @@ import {
 } from './odoo-sync.js';
 import { json, route, type Ctx } from './http.js';
 
-function requireUser(ctx: Ctx): boolean {
-  if (hasSession(ctx.req.headers.cookie)) return true;
-  json(ctx.res, 401, { error: 'Faça login' });
-  return false;
+async function requireUser(ctx: Ctx): Promise<PublicUser | null> {
+  return requireAuth(ctx);
+}
+
+function companyScope(user: PublicUser | null) {
+  if (!user || isAdm(user)) return { canSwitchCompany: true as const };
+  return { companyOdooId: user.companyOdooId, canSwitchCompany: false as const };
 }
 
 function body(ctx: Ctx): Record<string, unknown> {
@@ -113,12 +114,6 @@ function sendWorkbook(ctx: Ctx, result: { buffer: Buffer; filename: string; rows
   ctx.res.end(result.buffer);
 }
 
-function publicUrl(token: string): string {
-  const base = (getSetting('public_base_url') || '').replace(/\/$/, '');
-  const path = `/forms/p/${token}`;
-  return base ? `${base}${path}` : path;
-}
-
 function maskSecret(value: string): string {
   if (!value) return '';
   if (value.length <= 8) return '••••••••';
@@ -160,17 +155,17 @@ function schema() {
 
 export function registerFormsRoutes(): void {
   route('GET', '/api/forms/schema', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, schema());
   });
 
   route('GET', '/api/forms/catalog', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, await getFormsCatalog());
   });
 
   route('GET', '/api/forms/odoo/status', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const live = text(ctx.query.get('live')) === '1';
     // Por padrão não pinga o Odoo (lento). Usa cache / último pull do banco.
     const status = live
@@ -198,41 +193,48 @@ export function registerFormsRoutes(): void {
   });
 
   route('GET', '/api/forms/companies', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    const user = await requireUser(ctx);
+    if (!user) return;
     try {
-      json(ctx.res, 200, await companiesPayload());
+      json(ctx.res, 200, await companiesPayload(companyScope(user)));
     } catch (error) {
       fail(ctx, error);
     }
   });
 
   route('POST', '/api/forms/companies/sync', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireAdm(ctx))) return;
     try {
       const items = await syncCompaniesFromOdoo();
-      json(ctx.res, 200, { ...(await companiesPayload()), synced: items.length });
+      json(ctx.res, 200, { ...(await companiesPayload({ canSwitchCompany: true })), synced: items.length });
     } catch (error) {
       fail(ctx, error);
     }
   });
 
   route('PUT', '/api/forms/companies/active', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    const user = await requireUser(ctx);
+    if (!user) return;
     try {
+      if (!isAdm(user)) {
+        json(ctx.res, 403, { error: 'Gestores Entidade não podem trocar de empresa' });
+        return;
+      }
       const active = await setActiveCompanyId(text(body(ctx).activeId || body(ctx).id));
-      json(ctx.res, 200, { ...(await companiesPayload()), active });
+      json(ctx.res, 200, { ...(await companiesPayload({ canSwitchCompany: true })), active });
     } catch (error) {
       fail(ctx, error);
     }
   });
 
   route('GET', '/api/forms/odoo/settings', async (ctx) => {
-    if (!requireUser(ctx)) return;
-    json(ctx.res, 200, odooSettingsPayload());
+    const user = await requireUser(ctx);
+    if (!user) return;
+    json(ctx.res, 200, { ...odooSettingsPayload(), canEditOdoo: isAdm(user) });
   });
 
   route('PUT', '/api/forms/odoo/settings', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireAdm(ctx))) return;
     try {
       const input = body(ctx);
       if (typeof input.odooUrl === 'string') {
@@ -245,19 +247,19 @@ export function registerFormsRoutes(): void {
       if (typeof input.odooLogin === 'string') await setSetting('odoo_login', text(input.odooLogin));
       const apiKey = text(input.odooApiKey);
       if (apiKey && !apiKey.includes('••••')) await setSetting('odoo_api_key', apiKey);
-      json(ctx.res, 200, odooSettingsPayload());
+      json(ctx.res, 200, { ...odooSettingsPayload(), canEditOdoo: true });
     } catch (error) {
       fail(ctx, error);
     }
   });
 
   route('GET', '/api/forms/odoo/pull/progress', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, getOdooPullProgress());
   });
 
   route('POST', '/api/forms/odoo/pull', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireAdm(ctx))) return;
     try {
       const input = body(ctx);
       const auto = input.auto === true || text(ctx.query.get('auto')) === '1';
@@ -274,17 +276,17 @@ export function registerFormsRoutes(): void {
   });
 
   route('GET', '/api/forms/entities/summary', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, await entitiesSummary());
   });
 
   route('GET', '/api/forms/entities/products', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, { items: await listEntityProducts() });
   });
 
   route('POST', '/api/forms/entities/products', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const input = body(ctx);
       const item = await saveEntityProduct({
@@ -306,7 +308,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('PUT', '/api/forms/entities/products/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const input = body(ctx);
       const item = await saveEntityProduct({
@@ -329,7 +331,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('DELETE', '/api/forms/entities/products/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const doc = await getFormDocument(ctx.params.id);
       if (doc?.kind === 'product') {
@@ -350,7 +352,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('POST', '/api/forms/entities/products/:id/odoo-push', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const doc = await getFormDocument(ctx.params.id);
       if (!doc || doc.kind !== 'product') throw new Error('Produto não encontrado');
@@ -361,14 +363,14 @@ export function registerFormsRoutes(): void {
   });
 
   route('GET', '/api/forms/entities/partners', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const role = text(ctx.query.get('role') || 'all');
     const safe = role === 'customer' || role === 'vendor' ? role : 'all';
     json(ctx.res, 200, { items: await listEntityPartners(safe) });
   });
 
   route('POST', '/api/forms/entities/partners', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const input = body(ctx);
       const item = await saveEntityPartner({
@@ -390,7 +392,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('PUT', '/api/forms/entities/partners/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const input = body(ctx);
       const item = await saveEntityPartner({
@@ -413,7 +415,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('DELETE', '/api/forms/entities/partners/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const partner = await getEntityPartner(ctx.params.id);
       if (partner?.odoo_id) {
@@ -434,7 +436,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('POST', '/api/forms/entities/partners/:id/odoo-push', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       json(ctx.res, 200, { item: await pushPartnerToOdoo(ctx.params.id) });
     } catch (error) {
@@ -443,7 +445,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('POST', '/api/forms/odoo/push', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireAdm(ctx))) return;
     try {
       const kind = text(ctx.query.get('kind') || body(ctx).kind || 'all');
       if (!kind || kind === 'all') {
@@ -460,7 +462,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('GET', '/api/forms', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const kind = text(ctx.query.get('kind'));
     if (!isFormKind(kind)) {
       json(ctx.res, 400, { error: 'Informe kind=sale|purchase|product' });
@@ -471,7 +473,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('POST', '/api/forms', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const kind = text(body(ctx).kind) as FormKind;
       if (!isFormKind(kind)) throw new Error('Tipo inválido');
@@ -482,7 +484,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('GET', '/api/forms/export', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const kind = text(ctx.query.get('kind'));
       if (!isFormKind(kind)) throw new Error('Informe kind=sale|purchase|product');
@@ -493,30 +495,15 @@ export function registerFormsRoutes(): void {
   });
 
   route('GET', '/api/forms/public/:token', async (ctx) => {
-    const item = await getFormByPublicToken(ctx.params.token);
-    if (!item) {
-      json(ctx.res, 404, { error: 'Link inválido ou desativado' });
-      return;
-    }
-    json(ctx.res, 200, {
-      item,
-      fields: schema().fields[item.kind],
-      kindLabel: KIND_LABELS[item.kind],
-      catalog: await getFormsCatalog(),
-    });
+    json(ctx.res, 403, { error: 'Preenchimento público desativado. Faça login para enviar informações.' });
   });
 
   route('PUT', '/api/forms/public/:token', async (ctx) => {
-    try {
-      const item = await savePublicForm(ctx.params.token, parseSave(body(ctx)));
-      json(ctx.res, 200, { item, ok: true });
-    } catch (error) {
-      fail(ctx, error, 404);
-    }
+    json(ctx.res, 403, { error: 'Preenchimento público desativado. Faça login para enviar informações.' });
   });
 
   route('GET', '/api/forms/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const item = await getFormDocument(ctx.params.id);
     if (!item) {
       json(ctx.res, 404, { error: 'Formulário não encontrado' });
@@ -526,7 +513,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('PUT', '/api/forms/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const current = await getFormDocument(ctx.params.id);
       if (!current) throw new Error('Formulário não encontrado');
@@ -541,7 +528,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('DELETE', '/api/forms/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       const current = await getFormDocument(ctx.params.id);
       if (!current) throw new Error('Formulário não encontrado');
@@ -562,7 +549,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('GET', '/api/forms/:id/export', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       sendWorkbook(ctx, await exportFormById(ctx.params.id));
     } catch (error) {
@@ -571,7 +558,7 @@ export function registerFormsRoutes(): void {
   });
 
   route('POST', '/api/forms/:id/odoo-push', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       json(ctx.res, 200, { item: await pushFormToOdoo(ctx.params.id) });
     } catch (error) {
@@ -580,20 +567,12 @@ export function registerFormsRoutes(): void {
   });
 
   route('POST', '/api/forms/:id/public-link', async (ctx) => {
-    if (!requireUser(ctx)) return;
-    try {
-      const item = await enablePublicLink(ctx.params.id);
-      json(ctx.res, 200, {
-        item,
-        url: item.public_token ? publicUrl(item.public_token) : '',
-      });
-    } catch (error) {
-      fail(ctx, error);
-    }
+    if (!(await requireUser(ctx))) return;
+    json(ctx.res, 403, { error: 'Link externo desativado. Apenas usuários logados podem enviar informações.' });
   });
 
   route('DELETE', '/api/forms/:id/public-link', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     try {
       json(ctx.res, 200, { item: await disablePublicLink(ctx.params.id) });
     } catch (error) {

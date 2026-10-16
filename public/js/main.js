@@ -2,8 +2,8 @@ import { api, ensureSession, invalidateSession } from './api.js';
 import { escapeHtml, viewLoading } from './ui.js';
 import { nextNavToken, isNavActive } from './nav.js';
 import { initTheme } from './theme.js';
-import { mountCompanySwitcher } from './company-switcher.js';
-import { renderHub } from './views/hub.js';
+import { clearCompaniesCache, mountCompanySwitcher, mountEntityBadge } from './company-switcher.js';
+import { renderHub, stopHubDashboard } from './views/hub.js';
 import { renderWebSettings } from './views/web-settings.js';
 import { renderForms, tabFromSlug } from './views/forms.js';
 import { renderOverview, stopOverview } from './views/overview.js';
@@ -59,15 +59,19 @@ function currentRoute() {
       key: 'web',
     };
   }
-  if (raw === 'web/settings' || raw === 'web-settings') {
+  if (raw === 'web/settings' || raw === 'web-settings' || raw.startsWith('web/settings/')) {
+    const settingsTab =
+      raw === 'web/settings' || raw === 'web-settings'
+        ? 'usuarios'
+        : decodeURIComponent(raw.slice('web/settings/'.length) || 'usuarios') || 'usuarios';
     return {
       contactId: '',
       inboxFocus: null,
-      settingsTab: '',
+      settingsTab,
       formsKind: '',
       formsSlug: '',
       name: 'web-settings',
-      key: 'web-settings',
+      key: `web-settings|${settingsTab}`,
     };
   }
   if (raw === 'forms' || raw.startsWith('forms/')) {
@@ -112,6 +116,7 @@ function stopViews() {
   stopInbox();
   stopContacts();
   stopOverview();
+  stopHubDashboard();
 }
 
 async function draw() {
@@ -149,29 +154,38 @@ async function draw() {
   }
 
   if (current.name === 'web') {
-    mountWebChrome();
+    mountWebChrome(me);
     const view = document.querySelector('#hub-view');
     if (!view || !isNavActive(token)) return;
-    await renderHub(view);
+    await renderHub(view, me);
     return;
   }
 
   if (current.name === 'web-settings') {
-    mountWebChrome();
+    if (!isAdmSession(me)) {
+      location.replace('#/web');
+      return;
+    }
+    mountWebChrome(me);
     const view = document.querySelector('#hub-view');
     if (!view || !isNavActive(token)) return;
-    await renderWebSettings(view);
+    await renderWebSettings(view, me, current.settingsTab || 'usuarios');
     return;
   }
 
   if (current.name === 'forms') {
-    mountFormsChrome();
+    mountFormsChrome(me);
     const view = document.querySelector('#forms-view');
     if (!view || !isNavActive(token)) return;
     await renderForms(view, current.formsKind || 'product', token, {
       soft: softForms,
       slug: current.formsSlug || '',
     });
+    return;
+  }
+
+  if (!isAdmSession(me)) {
+    location.replace('#/web');
     return;
   }
 
@@ -194,14 +208,85 @@ async function draw() {
   }
 }
 
-function mountWebChrome() {
-  if (document.querySelector('.hub-shell') && !document.querySelector('.forms-shell')) {
-    const host = document.querySelector('#company-switcher');
+function sessionUserLabel(me) {
+  const user = me?.user;
+  if (!user) return '';
+  const role = user.role === 'adm' ? 'ADM' : 'Gestor Entidade';
+  return `${user.name || user.email} · ${role}`;
+}
+
+function isAdmSession(me) {
+  return Boolean(me?.isAdm || me?.user?.role === 'adm');
+}
+
+function admTopbarControlsHtml() {
+  return `
+          <div id="company-switcher"></div>
+          <a class="btn-ghost" href="#/web/settings/usuarios" data-settings-link>Configurações</a>`;
+}
+
+function entityBadgeHtml() {
+  return `<div id="entity-badge"></div>`;
+}
+
+function ensureBeforeLogout(actions, el) {
+  const logout = actions.querySelector('#logout-hub, #logout-forms');
+  if (logout) actions.insertBefore(el, logout);
+  else actions.appendChild(el);
+}
+
+function syncAdmTopbar(actions, me) {
+  if (!actions) return;
+  const chip = actions.querySelector('#session-chip');
+  if (chip) chip.textContent = sessionUserLabel(me);
+
+  const adm = isAdmSession(me);
+  let host = actions.querySelector('#company-switcher');
+  let settings = actions.querySelector('[data-settings-link]');
+  let entity = actions.querySelector('#entity-badge');
+
+  if (adm) {
+    entity?.remove();
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'company-switcher';
+      ensureBeforeLogout(actions, host);
+    }
+    if (!settings) {
+      settings = document.createElement('a');
+      settings.className = 'btn-ghost';
+      settings.href = '#/web/settings/usuarios';
+      settings.setAttribute('data-settings-link', '');
+      settings.textContent = 'Configurações';
+      ensureBeforeLogout(actions, settings);
+    }
+    if (chip && host && chip.nextElementSibling !== host) {
+      actions.insertBefore(chip, host);
+    }
     if (host && !host.querySelector('[data-company-switcher], .company-switcher--empty')) {
-      mountCompanySwitcher(host);
+      mountCompanySwitcher(host, me);
     }
     return;
   }
+
+  host?.remove();
+  settings?.remove();
+  if (!entity) {
+    entity = document.createElement('div');
+    entity.id = 'entity-badge';
+    if (chip) actions.insertBefore(entity, chip.nextSibling);
+    else ensureBeforeLogout(actions, entity);
+  }
+  mountEntityBadge(entity, me);
+}
+
+function mountWebChrome(me) {
+  if (document.querySelector('.hub-shell') && !document.querySelector('.forms-shell')) {
+    syncAdmTopbar(document.querySelector('.hub-topbar-actions'), me);
+    return;
+  }
+  const adm = isAdmSession(me);
+  const midControls = adm ? admTopbarControlsHtml() : entityBadgeHtml();
   app.innerHTML = `
     <div class="hub-shell">
       <header class="hub-topbar">
@@ -209,25 +294,25 @@ function mountWebChrome() {
           <img class="hub-topbar-logo-web" src="/logo-vertice-marca.png" alt="Vértice" />
         </a>
         <div class="hub-topbar-actions">
-          <div id="company-switcher"></div>
-          <a class="btn-ghost" href="#/web/settings">Configurações</a>
+          <span class="session-chip" id="session-chip">${escapeHtml(sessionUserLabel(me))}</span>
+          ${midControls}
           <button class="btn-ghost" id="logout-hub" type="button">Sair</button>
         </div>
       </header>
       <main class="hub-main" id="hub-view"></main>
     </div>`;
   document.querySelector('#logout-hub')?.addEventListener('click', leave);
-  mountCompanySwitcher(document.querySelector('#company-switcher'));
+  if (adm) mountCompanySwitcher(document.querySelector('#company-switcher'), me);
+  else mountEntityBadge(document.querySelector('#entity-badge'), me);
 }
 
-function mountFormsChrome() {
+function mountFormsChrome(me) {
   if (document.querySelector('.forms-shell')) {
-    const host = document.querySelector('#company-switcher');
-    if (host && !host.querySelector('[data-company-switcher], .company-switcher--empty')) {
-      mountCompanySwitcher(host);
-    }
+    syncAdmTopbar(document.querySelector('.forms-topbar-actions'), me);
     return;
   }
+  const adm = isAdmSession(me);
+  const midControls = adm ? admTopbarControlsHtml() : entityBadgeHtml();
   app.innerHTML = `
     <div class="forms-shell">
       <header class="forms-topbar">
@@ -235,15 +320,16 @@ function mountFormsChrome() {
           <img class="forms-topbar-logo" src="/logo-vertice-forms.png" alt="Vertice Forms" />
         </a>
         <div class="forms-topbar-actions">
-          <div id="company-switcher"></div>
-          <a class="btn-ghost" href="#/web/settings">Configurações</a>
+          <span class="session-chip" id="session-chip">${escapeHtml(sessionUserLabel(me))}</span>
+          ${midControls}
           <button class="btn-ghost" id="logout-forms" type="button">Sair</button>
         </div>
       </header>
       <main class="forms-main main" id="forms-view"></main>
     </div>`;
   document.querySelector('#logout-forms')?.addEventListener('click', leave);
-  mountCompanySwitcher(document.querySelector('#company-switcher'));
+  if (adm) mountCompanySwitcher(document.querySelector('#company-switcher'), me);
+  else mountEntityBadge(document.querySelector('#entity-badge'), me);
 }
 
 function mountBotChrome(active, title) {
@@ -277,6 +363,7 @@ function bindChrome(frame) {
 async function leave() {
   await api('/api/logout', { method: 'POST', body: {} });
   invalidateSession();
+  clearCompaniesCache();
   drawnKey = '';
   nextNavToken();
   stopViews();
@@ -356,9 +443,28 @@ function renderLogin() {
           <div class="gate-form-head">
             <img class="gate-logo" src="/logo-vertice-marca.png" alt="Vértice" />
             <h1>Acesso à plataforma</h1>
+            <p class="gate-lead">Entre com seu e-mail e senha</p>
           </div>
 
           <div class="gate-form-body">
+            <label class="gate-label" for="email">E-mail</label>
+            <div class="gate-field">
+              <span class="gate-field-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <rect x="3" y="5" width="18" height="14" rx="2"/>
+                  <path d="m3 7 9 6 9-6"/>
+                </svg>
+              </span>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                placeholder="seu@email.com"
+                autocomplete="username"
+                required
+              />
+            </div>
+
             <label class="gate-label" for="password">Senha</label>
             <div class="gate-field">
               <span class="gate-field-icon" aria-hidden="true">
@@ -386,7 +492,7 @@ function renderLogin() {
             <button class="gate-submit" type="submit">Entrar</button>
           </div>
 
-          <p class="gate-foot">Vértice Inovação · acesso restrito</p>
+          <p class="gate-foot">Vértice Inovação · ADM ou Gestor Entidade</p>
         </form>
       </div>
     </section>`;
@@ -400,12 +506,15 @@ function renderLogin() {
 
   document.querySelector('#login-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const password = new FormData(event.currentTarget).get('password');
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get('email') || '').trim();
+    const password = form.get('password');
     const submit = event.currentTarget.querySelector('.gate-submit');
     submit.disabled = true;
     try {
-      await api('/api/login', { method: 'POST', body: { password } });
+      await api('/api/login', { method: 'POST', body: { email, password } });
       invalidateSession();
+      clearCompaniesCache();
       location.hash = '#/web';
       await draw();
     } catch (error) {

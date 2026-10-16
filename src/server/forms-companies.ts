@@ -66,10 +66,15 @@ export async function getActiveCompany(): Promise<FormsCompany | null> {
   );
 }
 
-export async function companiesPayload(): Promise<{
+export async function companiesPayload(options?: {
+  /** Filtra/trava empresas para usuário vinculado a uma empresa. */
+  companyOdooId?: string;
+  canSwitchCompany?: boolean;
+}): Promise<{
   items: FormsCompany[];
   activeId: string;
   active: FormsCompany | null;
+  canSwitchCompany: boolean;
 }> {
   let items = await listCompanies();
   if (!items.length) {
@@ -79,12 +84,27 @@ export async function companiesPayload(): Promise<{
       items = [];
     }
   }
-  const activeId = getActiveCompanyId();
-  const active = items.find((item) => item.id === activeId) || items.find((item) => item.id === DEFAULT_COMPANY_ODOO_ID) || null;
-  if (active && active.id !== activeId) {
+
+  const lockedId = String(options?.companyOdooId || '').trim();
+  const canSwitchCompany = options?.canSwitchCompany !== false && !lockedId;
+
+  if (lockedId) {
+    items = items.filter((item) => item.id === lockedId);
+    if (items.length && getActiveCompanyId() !== lockedId) {
+      await setSetting('odoo_active_company_id', lockedId);
+    }
+  }
+
+  const activeId = lockedId || getActiveCompanyId();
+  const active =
+    items.find((item) => item.id === activeId) ||
+    items.find((item) => item.id === DEFAULT_COMPANY_ODOO_ID) ||
+    items[0] ||
+    null;
+  if (!lockedId && active && active.id !== getActiveCompanyId()) {
     await setSetting('odoo_active_company_id', active.id);
   }
-  return { items, activeId: active?.id || activeId, active };
+  return { items, activeId: active?.id || activeId, active, canSwitchCompany };
 }
 
 export async function syncCompaniesFromOdoo(): Promise<FormsCompany[]> {

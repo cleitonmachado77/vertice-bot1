@@ -325,7 +325,6 @@ function listRow(item, activeId, schema, kind) {
 
 function editorHtml(doc, fields, kind, catalog, schema) {
   const hasLines = (fields.lines || []).length > 0;
-  const publicUrl = doc.public_enabled && doc.public_token ? `${location.origin}/forms/p/${doc.public_token}` : '';
   const statuses = statusOptions(schema, kind);
   const currentStatus = String(doc.header?.odoo_state || doc.status || 'draft');
   const locked = isOrderLocked(doc, kind);
@@ -394,19 +393,6 @@ function editorHtml(doc, fields, kind, catalog, schema) {
             </div>`
           : ''
       }
-      <div class="forms-section">
-        <h2>Link externo</h2>
-        <p class="muted">Permite preenchimento sem login (com o mesmo catálogo).</p>
-        ${
-          publicUrl
-            ? `<div class="forms-link-box">
-                <input readonly value="${escapeHtml(publicUrl)}" id="public-link-input" />
-                <button class="btn-ghost" type="button" data-copy-link>Copiar</button>
-                <button class="btn-ghost" type="button" data-disable-link${lockAttr}>Desativar</button>
-              </div>`
-            : `<button class="btn-ghost" type="button" data-enable-link${lockAttr}>Gerar link público</button>`
-        }
-      </div>
       <div class="row forms-actions">
         <button class="btn" type="submit"${lockAttr}>Salvar</button>
       </div>
@@ -837,7 +823,7 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
   if (locked) {
     form
       .querySelectorAll(
-        'input:not([id="public-link-input"]), select, textarea, button[type="submit"], [data-delete], [data-add-line], [data-remove-line], [data-enable-link], [data-disable-link], [data-odoo-retry]',
+        'input, select, textarea, button[type="submit"], [data-delete], [data-add-line], [data-remove-line], [data-odoo-retry]',
       )
       .forEach((el) => {
         el.disabled = true;
@@ -900,34 +886,6 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
     }
   });
 
-  form.querySelector('[data-enable-link]')?.addEventListener('click', async () => {
-    try {
-      const result = await api(`/api/forms/${doc.id}/public-link`, { method: 'POST', body: {} });
-      const url = result.url?.startsWith('http') ? result.url : `${location.origin}${result.url}`;
-      await navigator.clipboard?.writeText(url).catch(() => {});
-      toast('Link gerado');
-      await refresh(root, kind, schema, doc.id, token);
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-
-  form.querySelector('[data-disable-link]')?.addEventListener('click', async () => {
-    try {
-      await api(`/api/forms/${doc.id}/public-link`, { method: 'DELETE' });
-      toast('Link desativado');
-      await refresh(root, kind, schema, doc.id, token);
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-
-  form.querySelector('[data-copy-link]')?.addEventListener('click', async () => {
-    const input = form.querySelector('#public-link-input');
-    if (!input) return;
-    await navigator.clipboard?.writeText(input.value).catch(() => {});
-    toast('Link copiado');
-  });
 }
 
 function bindProductAutofill(form, catalog) {

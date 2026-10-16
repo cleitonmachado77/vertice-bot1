@@ -6,6 +6,7 @@ import { registerQuestionnaireRoutes } from './questionnaire-routes.js';
 import { registerHookRoutes } from './hooks.js';
 import { registerPanelRoutes } from './panel.js';
 import { registerFormsRoutes } from './forms-routes.js';
+import { registerHubDashboardRoutes } from './hub-dashboard.js';
 import { registerRoteiroRoutes } from './roteiro-routes.js';
 import { startLiveSync } from './live-sync.js';
 import { startMessageWorker } from './message-worker.js';
@@ -23,6 +24,7 @@ registerPanelRoutes();
 registerContactRoutes();
 registerQuestionnaireRoutes();
 registerFormsRoutes();
+registerHubDashboardRoutes();
 registerRoteiroRoutes();
 registerHookRoutes();
 

@@ -1,4 +1,12 @@
-import { hasSession, passwordOk, sessionCookie, clearCookie } from './auth.js';
+import {
+  clearCookie,
+  getSessionUser,
+  mePayload,
+  passwordOk,
+  requireAdm,
+  requireAuth,
+  sessionCookie,
+} from './auth.js';
 import { getSetting, setSetting } from './db.js';
 import { json, route, type Ctx } from './http.js';
 import { NevoaError, nevoaRequest, sendWhatsappText } from './nevoa.js';
@@ -22,11 +30,21 @@ import {
   sendFirstContactTemplate,
 } from './first-contact.js';
 import { getSessionGate, recordOutbound } from './thread.js';
+import {
+  authenticateUser,
+  createUser,
+  deleteUser,
+  ensureBootstrapAdmin,
+  getUserByEmail,
+  listUsers,
+  updateUser,
+  type UserRole,
+} from './users.js';
+import { DEFAULT_COMPANY_ODOO_ID, listCompanies, setActiveCompanyId } from './forms-companies.js';
+import { env } from './env.js';
 
-function requireUser(ctx: Ctx): boolean {
-  if (hasSession(ctx.req.headers.cookie)) return true;
-  json(ctx.res, 401, { error: 'Faça login' });
-  return false;
+async function requireUser(ctx: Ctx): Promise<boolean> {
+  return Boolean(await requireAuth(ctx));
 }
 
 function body(ctx: Ctx): Record<string, unknown> {
@@ -58,14 +76,49 @@ async function guard<T>(ctx: Ctx, action: () => Promise<T>): Promise<void> {
 
 export function registerPanelRoutes(): void {
   route('POST', '/api/login', async (ctx) => {
-    const password = text(body(ctx).password);
-    if (!passwordOk(password)) {
-      json(ctx.res, 401, { error: 'Senha incorreta' });
+    const input = body(ctx);
+    const email = text(input.email).trim();
+    const password = text(input.password);
+    const secure = ctx.req.headers['x-forwarded-proto'] === 'https';
+
+    await ensureBootstrapAdmin();
+
+    let user = email ? await authenticateUser(email, password) : null;
+
+    // Compat: senha única do painel (sem e-mail) entra como ADM bootstrap.
+    if (!user && !email && passwordOk(password)) {
+      const adminEmail = text(env('PANEL_ADMIN_EMAIL', 'admin@vertice.local')).toLowerCase();
+      const existing = await getUserByEmail(adminEmail);
+      user = existing
+        ? {
+            id: existing.id,
+            email: existing.email,
+            name: existing.name,
+            role: existing.role === 'user' ? 'user' : 'adm',
+            companyOdooId: existing.company_odoo_id || '',
+            active: Number(existing.active) === 1,
+            createdAt: existing.created_at,
+            updatedAt: existing.updated_at,
+          }
+        : null;
+    }
+
+    if (!user) {
+      json(ctx.res, 401, { error: 'E-mail ou senha incorretos' });
       return;
     }
-    const secure = ctx.req.headers['x-forwarded-proto'] === 'https';
-    ctx.res.setHeader('set-cookie', sessionCookie(secure));
-    json(ctx.res, 200, { ok: true });
+
+    // ADM entra sempre com Reciclarenda (visão consolidada no dashboard).
+    if (user.role === 'adm') {
+      try {
+        await setActiveCompanyId(DEFAULT_COMPANY_ODOO_ID);
+      } catch {
+        await setSetting('odoo_active_company_id', DEFAULT_COMPANY_ODOO_ID);
+      }
+    }
+
+    ctx.res.setHeader('set-cookie', sessionCookie(user.id, secure));
+    json(ctx.res, 200, { ok: true, ...mePayload(user) });
   });
 
   route('POST', '/api/logout', async (ctx) => {
@@ -74,11 +127,70 @@ export function registerPanelRoutes(): void {
   });
 
   route('GET', '/api/me', async (ctx) => {
-    json(ctx.res, 200, { authenticated: hasSession(ctx.req.headers.cookie) });
+    const user = await getSessionUser(ctx.req.headers.cookie);
+    json(ctx.res, 200, mePayload(user));
+  });
+
+  route('GET', '/api/users', async (ctx) => {
+    if (!(await requireAdm(ctx))) return;
+    const [items, companies] = await Promise.all([listUsers(), listCompanies()]);
+    json(ctx.res, 200, { items, companies });
+  });
+
+  route('POST', '/api/users', async (ctx) => {
+    if (!(await requireAdm(ctx))) return;
+    try {
+      const input = body(ctx);
+      const role = (text(input.role, 'user') === 'adm' ? 'adm' : 'user') as UserRole;
+      const user = await createUser({
+        email: text(input.email),
+        name: text(input.name),
+        password: text(input.password),
+        role,
+        companyOdooId: text(input.companyOdooId || input.companyId),
+      });
+      json(ctx.res, 200, { item: user });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao criar usuário';
+      json(ctx.res, 400, { error: message });
+    }
+  });
+
+  route('PUT', '/api/users/:id', async (ctx) => {
+    if (!(await requireAdm(ctx))) return;
+    try {
+      const input = body(ctx);
+      const patch: Parameters<typeof updateUser>[1] = {};
+      if (typeof input.email === 'string') patch.email = input.email;
+      if (typeof input.name === 'string') patch.name = input.name;
+      if (typeof input.password === 'string' && input.password) patch.password = input.password;
+      if (typeof input.role === 'string') patch.role = input.role === 'adm' ? 'adm' : 'user';
+      if (typeof input.companyOdooId === 'string' || typeof input.companyId === 'string') {
+        patch.companyOdooId = text(input.companyOdooId || input.companyId);
+      }
+      if (typeof input.active === 'boolean') patch.active = input.active;
+      const user = await updateUser(ctx.params.id, patch);
+      json(ctx.res, 200, { item: user });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao atualizar usuário';
+      json(ctx.res, 400, { error: message });
+    }
+  });
+
+  route('DELETE', '/api/users/:id', async (ctx) => {
+    const actor = await requireAdm(ctx);
+    if (!actor) return;
+    try {
+      await deleteUser(ctx.params.id, actor.id);
+      json(ctx.res, 200, { ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao remover usuário';
+      json(ctx.res, 400, { error: message });
+    }
   });
 
   route('GET', '/api/overview', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, {
       counts: await dashboardCounts(),
       agent: {
@@ -93,13 +205,13 @@ export function registerPanelRoutes(): void {
   });
 
   route('GET', '/api/agent', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const models = await listAgentModels();
     json(ctx.res, 200, { ...agentPayload(true), models: models.models, modelsError: models.error });
   });
 
   route('PUT', '/api/agent', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const input = body(ctx);
     await setSetting('agent_name', text(input.name, getSetting('agent_name')));
     await setSetting('agent_prompt', text(input.prompt, getSetting('agent_prompt')));
@@ -119,7 +231,7 @@ export function registerPanelRoutes(): void {
   });
 
   route('POST', '/api/agent/preview', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const sample = text(body(ctx).text).trim();
     if (!sample) {
       json(ctx.res, 400, { error: 'Escreva uma mensagem de teste' });
@@ -129,22 +241,22 @@ export function registerPanelRoutes(): void {
   });
 
   route('GET', '/api/contacts', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, { items: await listContacts(ctx.query.get('q') || '') });
   });
 
   route('POST', '/api/sync', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     await guard(ctx, () => syncContactsAndConversations());
   });
 
   route('GET', '/api/conversations', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, { items: await listConversations() });
   });
 
   route('DELETE', '/api/conversations/:id', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const conversation = await getConversation(ctx.params.id);
     if (!conversation) {
       json(ctx.res, 404, { error: 'Conversa não encontrada' });
@@ -155,7 +267,7 @@ export function registerPanelRoutes(): void {
   });
 
   route('GET', '/api/conversations/:id/messages', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const pack = async () => {
       const conversation = await getConversation(ctx.params.id);
       if (!conversation) return { items: [], conversation: null, session: null, templates: [], defaultTemplateId: '' };
@@ -185,7 +297,7 @@ export function registerPanelRoutes(): void {
   });
 
   route('POST', '/api/conversations/:id/send', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const conversation = await getConversation(ctx.params.id);
     const message = text(body(ctx).text).trim();
     if (!conversation) {
@@ -220,7 +332,7 @@ export function registerPanelRoutes(): void {
   });
 
   route('POST', '/api/conversations/:id/template', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const conversation = await getConversation(ctx.params.id);
     if (!conversation?.contact_id) {
       json(ctx.res, 404, { error: 'Conversa não encontrada' });
@@ -247,7 +359,7 @@ export function registerPanelRoutes(): void {
   });
 
   route('PUT', '/api/conversations/:id/handoff', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const conversation = await getConversation(ctx.params.id);
     if (!conversation?.contact_id) {
       json(ctx.res, 404, { error: 'Conversa não encontrada' });
@@ -259,17 +371,17 @@ export function registerPanelRoutes(): void {
   });
 
   route('GET', '/api/integrations', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, integrationPayload(false));
   });
 
   route('GET', '/api/integrations/secrets', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, integrationPayload(true));
   });
 
   route('PUT', '/api/integrations', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     const input = body(ctx);
     await assignSecret('nevoa_token', text(input.nevoaToken));
     await assignSecret('nevoa_webhook_secret', text(input.webhookSecret));
@@ -280,7 +392,7 @@ export function registerPanelRoutes(): void {
   });
 
   route('POST', '/api/integrations/test', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     await guard(ctx, async () => {
       const payload = await nevoaRequest('GET', '/channels');
       return { ok: true, channels: payload };
@@ -288,7 +400,7 @@ export function registerPanelRoutes(): void {
   });
 
   route('GET', '/api/events', async (ctx) => {
-    if (!requireUser(ctx)) return;
+    if (!(await requireUser(ctx))) return;
     json(ctx.res, 200, {
       items: (await listEvents()).map((event) => ({
         ...event,

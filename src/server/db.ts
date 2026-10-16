@@ -94,6 +94,8 @@ export async function initDatabase(): Promise<void> {
   const rows = await many<{ key: string; value: string }>('SELECT key, value FROM settings');
   cache.clear();
   for (const row of rows) cache.set(row.key, row.value);
+  const { ensureBootstrapAdmin } = await import('./users.js');
+  await ensureBootstrapAdmin();
 }
 
 function getPool(): pg.Pool {
@@ -351,6 +353,17 @@ const SCHEMA = `
     country_odoo_id TEXT NOT NULL DEFAULT '',
     synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
+  CREATE TABLE IF NOT EXISTS panel_users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    company_odoo_id TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
   CREATE INDEX IF NOT EXISTS idx_questionnaire_questions ON questionnaire_questions(questionnaire_id, sort_order);
@@ -406,6 +419,20 @@ async function migrate(): Promise<void> {
     )`,
   );
   await run(`ALTER TABLE forms_companies ADD COLUMN IF NOT EXISTS country_odoo_id TEXT NOT NULL DEFAULT ''`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS panel_users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL DEFAULT '',
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user',
+      company_odoo_id TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_panel_users_company ON panel_users(company_odoo_id)`);
   await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE forms_partners ADD COLUMN IF NOT EXISTS vat TEXT NOT NULL DEFAULT ''`);
