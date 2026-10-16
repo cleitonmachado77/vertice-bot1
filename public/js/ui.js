@@ -47,12 +47,36 @@ export function createPoll(fn, intervalMs = 8000) {
   };
 }
 
-export function toast(message) {
+/**
+ * @param {string} message
+ * @param {{ tone?: 'default' | 'subtle' | 'error', ms?: number }} [options]
+ */
+export function toast(message, options = {}) {
+  const tone = options.tone || 'default';
+  const ms = options.ms ?? (tone === 'error' ? 6200 : tone === 'subtle' ? 4800 : 3200);
   const node = document.createElement('div');
-  node.className = 'toast';
-  node.textContent = message;
+  node.className = `toast${tone === 'subtle' ? ' toast-subtle' : ''}${tone === 'error' ? ' toast-error' : ''}`;
+  node.textContent = String(message || '');
   document.body.appendChild(node);
-  setTimeout(() => node.remove(), 3200);
+  setTimeout(() => node.remove(), ms);
+}
+
+/** Extrai a mensagem útil de erros Odoo/RPC longos. */
+export function formatSyncError(raw, maxLen = 280) {
+  let text = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return 'Falha ao sincronizar com o Odoo';
+  // Remove prefixos comuns de RPC / traceback curto
+  text = text
+    .replace(/^Odoo Error:\s*/i, '')
+    .replace(/^Error:\s*/i, '')
+    .replace(/^ValidationError:\s*/i, '')
+    .replace(/^UserError:\s*/i, '');
+  const missing = text.match(/Missing required field '[^']+'[^.]*(?:\.[^.]*)?/i);
+  if (missing) text = missing[0].replace(/\s+/g, ' ').trim();
+  if (text.length > maxLen) text = `${text.slice(0, maxLen - 1)}…`;
+  return text;
 }
 
 export function displayName(name, phone) {

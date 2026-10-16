@@ -5,9 +5,10 @@ import {
   listFormDocuments,
   type FormDocument,
 } from './forms.js';
-import { odooCreate, odooSearchRead, odooWrite } from './odoo-client.js';
+import { odooCreate, odooExecuteKw, odooSearchRead, odooWrite } from './odoo-client.js';
 import {
   findCategoryId,
+  findIncomingPickingTypeId,
   findPaymentTermId,
   findSaleTagIds,
   findSalesTeamId,
@@ -28,9 +29,95 @@ function docCompanyId(doc: FormDocument): number {
   return Number.isFinite(n) && n > 0 ? n : Number(DEFAULT_COMPANY_ODOO_ID);
 }
 
-function isEditableOrder(doc: FormDocument): boolean {
+/** Pedidos em draft/sent/to approve ainda podem ser editados ou cancelados. */
+export function isFormOrderEditable(doc: FormDocument): boolean {
+  if (doc.kind !== 'sale' && doc.kind !== 'purchase') return true;
   const state = String(doc.header.odoo_state || doc.status || 'draft').toLowerCase();
   return !state || state === 'draft' || state === 'sent' || state === 'to approve';
+}
+
+function isEditableOrder(doc: FormDocument): boolean {
+  return isFormOrderEditable(doc);
+}
+
+export function assertFormOrderEditable(doc: FormDocument, action: 'editar' | 'excluir' = 'editar'): void {
+  if (isFormOrderEditable(doc)) return;
+  const state = String(doc.header.odoo_state || doc.status || '');
+  throw new Error(
+    `Pedido confirmado no Odoo (${state || 'bloqueado'}); não é possível ${action} no Vertice.`,
+  );
+}
+
+export async function markDocSyncPending(id: string): Promise<FormDocument> {
+  const doc = await getFormDocument(id);
+  if (!doc) throw new Error('Formulário não encontrado');
+  const header = {
+    ...doc.header,
+    odoo_sync_pending: '1',
+    odoo_sync_error: '',
+  };
+  await run(`UPDATE forms_documents SET header_json = $2, updated_at = NOW() WHERE id = $1`, [
+    id,
+    JSON.stringify(header),
+  ]);
+  const updated = await getFormDocument(id);
+  if (!updated) throw new Error('Formulário não encontrado');
+  return updated;
+}
+
+/** Push em background — não atrasa a resposta HTTP do painel. */
+export function scheduleOdooPush(id: string): void {
+  setImmediate(() => {
+    pushFormToOdoo(id).catch((error) => {
+      console.error(`[odoo-auto-push] ${id}:`, error instanceof Error ? error.message : error);
+    });
+  });
+}
+
+export function schedulePartnerPush(id: string): void {
+  setImmediate(() => {
+    import('./forms-partner-sync.js')
+      .then(({ pushPartnerToOdoo }) => pushPartnerToOdoo(id))
+      .catch((error) => {
+        console.error(`[odoo-auto-push-partner] ${id}:`, error instanceof Error ? error.message : error);
+      });
+  });
+}
+
+async function cancelOdooOrder(model: 'sale.order' | 'purchase.order', odooId: number): Promise<void> {
+  const rows = await odooSearchRead<{ state: string }>(model, [['id', '=', odooId]], ['state'], {
+    limit: 1,
+  });
+  const state = String(rows[0]?.state || '').toLowerCase();
+  if (!rows.length || state === 'cancel') return;
+  try {
+    await odooExecuteKw(model, 'button_cancel', [[odooId]]);
+  } catch {
+    await odooWrite(model, [odooId], { state: 'cancel' });
+  }
+}
+
+/** Cancela pedido ou arquiva produto no Odoo. Não remove o registro local. */
+export async function cancelFormInOdoo(doc: FormDocument): Promise<void> {
+  const odooId = num(doc.header.odoo_id, 0);
+  if (odooId <= 0) return;
+  if (doc.kind === 'sale') {
+    await cancelOdooOrder('sale.order', odooId);
+    return;
+  }
+  if (doc.kind === 'purchase') {
+    await cancelOdooOrder('purchase.order', odooId);
+    return;
+  }
+  if (doc.kind === 'product') {
+    await odooWrite('product.template', [odooId], { active: false });
+  }
+}
+
+export async function archivePartnerInOdoo(odooIdRaw: string): Promise<void> {
+  const odooId = num(odooIdRaw, 0);
+  if (odooId <= 0) return;
+  await odooWrite('res.partner', [odooId], { active: false });
 }
 
 async function fetchOrderNameAndState(
@@ -62,6 +149,7 @@ async function setDocOdooMeta(
     odoo_id: String(odooId),
     odoo_synced_at: new Date().toISOString(),
     odoo_sync_error: error,
+    odoo_sync_pending: error ? '1' : '',
   };
   let status = doc.status;
   let title = doc.title;
@@ -323,11 +411,18 @@ export async function pushPurchaseToOdoo(doc: FormDocument): Promise<FormDocumen
   const companyId = docCompanyId(doc);
   const partnerId = await findPartnerId(doc.header.vendor || '', 'vendor');
   const lines = await buildPurchaseLines(doc, companyId);
+  const pickingTypeId = await findIncomingPickingTypeId(companyId);
+  if (pickingTypeId <= 0) {
+    throw new Error(
+      `Empresa Odoo ${companyId} sem depósito/tipo de recebimento (picking_type_id). Configure um warehouse no Odoo ou troque a empresa ativa.`,
+    );
+  }
 
   const values: Record<string, unknown> = {
     partner_id: partnerId,
     partner_ref: doc.header.vendor_reference || false,
     company_id: companyId,
+    picking_type_id: pickingTypeId,
   };
   if (doc.header.order_deadline) values.date_order = doc.header.order_deadline;
   if (doc.header.expected_arrival) values.date_planned = doc.header.expected_arrival;
@@ -379,6 +474,7 @@ export async function pushFormToOdoo(id: string): Promise<FormDocument> {
     const header = {
       ...doc.header,
       odoo_sync_error: message,
+      odoo_sync_pending: '',
     };
     await run(`UPDATE forms_documents SET header_json = $2, updated_at = NOW() WHERE id = $1`, [
       id,

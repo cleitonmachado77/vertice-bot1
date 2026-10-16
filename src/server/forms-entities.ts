@@ -21,6 +21,7 @@ export type EntityPartner = {
 
 export type EntityProduct = CatalogProduct & {
   odoo_id: string;
+  odoo_sync_error?: string;
   track_inventory?: string;
   updated_at?: string;
 };
@@ -76,6 +77,30 @@ const PARTNER_SELECT = `id, name, is_customer, is_vendor, COALESCE(odoo_id, '') 
   COALESCE(email, '') AS email, COALESCE(phone, '') AS phone, COALESCE(vat, '') AS vat,
   COALESCE(street, '') AS street, COALESCE(city, '') AS city, COALESCE(is_company, 0) AS is_company,
   updated_at`;
+
+export async function getEntityPartner(id: string): Promise<EntityPartner | undefined> {
+  const companyId = getActiveCompanyId();
+  const row = await one<{
+    id: string;
+    name: string;
+    is_customer: number;
+    is_vendor: number;
+    odoo_id: string;
+    email: string;
+    phone: string;
+    vat: string;
+    street: string;
+    city: string;
+    is_company: number;
+    updated_at: string;
+  }>(
+    `SELECT ${PARTNER_SELECT}
+     FROM forms_partners
+     WHERE id = $1 AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`,
+    [id, companyId],
+  );
+  return row ? mapPartner(row) : undefined;
+}
 
 export async function listEntityPartners(
   role: 'customer' | 'vendor' | 'all' = 'all',
@@ -245,6 +270,7 @@ export async function listEntityProducts(): Promise<EntityProduct[]> {
       qty_on_hand: header.qty_on_hand || '',
       track_inventory: header.track_inventory || 'True',
       odoo_id: header.odoo_id || '',
+      odoo_sync_error: header.odoo_sync_error || '',
       updated_at: row.updated_at,
     };
   });

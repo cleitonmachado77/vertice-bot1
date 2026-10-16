@@ -1,6 +1,44 @@
 import { api } from '../api.js';
-import { escapeHtml, toast } from '../ui.js';
+import { escapeHtml, formatSyncError, toast } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
+
+function entitySyncNoticeHtml(item) {
+  const err = String(item?.odoo_sync_error || '').trim();
+  if (err) {
+    return `<div class="forms-sync-notice is-error" role="alert" title="${escapeHtml(err)}">
+      <span class="forms-sync-msg"><strong>Odoo · não sincronizado.</strong> ${escapeHtml(formatSyncError(err, 420))}</span>
+      ${item?.id ? '<button class="btn-ghost" type="button" data-odoo-push>Tentar novamente</button>' : ''}
+    </div>`;
+  }
+  if (item?.odoo_id) {
+    return `<div class="forms-sync-notice" role="status">
+      <span class="forms-sync-msg">Odoo #${escapeHtml(item.odoo_id)} · sync automático ao salvar</span>
+    </div>`;
+  }
+  return `<div class="forms-sync-notice is-pending" role="status">
+    <span class="forms-sync-msg">Salvar envia automaticamente ao Odoo</span>
+  </div>`;
+}
+
+async function pollEntityProductSync(productId, reload, token, attempts = 5) {
+  for (let i = 0; i < attempts; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    if (!isNavActive(token)) return;
+    try {
+      const detail = await api(`/api/forms/${encodeURIComponent(productId)}`);
+      const header = detail.item?.header || {};
+      if (header.odoo_sync_pending === '1') continue;
+      const err = String(header.odoo_sync_error || '').trim();
+      if (err) toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
+      else if (header.odoo_id) toast(`Sincronizado com Odoo #${header.odoo_id}`, { tone: 'subtle' });
+      await reload();
+      return;
+    } catch {
+      return;
+    }
+  }
+  if (isNavActive(token)) await reload();
+}
 
 const ENTITY_TABS = [
   { id: 'produtos', label: 'Produtos' },
@@ -201,9 +239,9 @@ async function openProductEditor(panel, reload, item, token) {
           </select>
         </label>
       </div>
+      ${entitySyncNoticeHtml(item)}
       <div class="row forms-actions">
         <button class="btn" type="submit">Salvar</button>
-        ${item?.id ? '<button class="btn-ghost" type="button" data-odoo-push>Enviar ao Odoo</button>' : ''}
         ${item?.id ? '<button class="btn-danger" type="button" data-delete>Excluir</button>' : ''}
       </div>
     </form>`;
@@ -216,12 +254,15 @@ async function openProductEditor(panel, reload, item, token) {
     const data = new FormData(event.currentTarget);
     const payload = Object.fromEntries(data.entries());
     try {
-      if (item?.id) await api(`/api/forms/entities/products/${item.id}`, { method: 'PUT', body: payload });
-      else await api('/api/forms/entities/products', { method: 'POST', body: payload });
-      toast('Produto salvo');
+      const result = item?.id
+        ? await api(`/api/forms/entities/products/${item.id}`, { method: 'PUT', body: payload })
+        : await api('/api/forms/entities/products', { method: 'POST', body: payload });
+      const savedId = result.item?.id || item?.id;
+      toast('Produto salvo · sincronizando com Odoo…', { tone: 'subtle' });
       await reload();
+      if (savedId) void pollEntityProductSync(savedId, reload, token);
     } catch (error) {
-      toast(error.message);
+      toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
   panel.querySelector('[data-odoo-push]')?.addEventListener('click', async () => {
@@ -231,20 +272,21 @@ async function openProductEditor(panel, reload, item, token) {
         body: {},
       });
       const odooId = result.item?.header?.odoo_id || result.item?.odoo_id || '';
-      toast(odooId ? `Enviado ao Odoo #${odooId}` : 'Enviado ao Odoo');
+      toast(odooId ? `Enviado ao Odoo #${odooId}` : 'Enviado ao Odoo', { tone: 'subtle' });
       await reload();
     } catch (error) {
-      toast(error.message);
+      toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
+      await reload();
     }
   });
   panel.querySelector('[data-delete]')?.addEventListener('click', async () => {
-    if (!confirm('Excluir este produto do Vertice?')) return;
+    if (!confirm('Excluir este produto do Vertice? Ele será arquivado no Odoo.')) return;
     try {
       await api(`/api/forms/entities/products/${item.id}`, { method: 'DELETE' });
-      toast('Excluído');
+      toast('Excluído · arquivado no Odoo', { tone: 'subtle' });
       await reload();
     } catch (error) {
-      toast(error.message);
+      toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
 }
@@ -365,9 +407,16 @@ function openPartnerEditor(panel, reload, role, item, token) {
       <p class="muted" style="margin:8px 0 0;font-size:0.82rem;">
         No Odoo o papel principal vem do menu (${escapeHtml(roleLabel)}). Cliente/fornecedor não são mais checkboxes fixos na ficha.
       </p>
+      ${
+        item?.odoo_id
+          ? entitySyncNoticeHtml(item)
+          : `<div class="forms-sync-notice is-pending" role="status">
+              <span class="forms-sync-msg">Salvar envia automaticamente ao Odoo</span>
+            </div>`
+      }
       <div class="row forms-actions">
         <button class="btn" type="submit">Salvar</button>
-        ${item?.id ? '<button class="btn-ghost" type="button" data-odoo-push>Enviar ao Odoo</button>' : ''}
+        ${item?.id && !item?.odoo_id ? '<button class="btn-ghost" type="button" data-odoo-push>Tentar novamente</button>' : ''}
         ${item?.id ? '<button class="btn-danger" type="button" data-delete>Excluir</button>' : ''}
       </div>
     </form>`;
@@ -397,12 +446,29 @@ function openPartnerEditor(panel, reload, role, item, token) {
       is_vendor: role === 'vendor' ? true : alsoOtherChecked,
     };
     try {
-      if (item?.id) await api(`/api/forms/entities/partners/${item.id}`, { method: 'PUT', body: payload });
-      else await api('/api/forms/entities/partners', { method: 'POST', body: payload });
-      toast('Cadastro salvo');
+      const result = item?.id
+        ? await api(`/api/forms/entities/partners/${item.id}`, { method: 'PUT', body: payload })
+        : await api('/api/forms/entities/partners', { method: 'POST', body: payload });
+      toast('Cadastro salvo · sincronizando com Odoo…', { tone: 'subtle' });
       await reload();
+      const savedId = result.item?.id || item?.id;
+      if (savedId) {
+        setTimeout(async () => {
+          if (!isNavActive(token)) return;
+          try {
+            const list = await api('/api/forms/entities/partners?role=all');
+            const found = (list.items || []).find((row) => row.id === savedId);
+            if (found?.odoo_id) {
+              toast(`Sincronizado com Odoo #${found.odoo_id}`, { tone: 'subtle' });
+            }
+            await reload();
+          } catch (error) {
+            toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
+          }
+        }, 2500);
+      }
     } catch (error) {
-      toast(error.message);
+      toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
   panel.querySelector('[data-odoo-push]')?.addEventListener('click', async () => {
@@ -411,20 +477,20 @@ function openPartnerEditor(panel, reload, role, item, token) {
         method: 'POST',
         body: {},
       });
-      toast(`Enviado ao Odoo #${result.item?.odoo_id || ''}`);
+      toast(`Enviado ao Odoo #${result.item?.odoo_id || ''}`, { tone: 'subtle' });
       await reload();
     } catch (error) {
-      toast(error.message);
+      toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
     }
   });
   panel.querySelector('[data-delete]')?.addEventListener('click', async () => {
-    if (!confirm('Excluir este cadastro do Vertice?')) return;
+    if (!confirm('Excluir este cadastro do Vertice? Ele será arquivado no Odoo.')) return;
     try {
       await api(`/api/forms/entities/partners/${item.id}`, { method: 'DELETE' });
-      toast('Excluído');
+      toast('Excluído · arquivado no Odoo', { tone: 'subtle' });
       await reload();
     } catch (error) {
-      toast(error.message);
+      toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
 }

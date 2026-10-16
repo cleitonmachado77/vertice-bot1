@@ -147,6 +147,39 @@ export async function findSaleTagIds(csv: string): Promise<number[]> {
   return findIdsByNames('crm.tag', csv);
 }
 
+/**
+ * Tipo de operação "Recebimentos" (Deliver To) exigido em purchase.order.
+ * Preferência: in_type_id do depósito da empresa → picking type incoming da empresa.
+ */
+export async function findIncomingPickingTypeId(companyId: number): Promise<number> {
+  if (!companyId || companyId <= 0) return 0;
+
+  const warehouses = await odooSearchRead<{ id: number; in_type_id: unknown }>(
+    'stock.warehouse',
+    [['company_id', '=', companyId]],
+    ['id', 'in_type_id'],
+    { limit: 5 },
+  );
+  for (const wh of warehouses) {
+    const typeId = m2oIdNum(wh.in_type_id);
+    if (typeId > 0) return typeId;
+  }
+
+  const types = await odooSearchRead<{ id: number }>(
+    'stock.picking.type',
+    [
+      '&',
+      ['code', '=', 'incoming'],
+      '|',
+      ['company_id', '=', companyId],
+      ['company_id', '=', false],
+    ],
+    ['id'],
+    { limit: 1 },
+  );
+  return types[0]?.id || 0;
+}
+
 export async function namesByIds(
   model: string,
   ids: number[],

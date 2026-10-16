@@ -304,9 +304,23 @@ textarea.short { min-height: 88px; }
   color: var(--brand-contrast);
   padding: 12px 14px;
   border-radius: var(--radius);
-  max-width: 320px;
+  max-width: 360px;
   box-shadow: var(--shadow-lg);
   animation: rise 0.28s ease both;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+.toast-subtle {
+  background: var(--card);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.toast-error {
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--danger-line);
+  box-shadow: var(--shadow);
 }
 .check, .switch { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 0.86rem; color: var(--ink-soft); }
 .check input, .switch input { width: auto; }

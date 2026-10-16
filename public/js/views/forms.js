@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { escapeHtml, toast, viewLoading } from '../ui.js';
+import { escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import { entityFromSlug, renderEntitiesBody } from './forms-entities.js';
 
@@ -226,15 +226,100 @@ function statusLabel(schema, kind, status) {
   return value;
 }
 
+/** Pedidos confirmados no Odoo não podem ser editados/excluídos no Vertice. */
+function isOrderLocked(doc, kind) {
+  if (kind !== 'sale' && kind !== 'purchase') return false;
+  const state = String(doc?.header?.odoo_state || doc?.status || 'draft').toLowerCase();
+  return Boolean(state) && state !== 'draft' && state !== 'sent' && state !== 'to approve';
+}
+
+function syncBadgeHtml(doc) {
+  const header = doc?.header || {};
+  const pending = header.odoo_sync_pending === '1';
+  const error = formatSyncError(header.odoo_sync_error || '', 420);
+  const rawError = String(header.odoo_sync_error || '').trim();
+  const odooId = header.odoo_id || '';
+  const ref = header.order_reference || '';
+  const when = header.odoo_synced_at
+    ? ` · ${new Date(header.odoo_synced_at).toLocaleString('pt-BR')}`
+    : '';
+  if (pending) {
+    return `<div class="forms-sync-notice is-pending" data-sync-badge role="status">
+      <span class="forms-sync-msg">Odoo · sincronizando…</span>
+    </div>`;
+  }
+  if (rawError) {
+    return `<div class="forms-sync-notice is-error" data-sync-badge role="alert" title="${escapeHtml(rawError)}">
+      <span class="forms-sync-msg"><strong>Odoo · não sincronizado.</strong> ${escapeHtml(error)}</span>
+      <button class="btn-ghost" type="button" data-odoo-retry>Tentar novamente</button>
+    </div>`;
+  }
+  if (odooId || ref) {
+    return `<div class="forms-sync-notice" data-sync-badge role="status">
+      <span class="forms-sync-msg">Odoo · sincronizado${
+        ref ? ` · ${escapeHtml(ref)}` : ''
+      }${odooId ? ` #${escapeHtml(odooId)}` : ''}${escapeHtml(when)}</span>
+    </div>`;
+  }
+  return `<div class="forms-sync-notice is-pending" data-sync-badge role="status">
+    <span class="forms-sync-msg">Odoo · ainda não sincronizado</span>
+  </div>`;
+}
+
+async function pollSyncStatus(root, kind, schema, docId, token, attempts = 6) {
+  for (let i = 0; i < attempts; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    if (!isNavActive(token)) return;
+    try {
+      const detail = await api(`/api/forms/${encodeURIComponent(docId)}`);
+      const item = detail.item;
+      if (!item) return;
+      const pending = item.header?.odoo_sync_pending === '1';
+      if (!pending) {
+        const err = String(item.header?.odoo_sync_error || '').trim();
+        if (err) {
+          toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
+        } else if (item.header?.order_reference || item.header?.odoo_id) {
+          const label = item.header.order_reference || `#${item.header.odoo_id}`;
+          toast(`Sincronizado com Odoo · ${label}`, { tone: 'subtle' });
+        }
+        await refresh(root, kind, schema, docId, token);
+        return;
+      }
+    } catch {
+      return;
+    }
+  }
+  if (isNavActive(token)) {
+    try {
+      const detail = await api(`/api/forms/${encodeURIComponent(docId)}`);
+      const err = String(detail.item?.header?.odoo_sync_error || '').trim();
+      if (err) toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
+      else if (detail.item?.header?.odoo_sync_pending === '1') {
+        toast('Odoo ainda sincronizando — abra o registro em instantes', { tone: 'subtle' });
+      }
+    } catch {
+      /* ignore */
+    }
+    await refresh(root, kind, schema, docId, token);
+  }
+}
+
 function listRow(item, activeId, schema, kind) {
   const when = item.updated_at ? new Date(item.updated_at).toLocaleString('pt-BR') : '';
-  const odoo = item.header?.odoo_id ? ` · Odoo #${item.header.odoo_id}` : '';
+  let odoo = '';
+  if (item.header?.odoo_sync_pending === '1') odoo = ' · sync…';
+  else if (item.header?.odoo_sync_error) {
+    odoo = ` · ${formatSyncError(item.header.odoo_sync_error, 72)}`;
+  } else if (item.header?.order_reference) odoo = ` · ${item.header.order_reference}`;
+  else if (item.header?.odoo_id) odoo = ` · Odoo #${item.header.odoo_id}`;
+  const locked = isOrderLocked(item, kind) ? ' · bloqueado' : '';
   const statusText =
     kind === 'product' ? '' : `${escapeHtml(statusLabel(schema, kind, item.status))} · `;
   return `
     <button class="forms-list-item${item.id === activeId ? ' active' : ''}" type="button" data-open="${escapeHtml(item.id)}">
       <strong>${escapeHtml(item.title || 'Sem título')}</strong>
-      <span>${statusText}${escapeHtml(when)}${escapeHtml(odoo)}</span>
+      <span>${statusText}${escapeHtml(when)}${escapeHtml(odoo)}${escapeHtml(locked)}</span>
     </button>`;
 }
 
@@ -243,11 +328,13 @@ function editorHtml(doc, fields, kind, catalog, schema) {
   const publicUrl = doc.public_enabled && doc.public_token ? `${location.origin}/forms/p/${doc.public_token}` : '';
   const statuses = statusOptions(schema, kind);
   const currentStatus = String(doc.header?.odoo_state || doc.status || 'draft');
+  const locked = isOrderLocked(doc, kind);
+  const lockAttr = locked ? ' disabled' : '';
   const statusSelect =
     statuses.length === 0
       ? ''
       : `<label>Status
-        <select name="status">
+        <select name="status"${lockAttr}>
           ${statuses
             .map(
               (item) =>
@@ -265,27 +352,25 @@ function editorHtml(doc, fields, kind, catalog, schema) {
         </select>
       </label>`;
   return `
-    <form id="forms-form" data-id="${escapeHtml(doc.id)}" data-kind="${escapeHtml(kind)}">
+    <form id="forms-form" data-id="${escapeHtml(doc.id)}" data-kind="${escapeHtml(kind)}"${
+      locked ? ' data-locked="1"' : ''
+    }>
       <div class="card-head forms-editor-head">
         <div>
           <h2>Editar registro</h2>
-          <p class="muted">Sugestões vêm do catálogo compartilhado (ainda pode digitar livre).</p>
+          <p class="muted">${
+            locked
+              ? 'Pedido confirmado no Odoo — edição e exclusão bloqueadas no Vertice.'
+              : 'Salvar envia automaticamente ao Odoo. Sugestões vêm do catálogo compartilhado.'
+          }</p>
         </div>
         <div class="row">
-          <button class="btn-danger" type="button" data-delete>Excluir</button>
+          <button class="btn-danger" type="button" data-delete${lockAttr}>Excluir</button>
         </div>
       </div>
-      ${
-        doc.header?.odoo_id || doc.header?.odoo_sync_error
-          ? `<p class="muted">Odoo ${doc.header.odoo_id ? `#${escapeHtml(doc.header.odoo_id)}` : ''}${
-              doc.header.odoo_synced_at
-                ? ` · sync ${escapeHtml(new Date(doc.header.odoo_synced_at).toLocaleString('pt-BR'))}`
-                : ''
-            }${doc.header.odoo_sync_error ? ` · erro: ${escapeHtml(doc.header.odoo_sync_error)}` : ''}</p>`
-          : ''
-      }
+      ${syncBadgeHtml(doc)}
       <label>Título
-        <input name="title" value="${escapeHtml(doc.title || '')}" />
+        <input name="title" value="${escapeHtml(doc.title || '')}"${lockAttr} />
       </label>
       ${statusSelect}
       <div class="forms-section">
@@ -299,7 +384,11 @@ function editorHtml(doc, fields, kind, catalog, schema) {
           ? `<div class="forms-section">
               <div class="row forms-lines-head">
                 <h2>Linhas de produto</h2>
-                <button class="btn-ghost" type="button" data-add-line>Adicionar linha</button>
+                ${
+                  locked
+                    ? ''
+                    : '<button class="btn-ghost" type="button" data-add-line>Adicionar linha</button>'
+                }
               </div>
               <div id="forms-lines">${(doc.lines || []).map((line, index) => lineHtml(line, fields.lines, index, kind)).join('')}</div>
             </div>`
@@ -313,13 +402,13 @@ function editorHtml(doc, fields, kind, catalog, schema) {
             ? `<div class="forms-link-box">
                 <input readonly value="${escapeHtml(publicUrl)}" id="public-link-input" />
                 <button class="btn-ghost" type="button" data-copy-link>Copiar</button>
-                <button class="btn-ghost" type="button" data-disable-link>Desativar</button>
+                <button class="btn-ghost" type="button" data-disable-link${lockAttr}>Desativar</button>
               </div>`
-            : `<button class="btn-ghost" type="button" data-enable-link>Gerar link público</button>`
+            : `<button class="btn-ghost" type="button" data-enable-link${lockAttr}>Gerar link público</button>`
         }
       </div>
       <div class="row forms-actions">
-        <button class="btn" type="submit">Salvar</button>
+        <button class="btn" type="submit"${lockAttr}>Salvar</button>
       </div>
     </form>`;
 }
@@ -737,6 +826,7 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
   const form = root.querySelector('#forms-form');
   if (!form) return;
   const fields = schema.fields[kind];
+  const locked = form.dataset.locked === '1' || isOrderLocked(doc, kind);
   bindPartnerCombos(form, catalog);
   bindProductCombos(form, catalog);
   bindCatalogCombos(form, catalog);
@@ -744,19 +834,47 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
   bindProductAutofill(form, catalog);
   bindLineRemoves(form, catalog);
 
+  if (locked) {
+    form
+      .querySelectorAll(
+        'input:not([id="public-link-input"]), select, textarea, button[type="submit"], [data-delete], [data-add-line], [data-remove-line], [data-enable-link], [data-disable-link], [data-odoo-retry]',
+      )
+      .forEach((el) => {
+        el.disabled = true;
+      });
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (locked) {
+      toast('Pedido confirmado no Odoo; edição bloqueada');
+      return;
+    }
     try {
       const payload = collectPayload(form, fields);
       await api(`/api/forms/${doc.id}`, { method: 'PUT', body: payload });
-      toast('Salvo · catálogo atualizado');
+      toast('Salvo · sincronizando com Odoo…');
       await refresh(root, kind, schema, doc.id, token);
+      void pollSyncStatus(root, kind, schema, doc.id, token);
     } catch (error) {
-      toast(error.message);
+      toast(formatSyncError(error.message || error), { tone: 'error' });
+    }
+  });
+
+  form.querySelector('[data-odoo-retry]')?.addEventListener('click', async () => {
+    try {
+      await api(`/api/forms/${doc.id}/odoo-push`, { method: 'POST', body: {} });
+      toast('Reenviado ao Odoo', { tone: 'subtle' });
+      await refresh(root, kind, schema, doc.id, token);
+      void pollSyncStatus(root, kind, schema, doc.id, token);
+    } catch (error) {
+      toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
+      await refresh(root, kind, schema, doc.id, token);
     }
   });
 
   form.querySelector('[data-add-line]')?.addEventListener('click', () => {
+    if (locked) return;
     const box = form.querySelector('#forms-lines');
     if (!box) return;
     const index = box.querySelectorAll('.forms-line').length;
@@ -768,13 +886,17 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
   });
 
   form.querySelector('[data-delete]')?.addEventListener('click', async () => {
-    if (!confirm('Excluir este registro?')) return;
+    if (locked) {
+      toast('Pedido confirmado no Odoo; exclusão bloqueada');
+      return;
+    }
+    if (!confirm('Excluir este registro? O pedido correspondente será cancelado no Odoo.')) return;
     try {
       await api(`/api/forms/${doc.id}`, { method: 'DELETE' });
-      toast('Excluído');
+      toast('Excluído · cancelado no Odoo', { tone: 'subtle' });
       await refresh(root, kind, schema, null, token);
     } catch (error) {
-      toast(error.message);
+      toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
 

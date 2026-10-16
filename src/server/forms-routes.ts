@@ -17,6 +17,7 @@ import {
   deleteEntityPartner,
   deleteEntityProduct,
   entitiesSummary,
+  getEntityPartner,
   listEntityPartners,
   listEntityProducts,
   saveEntityPartner,
@@ -43,12 +44,18 @@ import {
 } from './forms-companies.js';
 import { odooStatus } from './odoo-client.js';
 import {
+  archivePartnerInOdoo,
+  assertFormOrderEditable,
+  cancelFormInOdoo,
   getOdooPullProgress,
+  markDocSyncPending,
   pullFromOdoo,
   pushAllFormsToOdoo,
   pushFormToOdoo,
   pushFormsByKind,
   pushProductToOdoo,
+  scheduleOdooPush,
+  schedulePartnerPush,
 } from './odoo-sync.js';
 import { json, route, type Ctx } from './http.js';
 
@@ -280,22 +287,19 @@ export function registerFormsRoutes(): void {
     if (!requireUser(ctx)) return;
     try {
       const input = body(ctx);
-      json(
-        ctx.res,
-        200,
-        {
-          item: await saveEntityProduct({
-            name: text(input.name),
-            category: text(input.category),
-            sales_price: text(input.sales_price),
-            cost: text(input.cost),
-            uom: text(input.uom),
-            internal_ref: text(input.internal_ref),
-            qty_on_hand: text(input.qty_on_hand),
-            track_inventory: text(input.track_inventory) || 'True',
-          }),
-        },
-      );
+      const item = await saveEntityProduct({
+        name: text(input.name),
+        category: text(input.category),
+        sales_price: text(input.sales_price),
+        cost: text(input.cost),
+        uom: text(input.uom),
+        internal_ref: text(input.internal_ref),
+        qty_on_hand: text(input.qty_on_hand),
+        track_inventory: text(input.track_inventory) || 'True',
+      });
+      await markDocSyncPending(item.id).catch(() => undefined);
+      json(ctx.res, 200, { item, sync_status: 'syncing' });
+      scheduleOdooPush(item.id);
     } catch (error) {
       fail(ctx, error);
     }
@@ -305,23 +309,20 @@ export function registerFormsRoutes(): void {
     if (!requireUser(ctx)) return;
     try {
       const input = body(ctx);
-      json(
-        ctx.res,
-        200,
-        {
-          item: await saveEntityProduct({
-            id: ctx.params.id,
-            name: text(input.name),
-            category: text(input.category),
-            sales_price: text(input.sales_price),
-            cost: text(input.cost),
-            uom: text(input.uom),
-            internal_ref: text(input.internal_ref),
-            qty_on_hand: text(input.qty_on_hand),
-            track_inventory: text(input.track_inventory) || 'True',
-          }),
-        },
-      );
+      const item = await saveEntityProduct({
+        id: ctx.params.id,
+        name: text(input.name),
+        category: text(input.category),
+        sales_price: text(input.sales_price),
+        cost: text(input.cost),
+        uom: text(input.uom),
+        internal_ref: text(input.internal_ref),
+        qty_on_hand: text(input.qty_on_hand),
+        track_inventory: text(input.track_inventory) || 'True',
+      });
+      await markDocSyncPending(item.id).catch(() => undefined);
+      json(ctx.res, 200, { item, sync_status: 'syncing' });
+      scheduleOdooPush(item.id);
     } catch (error) {
       fail(ctx, error);
     }
@@ -330,6 +331,17 @@ export function registerFormsRoutes(): void {
   route('DELETE', '/api/forms/entities/products/:id', async (ctx) => {
     if (!requireUser(ctx)) return;
     try {
+      const doc = await getFormDocument(ctx.params.id);
+      if (doc?.kind === 'product') {
+        try {
+          await cancelFormInOdoo(doc);
+        } catch (error) {
+          console.error(
+            `[odoo-auto-cancel-product] ${ctx.params.id}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
       await deleteEntityProduct(ctx.params.id);
       json(ctx.res, 200, { ok: true });
     } catch (error) {
@@ -359,23 +371,19 @@ export function registerFormsRoutes(): void {
     if (!requireUser(ctx)) return;
     try {
       const input = body(ctx);
-      json(
-        ctx.res,
-        200,
-        {
-          item: await saveEntityPartner({
-            name: text(input.name),
-            is_customer: input.is_customer === true || input.is_customer === 1,
-            is_vendor: input.is_vendor === true || input.is_vendor === 1,
-            email: text(input.email),
-            phone: text(input.phone),
-            vat: text(input.vat),
-            street: text(input.street),
-            city: text(input.city),
-            is_company: input.is_company === true || input.is_company === 1,
-          }),
-        },
-      );
+      const item = await saveEntityPartner({
+        name: text(input.name),
+        is_customer: input.is_customer === true || input.is_customer === 1,
+        is_vendor: input.is_vendor === true || input.is_vendor === 1,
+        email: text(input.email),
+        phone: text(input.phone),
+        vat: text(input.vat),
+        street: text(input.street),
+        city: text(input.city),
+        is_company: input.is_company === true || input.is_company === 1,
+      });
+      json(ctx.res, 200, { item, sync_status: 'syncing' });
+      schedulePartnerPush(item.id);
     } catch (error) {
       fail(ctx, error);
     }
@@ -385,24 +393,20 @@ export function registerFormsRoutes(): void {
     if (!requireUser(ctx)) return;
     try {
       const input = body(ctx);
-      json(
-        ctx.res,
-        200,
-        {
-          item: await saveEntityPartner({
-            id: ctx.params.id,
-            name: text(input.name),
-            is_customer: input.is_customer === true || input.is_customer === 1,
-            is_vendor: input.is_vendor === true || input.is_vendor === 1,
-            email: text(input.email),
-            phone: text(input.phone),
-            vat: text(input.vat),
-            street: text(input.street),
-            city: text(input.city),
-            is_company: input.is_company === true || input.is_company === 1,
-          }),
-        },
-      );
+      const item = await saveEntityPartner({
+        id: ctx.params.id,
+        name: text(input.name),
+        is_customer: input.is_customer === true || input.is_customer === 1,
+        is_vendor: input.is_vendor === true || input.is_vendor === 1,
+        email: text(input.email),
+        phone: text(input.phone),
+        vat: text(input.vat),
+        street: text(input.street),
+        city: text(input.city),
+        is_company: input.is_company === true || input.is_company === 1,
+      });
+      json(ctx.res, 200, { item, sync_status: 'syncing' });
+      schedulePartnerPush(item.id);
     } catch (error) {
       fail(ctx, error);
     }
@@ -411,6 +415,17 @@ export function registerFormsRoutes(): void {
   route('DELETE', '/api/forms/entities/partners/:id', async (ctx) => {
     if (!requireUser(ctx)) return;
     try {
+      const partner = await getEntityPartner(ctx.params.id);
+      if (partner?.odoo_id) {
+        try {
+          await archivePartnerInOdoo(partner.odoo_id);
+        } catch (error) {
+          console.error(
+            `[odoo-auto-archive-partner] ${ctx.params.id}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
       await deleteEntityPartner(ctx.params.id);
       json(ctx.res, 200, { ok: true });
     } catch (error) {
@@ -513,7 +528,13 @@ export function registerFormsRoutes(): void {
   route('PUT', '/api/forms/:id', async (ctx) => {
     if (!requireUser(ctx)) return;
     try {
-      json(ctx.res, 200, { item: await saveFormDocument(ctx.params.id, parseSave(body(ctx))) });
+      const current = await getFormDocument(ctx.params.id);
+      if (!current) throw new Error('Formulário não encontrado');
+      assertFormOrderEditable(current, 'editar');
+      await saveFormDocument(ctx.params.id, parseSave(body(ctx)));
+      const item = await markDocSyncPending(ctx.params.id);
+      json(ctx.res, 200, { item, sync_status: 'syncing' });
+      scheduleOdooPush(item.id);
     } catch (error) {
       fail(ctx, error);
     }
@@ -522,6 +543,17 @@ export function registerFormsRoutes(): void {
   route('DELETE', '/api/forms/:id', async (ctx) => {
     if (!requireUser(ctx)) return;
     try {
+      const current = await getFormDocument(ctx.params.id);
+      if (!current) throw new Error('Formulário não encontrado');
+      assertFormOrderEditable(current, 'excluir');
+      try {
+        await cancelFormInOdoo(current);
+      } catch (error) {
+        console.error(
+          `[odoo-auto-cancel] ${ctx.params.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
       await deleteFormDocument(ctx.params.id);
       json(ctx.res, 200, { ok: true });
     } catch (error) {
