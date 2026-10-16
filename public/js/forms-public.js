@@ -1,5 +1,5 @@
 import { escapeHtml, toast } from './ui.js';
-import { initTheme, toggleTheme } from './theme.js';
+import { initTheme } from './theme.js';
 
 initTheme();
 
@@ -27,16 +27,10 @@ function render(data) {
   app.innerHTML = `
     <main class="forms-public">
       <div class="forms-public-card">
-        <div class="row" style="justify-content: space-between;">
-          <div>
-            <p class="kicker">Vertice Forms · ${escapeHtml(kindLabel || '')}</p>
-            <h1>Preenchimento externo</h1>
-            <p class="muted">Sugestões do catálogo compartilhado. Salve quando terminar.</p>
-          </div>
-          <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Alternar tema">
-            <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-            <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5Z"/></svg>
-          </button>
+        <div>
+          <p class="kicker">Vertice Forms · ${escapeHtml(kindLabel || '')}</p>
+          <h1>Preenchimento externo</h1>
+          <p class="muted">Sugestões do catálogo compartilhado. Salve quando terminar.</p>
         </div>
         <form id="public-form" data-kind="${escapeHtml(kind)}">
           <datalist id="forms-products">${products.map((p) => `<option value="${escapeHtml(p.name)}"></option>`).join('')}</datalist>
@@ -84,8 +78,6 @@ function render(data) {
         </form>
       </div>
     </main>`;
-
-  document.querySelector('[data-theme-toggle]')?.addEventListener('click', () => toggleTheme());
 
   const form = document.querySelector('#public-form');
   document.querySelector('#add-line')?.addEventListener('click', () => {

@@ -11,13 +11,15 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 18px;
+  height: 56px;
+  padding: 0 1.75rem;
   border-bottom: 1px solid var(--line);
   background: var(--topbar-bg);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
   position: sticky;
   top: 0;
   z-index: 10;
+  box-sizing: border-box;
 }
 
 .forms-topbar-brand {
@@ -30,9 +32,13 @@
 }
 
 .forms-topbar-brand img {
-  height: 34px;
+  height: 32px;
   width: auto;
   filter: var(--logo-filter);
+}
+.forms-topbar-brand .forms-topbar-logo {
+  height: 36px;
+  filter: none;
 }
 
 .forms-topbar-actions {
@@ -76,7 +82,7 @@
   margin: 0 0 14px;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--surface);
   font-size: 0.86rem;
 }
@@ -116,7 +122,7 @@
   text-align: left;
   border: 1px solid var(--line);
   background: var(--surface);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 12px 12px;
   color: inherit;
   transition: border-color 0.2s ease, background 0.2s ease;
@@ -127,8 +133,8 @@
 }
 
 .forms-list-item.active {
-  border-color: color-mix(in srgb, var(--ink) 28%, var(--line));
-  background: var(--brand-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--accent-soft);
 }
 
 .forms-list-item strong {
@@ -165,7 +171,7 @@
 }
 
 .forms-combo.is-open [data-combo-input] {
-  border-color: color-mix(in srgb, var(--ink) 35%, var(--line));
+  border-color: var(--accent);
 }
 
 .forms-combo-menu {
@@ -178,8 +184,8 @@
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+  border-radius: var(--radius);
+  background: var(--card);
   box-shadow: var(--shadow-lg, 0 12px 28px rgba(0, 0, 0, 0.12));
 }
 
@@ -200,7 +206,7 @@
 
 .forms-combo-option:hover,
 .forms-combo-option.is-active {
-  background: var(--brand-soft, var(--surface-hover));
+  background: var(--accent-soft);
 }
 
 .forms-combo-option strong {
@@ -223,7 +229,7 @@
   margin: 0 0 14px;
   padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   display: flex;
   flex-wrap: wrap;
   gap: 14px 20px;
@@ -263,7 +269,7 @@
 
 .forms-line {
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius);
   padding: 12px;
   margin-bottom: 10px;
   background: var(--surface);
@@ -301,9 +307,9 @@
 .forms-public-card {
   width: min(760px, 100%);
   margin: 0 auto;
-  background: var(--gate-panel);
+  background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: calc(var(--radius) + 2px);
   box-shadow: var(--shadow-lg);
   padding: 22px;
 }

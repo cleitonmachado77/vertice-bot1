@@ -3,16 +3,16 @@ export const modules = [
   {
     id: 'bot',
     name: 'Vertice Bot',
-    description: 'Agente WhatsApp, inbox, contatos e questionários.',
     href: '#/overview',
+    logo: '/logo-vertice-bot.png',
     accent: 'bot',
     available: true,
   },
   {
     id: 'forms',
     name: 'Vertice Forms',
-    description: 'Vendas, Compras e Inventário — coleta unificada para o Odoo.',
     href: '#/forms/compras',
+    logo: '/logo-vertice-forms.png',
     accent: 'forms',
     available: true,
   },

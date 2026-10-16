@@ -6,9 +6,9 @@ export async function renderHub(root) {
   root.innerHTML = `
     <div class="hub-view">
       <header class="hub-hero">
-        <img class="hub-logo" src="/logo-vertice.png" alt="Vertice WEB" />
-        <h1>Vertice WEB</h1>
-        <p class="hub-lead">Escolha o aplicativo que deseja abrir.</p>
+        <span class="hub-logo-wrap">
+          <img class="hub-logo" src="/logo-vertice-web.png" alt="Vertice WEB" />
+        </span>
       </header>
       <section class="hub-grid" aria-label="Aplicativos disponíveis">
         ${apps.map(appTile).join('') || emptyState()}
@@ -17,15 +17,10 @@ export async function renderHub(root) {
 }
 
 function appTile(mod) {
+  const logo = mod.logo || '/logo-vertice.png';
   return `
-    <a class="hub-app hub-app--${escapeHtml(mod.accent || 'default')}" href="${escapeHtml(mod.href)}">
-      <span class="hub-app-icon" aria-hidden="true">
-        <img src="/logo-vertice.png" alt="" />
-      </span>
-      <span class="hub-app-body">
-        <strong>${escapeHtml(mod.name)}</strong>
-        <span>${escapeHtml(mod.description)}</span>
-      </span>
+    <a class="hub-app hub-app--${escapeHtml(mod.accent || 'default')}" href="${escapeHtml(mod.href)}" aria-label="${escapeHtml(mod.name)}">
+      <img class="hub-app-logo" src="${escapeHtml(logo)}" alt="${escapeHtml(mod.name)}" />
       <span class="hub-app-go" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 6l6 6-6 6"/>

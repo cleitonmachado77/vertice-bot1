@@ -3,7 +3,15 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--gate-bg);
+  position: relative;
+  isolation: isolate;
+  background-color: #050505;
+  background-image:
+    linear-gradient(180deg, rgba(5, 5, 5, 0.78) 0%, rgba(5, 5, 5, 0.64) 40%, rgba(5, 5, 5, 0.84) 100%),
+    url("/hub-bg.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .hub-topbar {
@@ -11,13 +19,15 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--topbar-bg) 88%, transparent);
-  backdrop-filter: blur(10px);
+  height: 56px;
+  padding: 0 1.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  background: color-mix(in srgb, var(--topbar-bg) 75%, transparent);
+  backdrop-filter: blur(14px);
   position: sticky;
   top: 0;
   z-index: 10;
+  box-sizing: border-box;
 }
 
 .hub-topbar-brand {
@@ -31,9 +41,16 @@
 }
 
 .hub-topbar-brand img {
-  height: 36px;
+  height: 32px;
   width: auto;
   filter: var(--logo-filter);
+}
+.hub-topbar-brand .hub-topbar-logo-web {
+  height: 40px;
+  width: auto;
+  max-width: min(220px, 42vw);
+  object-fit: contain;
+  filter: none;
 }
 
 .hub-topbar-actions {
@@ -48,6 +65,8 @@
   align-items: center;
   justify-content: center;
   padding: 32px 20px 48px;
+  position: relative;
+  z-index: 1;
 }
 
 .hub-view {
@@ -60,21 +79,36 @@
   margin-bottom: 36px;
 }
 
+.hub-logo-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 52px;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.hub-logo-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 8% 4%;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.78);
+  filter: blur(32px);
+  z-index: 0;
+  pointer-events: none;
+}
+
 .hub-logo {
   height: 72px;
   width: auto;
   display: block;
-  margin: 0 auto 14px;
-  filter: var(--logo-filter);
-}
-
-.hub-hero h1 {
   margin: 0;
-  font-size: clamp(1.85rem, 3.4vw, 2.35rem);
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  line-height: 1.1;
-  color: var(--ink);
+  position: relative;
+  z-index: 1;
+  filter: none;
 }
 
 .hub-lead {
@@ -89,14 +123,14 @@
 }
 
 .hub-app {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
   padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--gate-panel);
+  border-radius: calc(var(--radius) + 2px);
+  background: var(--card);
   text-decoration: none;
   color: inherit;
   box-shadow: var(--shadow);
@@ -118,47 +152,20 @@
   transform: translateY(0);
 }
 
-.hub-app-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  flex: none;
-}
-
-.hub-app-icon img {
-  height: 34px;
+.hub-app-logo {
+  height: 44px;
   width: auto;
-  filter: var(--logo-filter);
-}
-
-.hub-app-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.hub-app-body strong {
-  font-size: 1.05rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-}
-
-.hub-app-body span {
-  color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.4;
+  max-width: min(360px, 70%);
+  object-fit: contain;
+  object-position: left center;
+  filter: none;
+  display: block;
 }
 
 .hub-app-go {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: 999px;
   display: grid;
   place-items: center;
   color: var(--muted);
@@ -182,7 +189,7 @@
   margin: 0;
   padding: 28px;
   border: 1px dashed var(--line);
-  border-radius: 16px;
+  border-radius: calc(var(--radius) + 2px);
 }
 
 .web-settings-view {
@@ -191,9 +198,9 @@
 
 .web-odoo-card {
   text-align: left;
-  background: var(--gate-panel);
+  background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: calc(var(--radius) + 2px);
   box-shadow: var(--shadow);
 }
 
@@ -224,11 +231,11 @@
   width: 100%;
   min-width: 146px;
   max-width: min(280px, 42vw);
-  min-height: 41px;
-  padding: 6px 10px;
+  min-height: 36px;
+  padding: 6px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  border-radius: 999px;
+  background: var(--card);
   color: var(--ink);
   cursor: pointer;
   font: inherit;
@@ -252,7 +259,7 @@
 }
 
 .company-switcher-btn:hover {
-  border-color: color-mix(in srgb, var(--accent, #3d8bfd) 45%, var(--line));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 
 .company-switcher-icon {
@@ -299,9 +306,9 @@
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--paper);
-  box-shadow: var(--shadow);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
 }
 
 .company-switcher-option {
@@ -331,7 +338,7 @@
 
 .company-switcher-option:hover,
 .company-switcher-option.is-active {
-  background: color-mix(in srgb, var(--accent, #3d8bfd) 12%, transparent);
+  background: var(--accent-soft);
 }
 
 .company-switcher-sync {
@@ -351,20 +358,21 @@
 .side-nav a.nav-hub:hover,
 .side-nav a.nav-hub.active {
   background: var(--brand-soft);
+  border-color: var(--line);
 }
 
 @media (max-width: 560px) {
   .hub-app {
-    grid-template-columns: auto 1fr;
     gap: 12px;
     padding: 16px;
   }
 
-  .hub-app-go {
-    display: none;
+  .hub-app-logo {
+    height: 38px;
+    max-width: 85%;
   }
 
-  .hub-app-body span {
-    font-size: 0.85rem;
+  .hub-app-go {
+    display: none;
   }
 }

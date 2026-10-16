@@ -1,7 +1,7 @@
 import { api, ensureSession, invalidateSession } from './api.js';
 import { escapeHtml, viewLoading } from './ui.js';
 import { nextNavToken, isNavActive } from './nav.js';
-import { initTheme, toggleTheme } from './theme.js';
+import { initTheme } from './theme.js';
 import { mountCompanySwitcher } from './company-switcher.js';
 import { renderHub } from './views/hub.js';
 import { renderWebSettings } from './views/web-settings.js';
@@ -206,20 +206,17 @@ function mountWebChrome() {
     <div class="hub-shell">
       <header class="hub-topbar">
         <a class="hub-topbar-brand" href="#/web">
-          <img src="/logo-vertice.png" alt="Vertice WEB" />
-          <span>Vertice WEB</span>
+          <img class="hub-topbar-logo-web" src="/logo-vertice-marca.png" alt="Vértice" />
         </a>
         <div class="hub-topbar-actions">
           <div id="company-switcher"></div>
           <a class="btn-ghost" href="#/web/settings">Configurações</a>
-          <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Alternar tema">${icon('sun')}${icon('moon')}</button>
           <button class="btn-ghost" id="logout-hub" type="button">Sair</button>
         </div>
       </header>
       <main class="hub-main" id="hub-view"></main>
     </div>`;
   document.querySelector('#logout-hub')?.addEventListener('click', leave);
-  bindThemeToggles();
   mountCompanySwitcher(document.querySelector('#company-switcher'));
 }
 
@@ -235,20 +232,17 @@ function mountFormsChrome() {
     <div class="forms-shell">
       <header class="forms-topbar">
         <a class="forms-topbar-brand" href="#/web" title="Voltar ao Vertice WEB">
-          <img src="/logo-vertice.png" alt="Vertice Forms" />
-          <span>Vertice Forms</span>
+          <img class="forms-topbar-logo" src="/logo-vertice-forms.png" alt="Vertice Forms" />
         </a>
         <div class="forms-topbar-actions">
           <div id="company-switcher"></div>
           <a class="btn-ghost" href="#/web/settings">Configurações</a>
-          <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Alternar tema">${icon('sun')}${icon('moon')}</button>
           <button class="btn-ghost" id="logout-forms" type="button">Sair</button>
         </div>
       </header>
       <main class="forms-main main" id="forms-view"></main>
     </div>`;
   document.querySelector('#logout-forms')?.addEventListener('click', leave);
-  bindThemeToggles();
   mountCompanySwitcher(document.querySelector('#company-switcher'));
 }
 
@@ -278,7 +272,6 @@ function bindChrome(frame) {
   });
   document.querySelector('#logout').addEventListener('click', leave);
   document.querySelector('#logout-top').addEventListener('click', leave);
-  bindThemeToggles();
 }
 
 async function leave() {
@@ -289,15 +282,6 @@ async function leave() {
   stopViews();
   location.hash = '#/login';
   renderLogin();
-}
-
-function bindThemeToggles() {
-  document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
-    if (button.dataset.bound === '1') return;
-    button.dataset.bound = '1';
-    button.addEventListener('click', () => toggleTheme());
-  });
-  initTheme();
 }
 
 function syncChrome(active, title) {
@@ -335,7 +319,7 @@ function shell(active, title) {
     <div class="shell${active === 'inbox' ? ' is-inbox' : ''}">
       <aside class="sidebar">
         <div class="side-brand">
-          <a class="brand" href="#/web" title="Voltar ao Vertice WEB"><img class="brand-logo" src="/logo-vertice.png" alt="Vertice Bot" /></a>
+          <a class="brand" href="#/web" title="Voltar ao Vertice WEB"><img class="brand-logo brand-logo--bot" src="/logo-vertice-bot.png" alt="Vertice Bot" /></a>
           <button class="icon-btn" id="collapse" type="button" aria-label="Recolher menu">${icon('collapse')}</button>
         </div>
         <nav class="side-nav">
@@ -354,7 +338,6 @@ function shell(active, title) {
           <button class="icon-btn nav-toggle" id="menu" type="button" aria-label="Abrir menu">${icon('menu')}</button>
           <h2 class="page-title">${escapeHtml(title)}</h2>
           <div class="topbar-actions">
-            <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Alternar tema">${icon('sun')}${icon('moon')}</button>
             <button class="btn-ghost" id="logout-top" type="button">Sair</button>
           </div>
         </header>
@@ -368,14 +351,11 @@ function renderLogin() {
   app.innerHTML = `
     <section class="gate">
       <div class="gate-glow" aria-hidden="true"></div>
-      <button class="icon-btn theme-toggle gate-theme" type="button" data-theme-toggle aria-label="Alternar tema">${icon('sun')}${icon('moon')}</button>
       <div class="gate-form-panel">
         <form class="gate-form" id="login-form">
           <div class="gate-form-head">
-            <img class="gate-logo" src="/logo-vertice.png" alt="Vertice WEB" />
-            <p class="gate-kicker">Vertice WEB</p>
+            <img class="gate-logo" src="/logo-vertice-marca.png" alt="Vértice" />
             <h1>Acesso à plataforma</h1>
-            <p class="gate-lead">Entre com a senha operacional para continuar.</p>
           </div>
 
           <div class="gate-form-body">
@@ -411,7 +391,6 @@ function renderLogin() {
       </div>
     </section>`;
 
-  bindThemeToggles();
   const passwordInput = document.querySelector('#password');
   document.querySelector('#toggle-password')?.addEventListener('click', () => {
     const show = passwordInput.type === 'password';

@@ -241,7 +241,7 @@ function syncThreadMode() {
 function emptyThread() {
   return `
     <div class="wa-empty">
-      <img class="brand-logo" src="/logo-vertice.png" alt="Vértice Bot" />
+      <img class="brand-logo brand-logo--bot" src="/logo-vertice-bot.png" alt="Vértice Bot" />
       <p>Selecione uma conversa para ler e responder no WhatsApp.</p>
     </div>`;
 }
