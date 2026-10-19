@@ -12,9 +12,16 @@ import { odooLabelPt } from './odoo-pt.js';
 import { joinNames, m2mIds, namesByIds } from './odoo-resolve.js';
 
 const AUTO_PULL_MIN_MS = 2 * 60 * 1000;
+/** Overlap para não perder edições na borda do cursor write_date. */
+const INCREMENTAL_OVERLAP_MS = 3 * 60 * 1000;
+/** Cadastros auxiliares (UOM, impostos…) mudam pouco — no incremental, no máximo a cada 6h. */
+const REFS_PULL_MIN_MS = 6 * 60 * 60 * 1000;
+
+export type OdooPullMode = 'full' | 'incremental';
 
 export type OdooPullResult = {
   skipped?: boolean;
+  mode?: OdooPullMode;
   companies: number;
   products: number;
   partners: number;
@@ -23,6 +30,41 @@ export type OdooPullResult = {
   stockUpdated: number;
   at: string;
 };
+
+/** Converte ISO/ms para datetime UTC aceito pelo domain Odoo. */
+function toOdooDateTime(isoOrMs: string | number): string {
+  const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs);
+  if (!Number.isFinite(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
+/**
+ * Combina domain base com filtro write_date >= since (com overlap).
+ * `sinceIso` null/undefined → sem filtro (full).
+ */
+function withSince(baseDomain: unknown[], sinceIso: string | null | undefined): unknown[] {
+  if (!sinceIso) return baseDomain;
+  const sinceMs = Date.parse(sinceIso) - INCREMENTAL_OVERLAP_MS;
+  if (!Number.isFinite(sinceMs)) return baseDomain;
+  const odooDt = toOdooDateTime(sinceMs);
+  if (!odooDt) return baseDomain;
+  const leaf: unknown[] = ['write_date', '>=', odooDt];
+  if (!baseDomain.length) return [leaf];
+  // Domain polish: AND do bloco atual com write_date
+  if (baseDomain[0] === '&' || baseDomain[0] === '|' || baseDomain[0] === '!') {
+    return ['&', baseDomain, leaf];
+  }
+  if (baseDomain.length === 1 && Array.isArray(baseDomain[0])) {
+    return ['&', baseDomain[0], leaf];
+  }
+  // Vários leaves implícitos (AND) → agrupa e adiciona write_date
+  const grouped = baseDomain.reduce<unknown>((acc, item, index) => {
+    if (index === 0) return item;
+    return ['&', acc, item];
+  }, null);
+  return ['&', grouped, leaf];
+}
 
 function nameKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -242,23 +284,48 @@ async function upsertDoc(input: {
   return 'created';
 }
 
-async function pullStockQtyByTemplate(): Promise<Map<string, number>> {
-  const quants = await odooSearchRead<{
+async function pullStockQtyByTemplate(sinceIso?: string | null): Promise<Map<string, number>> {
+  const baseDomain: unknown[] = [
+    '&',
+    ['quantity', '!=', 0],
+    ['location_id.usage', '=', 'internal'],
+  ];
+
+  // Incremental: só quants alterados → depois recalcula o total desses produtos
+  // (somar só o delta subcontaria o estoque).
+  let quants = await odooSearchRead<{
     product_id: unknown;
     quantity: number;
     company_id: unknown;
-  }>(
-    'stock.quant',
-    [
-      '&',
-      ['quantity', '!=', 0],
-      ['location_id.usage', '=', 'internal'],
-    ],
-    ['product_id', 'quantity', 'company_id'],
-    { limit: 5000 },
-  ).catch(() => []);
+  }>('stock.quant', withSince(baseDomain, sinceIso), ['product_id', 'quantity', 'company_id'], {
+    limit: 5000,
+  }).catch(() => []);
 
   if (!quants.length) return new Map();
+
+  if (sinceIso) {
+    const touchedVariantIds = [
+      ...new Set(quants.map((row) => m2oId(row.product_id)).filter((id) => id > 0)),
+    ];
+    if (!touchedVariantIds.length) return new Map();
+    quants = await odooSearchRead<{
+      product_id: unknown;
+      quantity: number;
+      company_id: unknown;
+    }>(
+      'stock.quant',
+      [
+        '&',
+        '&',
+        ['quantity', '!=', 0],
+        ['location_id.usage', '=', 'internal'],
+        ['product_id', 'in', touchedVariantIds],
+      ],
+      ['product_id', 'quantity', 'company_id'],
+      { limit: 5000 },
+    ).catch(() => []);
+    if (!quants.length) return new Map();
+  }
 
   const variantIds = [
     ...new Set(quants.map((row) => m2oId(row.product_id)).filter((id) => id > 0)),
@@ -284,7 +351,10 @@ async function pullStockQtyByTemplate(): Promise<Map<string, number>> {
   return qty;
 }
 
-async function pullProducts(stockMap: Map<string, number>): Promise<{ products: number; stockUpdated: number }> {
+async function pullProducts(
+  stockMap: Map<string, number>,
+  sinceIso?: string | null,
+): Promise<{ products: number; stockUpdated: number }> {
   const rows = await odooSearchRead<{
     id: number;
     name: string;
@@ -298,7 +368,7 @@ async function pullProducts(stockMap: Map<string, number>): Promise<{ products: 
     type?: string;
   }>(
     'product.template',
-    [],
+    withSince([], sinceIso),
     [
       'name',
       'list_price',
@@ -353,7 +423,7 @@ async function pullProducts(stockMap: Map<string, number>): Promise<{ products: 
   return { products, stockUpdated };
 }
 
-async function pullPartners(): Promise<number> {
+async function pullPartners(sinceIso?: string | null): Promise<number> {
   const rows = await odooSearchRead<{
     id: number;
     name: string;
@@ -368,7 +438,7 @@ async function pullPartners(): Promise<number> {
     city: string | false;
   }>(
     'res.partner',
-    [['active', '=', true]],
+    withSince([['active', '=', true]], sinceIso),
     [
       'name',
       'customer_rank',
@@ -442,7 +512,7 @@ type SaleLineRow = {
   tax_ids?: number[];
 };
 
-async function pullSales(): Promise<number> {
+async function pullSales(sinceIso?: string | null): Promise<number> {
   const saleOrderFieldsFull = [
     'name',
     'partner_id',
@@ -468,12 +538,13 @@ async function pullSales(): Promise<number> {
     'company_id',
     'order_line',
   ];
+  const orderDomain = withSince([], sinceIso);
   const orders =
-    (await odooSearchRead<SaleOrderRow>('sale.order', [], saleOrderFieldsFull, {
+    (await odooSearchRead<SaleOrderRow>('sale.order', orderDomain, saleOrderFieldsFull, {
       limit: 2000,
       order: 'id desc',
     }).catch(() => null)) ||
-    (await odooSearchRead<SaleOrderRow>('sale.order', [], saleOrderFieldsCore, {
+    (await odooSearchRead<SaleOrderRow>('sale.order', orderDomain, saleOrderFieldsCore, {
       limit: 2000,
       order: 'id desc',
     }));
@@ -581,10 +652,10 @@ type PurchaseLineRow = {
   tax_ids?: number[];
 };
 
-async function pullPurchases(): Promise<number> {
+async function pullPurchases(sinceIso?: string | null): Promise<number> {
   const orders = await odooSearchRead<PurchaseOrderRow>(
     'purchase.order',
-    [],
+    withSince([], sinceIso),
     [
       'name',
       'partner_id',
@@ -695,6 +766,49 @@ function emptyPull(at = new Date().toISOString()): OdooPullResult {
   };
 }
 
+/**
+ * No incremental, estoque pode mudar sem touch em product.template.
+ * Atualiza qty_on_hand dos produtos locais já conhecidos.
+ */
+async function applyStockQtyToExistingDocs(stockMap: Map<string, number>): Promise<number> {
+  if (!stockMap.size) return 0;
+  let updated = 0;
+  for (const [key, qty] of stockMap) {
+    const sep = key.indexOf(':');
+    if (sep <= 0) continue;
+    const companyId = key.slice(0, sep);
+    const odooId = key.slice(sep + 1);
+    if (!odooId) continue;
+    const row = await one<{ id: string; header_json: string }>(
+      `SELECT id, header_json FROM forms_documents
+       WHERE kind = 'product'
+         AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $1
+         AND header_json::jsonb->>'odoo_id' = $2
+       LIMIT 1`,
+      [companyId || DEFAULT_COMPANY_ODOO_ID, odooId],
+    ).catch(() =>
+      one<{ id: string; header_json: string }>(
+        `SELECT id, header_json FROM forms_documents
+         WHERE kind = 'product'
+           AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $1
+           AND header_json LIKE $2
+         LIMIT 1`,
+        [companyId || DEFAULT_COMPANY_ODOO_ID, `%"odoo_id":"${odooId}"%`],
+      ),
+    );
+    if (!row) continue;
+    const header = parseHeader(row.header_json);
+    if (String(header.qty_on_hand || '') === String(qty)) continue;
+    header.qty_on_hand = String(qty);
+    await run(`UPDATE forms_documents SET header_json = $2 WHERE id = $1`, [
+      row.id,
+      JSON.stringify(header),
+    ]);
+    updated += 1;
+  }
+  return updated;
+}
+
 export type OdooPullProgress = {
   running: boolean;
   step: string;
@@ -754,19 +868,32 @@ export function getOdooPullProgress(): OdooPullProgress {
   return pullProgress;
 }
 
-/** Pull completo Odoo → Vertice. `auto` respeita throttle de 2 min. */
-export async function pullFromOdoo(options: { auto?: boolean } = {}): Promise<OdooPullResult> {
+/**
+ * Pull Odoo → Vertice.
+ * - Manual / mode full: baixa tudo.
+ * - auto + já houve pull: incremental por write_date (só alterados).
+ * - auto sem cursor: full uma vez para popular o Vertice.
+ */
+export async function pullFromOdoo(
+  options: { auto?: boolean; mode?: OdooPullMode } = {},
+): Promise<OdooPullResult> {
   if (!odooConfigured()) {
     throw new Error('Configure URL, banco, login e API Key do Odoo');
   }
 
+  const lastPullAt = getSetting('odoo_last_pull_at');
+  const mode: OdooPullMode =
+    options.mode ||
+    (options.auto && lastPullAt ? 'incremental' : 'full');
+  const sinceIso = mode === 'incremental' ? lastPullAt : null;
+
   if (options.auto) {
-    const last = getSetting('odoo_last_pull_at');
-    const lastMs = last ? Date.parse(last) : 0;
+    const lastMs = lastPullAt ? Date.parse(lastPullAt) : 0;
     if (lastMs && Date.now() - lastMs < AUTO_PULL_MIN_MS) {
       return {
-        ...emptyPull(last || new Date().toISOString()),
+        ...emptyPull(lastPullAt || new Date().toISOString()),
         skipped: true,
+        mode,
         companies: Number(getSetting('odoo_last_pull_companies') || 0),
         products: Number(getSetting('odoo_last_pull_products') || 0),
         partners: Number(getSetting('odoo_last_pull_partners') || 0),
@@ -793,38 +920,65 @@ export async function pullFromOdoo(options: { auto?: boolean } = {}): Promise<Od
     };
 
     try {
+      if (mode === 'incremental' && sinceIso) {
+        pushProgress(`incremental desde ${sinceIso} (overlap 3min)`, started);
+      } else {
+        pushProgress('full', started);
+      }
+
       pushProgress('empresas', started);
       const companies = await syncCompaniesFromOdoo();
       pushProgress(`empresas ok (${companies.length})`, started);
 
-      try {
-        pushProgress('cadastros auxiliares', started);
-        await pullOdooRefs();
-        pushProgress('cadastros auxiliares ok', started);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn('odoo-pull: cadastros auxiliares falharam (seguindo):', message);
-        pushProgress(`cadastros auxiliares falharam · ${message}`, started);
+      // Refs: full sempre; incremental só se passou o throttle.
+      let skipRefs = false;
+      if (mode === 'incremental') {
+        const lastRefs = getSetting('odoo_last_refs_pull_at');
+        const lastRefsMs = lastRefs ? Date.parse(lastRefs) : 0;
+        if (lastRefsMs && Date.now() - lastRefsMs < REFS_PULL_MIN_MS) {
+          skipRefs = true;
+          pushProgress('cadastros auxiliares ignorados (throttle 6h)', started);
+        }
+      }
+      if (!skipRefs) {
+        try {
+          pushProgress('cadastros auxiliares', started);
+          await pullOdooRefs();
+          await setSetting('odoo_last_refs_pull_at', new Date().toISOString());
+          pushProgress('cadastros auxiliares ok', started);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn('odoo-pull: cadastros auxiliares falharam (seguindo):', message);
+          pushProgress(`cadastros auxiliares falharam · ${message}`, started);
+        }
       }
 
-      pushProgress('estoque', started);
-      const stockMap = await pullStockQtyByTemplate();
+      pushProgress(mode === 'incremental' ? 'estoque (delta)' : 'estoque', started);
+      const stockMap = await pullStockQtyByTemplate(sinceIso);
       pushProgress(`estoque ok (${stockMap.size} itens)`, started);
 
-      pushProgress('produtos (pode demorar)', started);
-      const { products, stockUpdated } = await pullProducts(stockMap);
+      pushProgress(
+        mode === 'incremental' ? 'produtos (delta)' : 'produtos (pode demorar)',
+        started,
+      );
+      const { products, stockUpdated: stockFromProducts } = await pullProducts(stockMap, sinceIso);
+      let stockUpdated = stockFromProducts;
+      if (mode === 'incremental' && stockMap.size) {
+        const stockOnly = await applyStockQtyToExistingDocs(stockMap);
+        stockUpdated += stockOnly;
+      }
       pushProgress(`produtos ok (${products})`, started);
 
-      pushProgress('parceiros', started);
-      const partners = await pullPartners();
+      pushProgress(mode === 'incremental' ? 'parceiros (delta)' : 'parceiros', started);
+      const partners = await pullPartners(sinceIso);
       pushProgress(`parceiros ok (${partners})`, started);
 
-      pushProgress('vendas', started);
-      const sales = await pullSales();
+      pushProgress(mode === 'incremental' ? 'vendas (delta)' : 'vendas', started);
+      const sales = await pullSales(sinceIso);
       pushProgress(`vendas ok (${sales})`, started);
 
-      pushProgress('compras', started);
-      const purchases = await pullPurchases();
+      pushProgress(mode === 'incremental' ? 'compras (delta)' : 'compras', started);
+      const purchases = await pullPurchases(sinceIso);
       pushProgress(`compras ok (${purchases})`, started);
 
       const at = new Date().toISOString();
@@ -837,6 +991,7 @@ export async function pullFromOdoo(options: { auto?: boolean } = {}): Promise<Od
       await setSetting('odoo_last_pull_stock', String(stockUpdated));
 
       const result: OdooPullResult = {
+        mode,
         companies: companies.length,
         products,
         partners,
@@ -846,7 +1001,7 @@ export async function pullFromOdoo(options: { auto?: boolean } = {}): Promise<Od
         at,
       };
       pushProgress(
-        `concluído · ${products} produtos · ${partners} parceiros · ${sales} vendas · ${purchases} compras`,
+        `concluído (${mode}) · ${products} produtos · ${partners} parceiros · ${sales} vendas · ${purchases} compras`,
         started,
       );
       pullProgress = { ...pullProgress, running: false, result, error: '' };

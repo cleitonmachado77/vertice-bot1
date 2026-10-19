@@ -26,7 +26,7 @@ export function startOdooPullScheduler(): void {
           return;
         }
         console.log(
-          `odoo-pull: empresas=${result.companies} produtos=${result.products} parceiros=${result.partners} vendas=${result.sales} compras=${result.purchases} estoque=${result.stockUpdated}`,
+          `odoo-pull: mode=${result.mode || 'full'} empresas=${result.companies} produtos=${result.products} parceiros=${result.partners} vendas=${result.sales} compras=${result.purchases} estoque=${result.stockUpdated}`,
         );
       })
       .catch((error) => {
