@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { odooLabelPt } from '../odoo-pt.js';
 import { escapeHtml, formatSyncError, toast } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import {
@@ -205,8 +206,8 @@ async function paintProducts(panel, root, reload, token, opts = {}) {
           <span>${escapeHtml(
             [
               item.internal_ref,
-              item.category,
-              item.uom,
+              item.category && odooLabelPt(item.category),
+              item.uom && odooLabelPt(item.uom),
               item.sales_price && `venda ${item.sales_price}`,
               item.odoo_id && `Odoo #${item.odoo_id}`,
             ]
@@ -340,15 +341,18 @@ function bindEntityRefCombos(form, refs) {
       const q = String(query || '')
         .trim()
         .toLowerCase();
-      const matches = (q ? items.filter((item) => item.name.toLowerCase().includes(q)) : items).slice(0, 12);
+      const labelOf = (item) => odooLabelPt(item.name || '');
+      const matches = (
+        q ? items.filter((item) => labelOf(item).toLowerCase().includes(q) || item.name.toLowerCase().includes(q)) : items
+      ).slice(0, 12);
       if (!matches.length) {
         menu.innerHTML = '<div class="forms-combo-empty">Nenhuma opção Odoo (Receber dados)</div>';
       } else {
         menu.innerHTML = matches
           .map(
             (item) =>
-              `<button type="button" class="forms-combo-option" data-combo-pick="${escapeHtml(item.name)}">
-              <strong>${escapeHtml(item.name)}</strong>
+              `<button type="button" class="forms-combo-option" data-combo-pick="${escapeHtml(labelOf(item))}">
+              <strong>${escapeHtml(labelOf(item))}</strong>
               ${item.odoo_id ? `<span>Odoo #${escapeHtml(item.odoo_id)}</span>` : ''}
             </button>`,
           )
@@ -423,10 +427,10 @@ async function openProductEditor(root, reload, item, token) {
       ${entitySyncNoticeHtml(item)}
       <div class="grid-2">
         <label>Nome *<input name="name" required value="${escapeHtml(value.name || '')}" /></label>
-        ${entityCombo('category', 'Categoria do produto', value.category, 'Buscar categoria…')}
+        ${entityCombo('category', 'Categoria do produto', odooLabelPt(value.category || ''), 'Buscar categoria…')}
         <label>Preço de venda<input name="sales_price" value="${escapeHtml(value.sales_price || '')}" /></label>
         <label>Custo<input name="cost" value="${escapeHtml(value.cost || '')}" /></label>
-        ${entityCombo('uom', 'Unidade de medida', value.uom, 'Buscar unidade…')}
+        ${entityCombo('uom', 'Unidade de medida', odooLabelPt(value.uom || ''), 'Buscar unidade…')}
         <label>Referência interna<input name="internal_ref" value="${escapeHtml(value.internal_ref || '')}" /></label>
         <label>Quantidade em mãos<input name="qty_on_hand" value="${escapeHtml(value.qty_on_hand || '')}" readonly placeholder="Via estoque Odoo" /></label>
         <label>Rastrear inventário

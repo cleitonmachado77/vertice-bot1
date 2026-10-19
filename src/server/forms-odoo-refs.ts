@@ -1,5 +1,6 @@
 import { many, run } from './db.js';
 import { odooSearchRead } from './odoo-client.js';
+import { odooLabelPt } from './odoo-pt.js';
 
 function m2oId(value: unknown): string {
   if (Array.isArray(value) && value[0] != null) return String(value[0]);
@@ -160,21 +161,32 @@ export async function pullOdooRefs(): Promise<Record<OdooRefType, number>> {
     tag: 0,
   };
 
-  const categories = await odooSearchRead<{
-    id: number;
-    name: string;
-    complete_name?: string;
-    parent_id?: unknown;
-  }>('product.category', [], ['id', 'name', 'complete_name', 'parent_id'], {
-    limit: 5000,
-    order: 'complete_name asc, name asc',
-  }).catch(() => []);
+  // Não ordenar por complete_name: em vários Odoo ele não é stored e o search_read falha
+  // ("Cannot convert product.category.complete_name to SQL"). Falha era engolida → 0 categorias.
+  type CategoryRow = { id: number; name: string; complete_name?: string; parent_id?: unknown };
+  const categories: CategoryRow[] =
+    (await odooSearchRead<CategoryRow>(
+      'product.category',
+      [],
+      ['id', 'name', 'complete_name', 'parent_id'],
+      { limit: 5000, order: 'name asc' },
+    ).catch(() => null)) ||
+    (await odooSearchRead<CategoryRow>('product.category', [], ['id', 'name'], {
+      limit: 5000,
+      order: 'name asc',
+    }).catch((error) => {
+      console.warn(
+        'odoo-refs: product.category falhou:',
+        error instanceof Error ? error.message : error,
+      );
+      return [] as CategoryRow[];
+    }));
   counts.category = await upsertRefs(
     'category',
     categories.map((row) => ({
       odoo_id: String(row.id),
-      name: String(row.complete_name || row.name || ''),
-      meta: { short_name: String(row.name || '') },
+      name: odooLabelPt(String(row.complete_name || row.name || '')),
+      meta: { short_name: odooLabelPt(String(row.name || '')) },
     })),
   );
 
@@ -193,7 +205,7 @@ export async function pullOdooRefs(): Promise<Record<OdooRefType, number>> {
     'uom',
     uoms.map((row) => ({
       odoo_id: String(row.id),
-      name: String(row.name || ''),
+      name: odooLabelPt(String(row.name || '')),
     })),
   );
 

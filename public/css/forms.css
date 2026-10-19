@@ -369,11 +369,36 @@ body > .forms-combo-menu {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+
+.forms-editor-head > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Ações (Salvar / Novo / Fechar) sempre no canto direito. */
+.forms-editor-head > .row {
+  margin-left: auto;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
 }
 
 .forms-editor-head [data-save] {
   animation: forms-save-in 0.16s ease;
+}
+
+@media (max-width: 640px) {
+  .forms-editor-head {
+    flex-wrap: wrap;
+  }
+
+  .forms-editor-head > .row {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 
 @keyframes forms-save-in {

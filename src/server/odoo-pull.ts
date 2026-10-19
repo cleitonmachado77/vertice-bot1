@@ -8,6 +8,7 @@ import {
 import { documentTitle, emptyHeader, emptyLine } from './forms-fields.js';
 import { odooConfigured, odooSearchRead } from './odoo-client.js';
 import { pullOdooRefs } from './forms-odoo-refs.js';
+import { odooLabelPt } from './odoo-pt.js';
 import { joinNames, m2mIds, namesByIds } from './odoo-resolve.js';
 
 const AUTO_PULL_MIN_MS = 2 * 60 * 1000;
@@ -325,8 +326,8 @@ async function pullProducts(stockMap: Map<string, number>): Promise<{ products: 
     header.sales_price = String(row.list_price ?? '');
     header.cost = String(row.standard_price ?? '');
     header.internal_ref = String(row.default_code || '');
-    header.category = m2oName(row.categ_id);
-    header.uom = m2oName(row.uom_id);
+    header.category = odooLabelPt(m2oName(row.categ_id));
+    header.uom = odooLabelPt(m2oName(row.uom_id));
     header.track_inventory = row.is_storable || row.type === 'product' ? 'True' : 'False';
     header.odoo_id = String(row.id);
     header.odoo_synced_at = new Date().toISOString();

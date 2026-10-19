@@ -1,4 +1,5 @@
 import { odooSearchRead } from './odoo-client.js';
+import { odooLookupNames } from './odoo-pt.js';
 
 function cleanName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
@@ -12,22 +13,26 @@ function splitNames(csv: string): string[] {
 }
 
 async function findIdByName(model: string, name: string): Promise<number> {
-  const clean = cleanName(name);
-  if (!clean) return 0;
-  const exact = await odooSearchRead<{ id: number }>(
-    model,
-    [['name', '=', clean]],
-    ['id'],
-    { limit: 1 },
-  );
-  if (exact[0]?.id) return exact[0].id;
-  const fuzzy = await odooSearchRead<{ id: number }>(
-    model,
-    [['name', 'ilike', clean]],
-    ['id'],
-    { limit: 1 },
-  );
-  return fuzzy[0]?.id || 0;
+  const candidates = odooLookupNames(name).map(cleanName).filter(Boolean);
+  for (const clean of candidates) {
+    const exact = await odooSearchRead<{ id: number }>(
+      model,
+      [['name', '=', clean]],
+      ['id'],
+      { limit: 1 },
+    );
+    if (exact[0]?.id) return exact[0].id;
+  }
+  for (const clean of candidates) {
+    const fuzzy = await odooSearchRead<{ id: number }>(
+      model,
+      [['name', 'ilike', clean]],
+      ['id'],
+      { limit: 1 },
+    );
+    if (fuzzy[0]?.id) return fuzzy[0].id;
+  }
+  return 0;
 }
 
 export async function findPaymentTermId(name: string): Promise<number> {
@@ -39,35 +44,37 @@ export async function findSalesTeamId(name: string): Promise<number> {
 }
 
 export async function findCategoryId(name: string): Promise<number> {
-  const clean = cleanName(name);
-  if (!clean) return 0;
-  const found = await odooSearchRead<{ id: number }>(
-    'product.category',
-    [
-      '|',
-      '|',
-      ['complete_name', '=', clean],
-      ['name', '=', clean],
-      '|',
-      ['complete_name', 'ilike', clean],
-      ['name', 'ilike', clean],
-    ],
-    ['id'],
-    { limit: 1 },
-  );
-  return found[0]?.id || 0;
+  for (const clean of odooLookupNames(name).map(cleanName).filter(Boolean)) {
+    const found = await odooSearchRead<{ id: number }>(
+      'product.category',
+      [
+        '|',
+        '|',
+        ['complete_name', '=', clean],
+        ['name', '=', clean],
+        '|',
+        ['complete_name', 'ilike', clean],
+        ['name', 'ilike', clean],
+      ],
+      ['id'],
+      { limit: 1 },
+    );
+    if (found[0]?.id) return found[0].id;
+  }
+  return 0;
 }
 
 export async function findUomId(name: string): Promise<number> {
-  const clean = cleanName(name);
-  if (!clean) return 0;
-  const found = await odooSearchRead<{ id: number }>(
-    'uom.uom',
-    ['|', ['name', '=', clean], ['name', 'ilike', clean]],
-    ['id'],
-    { limit: 1 },
-  );
-  return found[0]?.id || 0;
+  for (const clean of odooLookupNames(name).map(cleanName).filter(Boolean)) {
+    const found = await odooSearchRead<{ id: number }>(
+      'uom.uom',
+      ['|', ['name', '=', clean], ['name', 'ilike', clean]],
+      ['id'],
+      { limit: 1 },
+    );
+    if (found[0]?.id) return found[0].id;
+  }
+  return 0;
 }
 
 async function findIdsByNames(model: string, csv: string): Promise<number[]> {

@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { odooLabelPt } from '../odoo-pt.js';
 import { escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import { entityFromSlug, renderEntitiesBody } from './forms-entities.js';
@@ -390,14 +391,20 @@ function bindShellActions(root, kind, schema, catalog, items, token, presets = [
   });
 
   root.querySelectorAll('[data-preset-new]').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const id = button.getAttribute('data-preset-new');
-      const preset = (presets || []).find((item) => item.id === id);
-      if (!preset) {
-        toast('Padrão não encontrado');
-        return;
+      try {
+        // Recarrega da API — evita usar cópia antiga da toolbar após editar o padrão.
+        const fresh = await loadPresets(kind);
+        const preset = (fresh || []).find((item) => item.id === id);
+        if (!preset) {
+          toast('Padrão não encontrado');
+          return;
+        }
+        openNewFromPreset(root, kind, schema, catalog, items, token, preset);
+      } catch (error) {
+        toast(error.message || 'Falha ao abrir padrão');
       }
-      openNewFromPreset(root, kind, schema, catalog, items, token, preset);
     });
   });
 
@@ -598,9 +605,11 @@ function openPresetEditor(root, kind, schema, catalog, items, token, preset, onS
   const draft = preset
     ? {
         ...base,
+        // Título salvo (mesmo vazio) — não cair no default Cotação/Solicitação/Produto.
+        title: typeof preset.title === 'string' ? preset.title : base.title,
         status: preset.status || base.status,
         header: { ...base.header, ...(preset.header || {}) },
-        lines: preset.lines?.length
+        lines: Array.isArray(preset.lines)
           ? preset.lines.map((line) => ({ id: '', values: { ...(line.values || {}) } }))
           : base.lines,
       }
@@ -644,7 +653,10 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
     const box = form.querySelector('#forms-lines');
     if (!box) return;
     const index = box.querySelectorAll('.forms-line').length;
-    box.insertAdjacentHTML('beforeend', lineHtml({ id: '', values: {} }, fields.lines, index, kind));
+    box.insertAdjacentHTML(
+      'beforeend',
+      lineHtml({ id: '', values: {} }, fields.lines, index, kind, null, catalog),
+    );
     bindLineRemoves(form, catalog);
     bindProductCombos(form, catalog);
     bindCatalogCombos(form, catalog);
@@ -668,6 +680,7 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
       const body = {
         kind,
         name,
+        title: payload.title || '',
         status: payload.status,
         header: payload.header,
         lines: payload.lines || [],
@@ -934,6 +947,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
                     index,
                     kind,
                     isPreset ? null : hideLines[index] || hideLines[0] || null,
+                    catalog,
                   ),
                 )
                 .join('')}</div>
@@ -1010,7 +1024,9 @@ function headerInput(field, value, kind, options = {}) {
     </label>`;
   }
   if (field.catalog) {
-    return catalogComboField(field, value, { name: `h_${field.key}`, kind });
+    const display =
+      field.catalog === 'category' || field.catalog === 'uom' ? odooLabelPt(value) : value;
+    return catalogComboField(field, display, { name: `h_${field.key}`, kind });
   }
   if (field.options?.length) {
     const current = String(value || field.options[0]?.value || '');
@@ -1098,9 +1114,37 @@ function lineHiddenValuesSeed(box, hiddenKeys) {
   return values;
 }
 
-function lineHtml(line, lineFields, index, kind, hiddenKeys = null) {
+function quantityFieldLabel(uom) {
+  const unit = odooLabelPt(String(uom || '').trim());
+  return unit ? `Quantidade (${unit})` : 'Quantidade';
+}
+
+function resolveProductUom(productName, catalog) {
+  const name = String(productName || '')
+    .trim()
+    .toLowerCase();
+  if (!name) return '';
+  const match = (catalog?.products || []).find(
+    (item) => String(item.name || '').trim().toLowerCase() === name,
+  );
+  return match?.uom ? String(match.uom).trim() : '';
+}
+
+function syncLineQuantityLabels(root, catalog) {
+  const scope = root?.querySelector?.('#forms-form') || root;
+  if (!scope) return;
+  scope.querySelectorAll('.forms-line').forEach((line) => {
+    const label = line.querySelector('[data-qty-label]');
+    if (!label) return;
+    const product = line.querySelector('[data-line-key="product"]');
+    label.textContent = quantityFieldLabel(resolveProductUom(product?.value, catalog));
+  });
+}
+
+function lineHtml(line, lineFields, index, kind, hiddenKeys = null, catalog = null) {
   const hide = hiddenKeys instanceof Set ? hiddenKeys : new Set();
   const visibleFields = lineFields.filter((field) => !hide.has(field.key));
+  const lineUom = resolveProductUom(line.values?.product, catalog);
   const hiddenInputs = lineFields
     .filter((field) => hide.has(field.key))
     .map(
@@ -1144,6 +1188,13 @@ function lineHtml(line, lineFields, index, kind, hiddenKeys = null) {
                 kind,
               });
             }
+            if (field.key === 'quantity') {
+              return `
+          <label>
+            <span data-qty-label>${escapeHtml(quantityFieldLabel(lineUom))}</span>
+            <input data-line-key="quantity" value="${escapeHtml(line.values?.[field.key] || '')}" />
+          </label>`;
+            }
             return `
           <label>${escapeHtml(field.label)}${field.required ? ' *' : ''}
             <input data-line-key="${escapeHtml(field.key)}" value="${escapeHtml(line.values?.[field.key] || '')}" />
@@ -1168,7 +1219,8 @@ function partnerMeta(partner) {
 function productMeta(product) {
   const bits = [];
   if (product.internal_ref) bits.push(product.internal_ref);
-  if (product.uom) bits.push(product.uom);
+  if (product.uom) bits.push(odooLabelPt(product.uom));
+  if (product.category) bits.push(odooLabelPt(product.category));
   if (product.sales_price) bits.push(`venda ${product.sales_price}`);
   if (product.cost) bits.push(`custo ${product.cost}`);
   if (product.qty_on_hand) bits.push(`estoque ${product.qty_on_hand}`);
@@ -1221,8 +1273,11 @@ function bindCatalogCombos(form, catalog) {
         input.dataset.comboBefore = input.value || '';
       });
     }
+    const localize = refType === 'category' || refType === 'uom';
     bindTextCombo(wrap, {
       items,
+      getLabel: (item) => (localize ? odooLabelPt(item.name) : item.name),
+      getValue: (item) => (localize ? odooLabelPt(item.name) : item.name),
       getMeta: (item) => refMeta(item, refType),
       emptyLabel: 'Nenhum cadastro Odoo encontrado (Receber dados)',
       onPick: (input) => {
@@ -1290,7 +1345,12 @@ function bindTextCombo(wrap, options) {
       .trim()
       .toLowerCase();
     const matches = (
-      q ? pool.filter((item) => String(item.name || '').toLowerCase().includes(q)) : pool
+      q
+        ? pool.filter((item) => {
+            const label = String(options.getLabel?.(item) || item.name || '').toLowerCase();
+            return label.includes(q) || String(item.name || '').toLowerCase().includes(q);
+          })
+        : pool
     ).slice(0, 12);
     if (!matches.length) {
       menu.innerHTML = `<div class="forms-combo-empty">${escapeHtml(options.emptyLabel || 'Nenhum resultado')}</div>`;
@@ -1298,10 +1358,12 @@ function bindTextCombo(wrap, options) {
       menu.innerHTML = matches
         .map((item, index) => {
           const meta = options.getMeta?.(item) || '';
+          const label = options.getLabel?.(item) || item.name || '';
+          const pickValue = options.getValue?.(item) || label;
           return `<button type="button" class="forms-combo-option${
             index === activeIndex ? ' is-active' : ''
-          }" data-combo-pick="${escapeHtml(item.name)}" role="option">
-            <strong>${escapeHtml(item.name)}</strong>
+          }" data-combo-pick="${escapeHtml(pickValue)}" role="option">
+            <strong>${escapeHtml(label)}</strong>
             ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
           </button>`;
         })
@@ -1376,13 +1438,17 @@ function bindPartnerCombos(form, catalog) {
   });
 }
 
-function applyProductPrice(input, catalog) {
+function applyProductLineHints(input, catalog) {
   const products = catalog.products || [];
   const match = products.find(
     (item) => item.name.trim().toLowerCase() === String(input.value || '').trim().toLowerCase(),
   );
-  if (!match) return;
   const line = input.closest('.forms-line');
+  const qtyLabel = line?.querySelector('[data-qty-label]');
+  if (qtyLabel) {
+    qtyLabel.textContent = quantityFieldLabel(match?.uom || '');
+  }
+  if (!match) return;
   const price = line?.querySelector('[data-line-key="unit_price"]');
   if (!price || price.value.trim()) return;
   const kind = input.getAttribute('data-price-kind');
@@ -1397,7 +1463,7 @@ function bindProductCombos(form, catalog) {
       items: catalog.products || [],
       getMeta: productMeta,
       emptyLabel: 'Nenhum produto encontrado',
-      onPick: (input) => applyProductPrice(input, catalog),
+      onPick: (input) => applyProductLineHints(input, catalog),
     });
   });
 }
@@ -1482,12 +1548,13 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
     const values = lineHiddenValuesSeed(box, hiddenKeys);
     box.insertAdjacentHTML(
       'beforeend',
-      lineHtml({ id: '', values }, fields.lines, index, kind, hiddenKeys),
+      lineHtml({ id: '', values }, fields.lines, index, kind, hiddenKeys, catalog),
     );
     bindLineRemoves(form, catalog);
     bindProductCombos(form, catalog);
     bindCatalogCombos(form, catalog);
     bindProductAutofill(form, catalog);
+    syncLineQuantityLabels(form, catalog);
     form._checkDirty?.();
   });
 
@@ -1526,8 +1593,9 @@ function bindProductAutofill(form, catalog) {
   form.querySelectorAll('[data-product-input]').forEach((input) => {
     if (input.dataset.boundCatalog === '1') return;
     input.dataset.boundCatalog = '1';
-    input.addEventListener('change', () => applyProductPrice(input, catalog));
+    input.addEventListener('change', () => applyProductLineHints(input, catalog));
   });
+  syncLineQuantityLabels(form, catalog);
 }
 
 function bindLineRemoves(form, catalog) {

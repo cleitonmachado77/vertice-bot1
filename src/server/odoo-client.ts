@@ -94,6 +94,9 @@ export async function odooAuthenticate(config = getOdooConfig()): Promise<number
   return uid;
 }
 
+/** Contexto padrão: rótulos traduzíveis do Odoo em português. */
+const DEFAULT_ODOO_CONTEXT = { lang: 'pt_BR' };
+
 export async function odooExecuteKw<T = unknown>(
   model: string,
   method: string,
@@ -102,6 +105,14 @@ export async function odooExecuteKw<T = unknown>(
   config = getOdooConfig(),
 ): Promise<T> {
   const uid = await odooAuthenticate(config);
+  const incomingContext =
+    kwargs.context && typeof kwargs.context === 'object' && !Array.isArray(kwargs.context)
+      ? (kwargs.context as Record<string, unknown>)
+      : {};
+  const mergedKwargs: Record<string, unknown> = {
+    ...kwargs,
+    context: { ...DEFAULT_ODOO_CONTEXT, ...incomingContext },
+  };
   const result = await jsonRpc(config, 'object', 'execute_kw', [
     config.db,
     uid,
@@ -109,7 +120,7 @@ export async function odooExecuteKw<T = unknown>(
     model,
     method,
     args,
-    kwargs,
+    mergedKwargs,
   ]);
   return result as T;
 }

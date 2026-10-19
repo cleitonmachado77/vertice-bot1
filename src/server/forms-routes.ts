@@ -505,6 +505,7 @@ export function registerFormsRoutes(): void {
           item: await createFormPreset({
             kind: text(raw.kind),
             name: text(raw.name),
+            title: text(raw.title),
             status: text(raw.status) || undefined,
             header: raw.header ? asRecord(raw.header) : undefined,
             lines: Array.isArray(raw.lines)
@@ -533,6 +534,7 @@ export function registerFormsRoutes(): void {
         {
           item: await updateFormPreset(ctx.params.id, {
             name: raw.name != null ? text(raw.name) : undefined,
+            title: raw.title != null ? text(raw.title) : undefined,
             status: raw.status != null ? text(raw.status) : undefined,
             header: raw.header ? asRecord(raw.header) : undefined,
             lines: Array.isArray(raw.lines)

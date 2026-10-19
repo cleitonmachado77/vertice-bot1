@@ -382,6 +382,7 @@ const SCHEMA = `
     company_odoo_id TEXT NOT NULL DEFAULT '1',
     kind TEXT NOT NULL,
     name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'draft',
     header_json TEXT NOT NULL DEFAULT '{}',
     lines_json TEXT NOT NULL DEFAULT '[]',
@@ -469,6 +470,7 @@ async function migrate(): Promise<void> {
       company_odoo_id TEXT NOT NULL DEFAULT '1',
       kind TEXT NOT NULL,
       name TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'draft',
       header_json TEXT NOT NULL DEFAULT '{}',
       lines_json TEXT NOT NULL DEFAULT '[]',
@@ -479,6 +481,7 @@ async function migrate(): Promise<void> {
     )
   `);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS visible_json TEXT NOT NULL DEFAULT '{}'`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT ''`);
   await run(
     `CREATE INDEX IF NOT EXISTS idx_forms_presets_company_kind
      ON forms_presets(company_odoo_id, kind, sort_order, name)`,

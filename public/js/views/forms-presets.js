@@ -48,13 +48,13 @@ export function draftFromPreset(blankDraft, preset, fields) {
   const kind = blankDraft.kind || preset.kind;
   const draft = {
     ...blankDraft,
+    title: typeof preset.title === 'string' ? preset.title : blankDraft.title,
     status: preset.status || blankDraft.status || 'draft',
     header: { ...(blankDraft.header || {}), ...(preset.header || {}) },
     lines: blankDraft.lines || [],
   };
-  const presetLines = Array.isArray(preset.lines) ? preset.lines : [];
-  if (presetLines.length) {
-    draft.lines = presetLines.map((line) => ({
+  if (Array.isArray(preset.lines)) {
+    draft.lines = preset.lines.map((line) => ({
       id: '',
       values: { ...(line.values || {}) },
     }));
@@ -144,10 +144,19 @@ export function openPresetsManager(root, kind, presets, hooks) {
       hooks.openPresetEditor(null);
     });
     editor.querySelectorAll('[data-preset-edit]').forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         const id = btn.getAttribute('data-preset-edit');
-        const preset = items.find((item) => item.id === id) || null;
-        hooks.openPresetEditor(preset);
+        try {
+          const fresh = await loadPresets(kind);
+          const preset = fresh.find((item) => item.id === id) || null;
+          if (!preset) {
+            toast('Padrão não encontrado');
+            return;
+          }
+          hooks.openPresetEditor(preset);
+        } catch (error) {
+          toast(error.message || 'Falha ao abrir padrão');
+        }
       });
     });
     editor.querySelectorAll('[data-preset-delete]').forEach((btn) => {

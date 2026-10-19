@@ -21,6 +21,8 @@ export type FormPreset = {
   company_odoo_id: string;
   kind: FormKind;
   name: string;
+  /** Título aplicado ao criar um novo registro a partir do padrão. */
+  title: string;
   status: string;
   header: Record<string, string>;
   lines: Array<{ values: Record<string, string> }>;
@@ -33,6 +35,7 @@ export type FormPreset = {
 export type FormPresetInput = {
   kind?: string;
   name?: string;
+  title?: string;
   status?: string;
   header?: Record<string, string>;
   lines?: Array<{ values?: Record<string, string> }>;
@@ -45,6 +48,7 @@ type PresetRow = {
   company_odoo_id: string;
   kind: string;
   name: string;
+  title?: string;
   status: string;
   header_json: string;
   lines_json: string;
@@ -85,8 +89,8 @@ function parseHeader(raw: string, kind: FormKind): Record<string, string> {
     const value = JSON.parse(raw || '{}') as Record<string, unknown>;
     for (const [key, item] of Object.entries(value || {})) {
       if (!allowed.has(key)) continue;
-      const str = item == null ? '' : String(item);
-      if (str.trim() !== '') out[key] = str;
+      // Mantém string vazia — limpar um campo no editor precisa sobreviver ao reload.
+      out[key] = item == null ? '' : String(item);
     }
   } catch {
     /* keep empty */
@@ -100,22 +104,19 @@ function parseLines(raw: string, kind: FormKind): Array<{ values: Record<string,
   try {
     const value = JSON.parse(raw || '[]') as unknown;
     if (!Array.isArray(value)) return [];
-    return value
-      .map((item) => {
-        const values: Record<string, string> = {};
-        const src =
-          item && typeof item === 'object'
-            ? ((item as { values?: Record<string, unknown> }).values ||
-                (item as Record<string, unknown>))
-            : {};
-        for (const [key, cell] of Object.entries(src || {})) {
-          if (!lineKeys.has(key)) continue;
-          const str = cell == null ? '' : String(cell);
-          if (str.trim() !== '') values[key] = str;
-        }
-        return { values };
-      })
-      .filter((line) => Object.keys(line.values).length > 0);
+    return value.map((item) => {
+      const values: Record<string, string> = {};
+      const src =
+        item && typeof item === 'object'
+          ? ((item as { values?: Record<string, unknown> }).values ||
+              (item as Record<string, unknown>))
+          : {};
+      for (const [key, cell] of Object.entries(src || {})) {
+        if (!lineKeys.has(key)) continue;
+        values[key] = cell == null ? '' : String(cell);
+      }
+      return { values };
+    });
   } catch {
     return [];
   }
@@ -165,6 +166,7 @@ function mapPreset(row: PresetRow): FormPreset {
     company_odoo_id: row.company_odoo_id || getActiveCompanyId(),
     kind,
     name: row.name,
+    title: String(row.title || '').trim(),
     status: normalizeFormStatus(kind, row.status || 'draft'),
     header: parseHeader(row.header_json, kind),
     lines: parseLines(row.lines_json, kind),
@@ -181,8 +183,8 @@ function sanitizeHeader(kind: FormKind, input?: Record<string, string>): Record<
   if (!input) return out;
   for (const key of allowed) {
     if (!(key in input)) continue;
-    const str = String(input[key] ?? '');
-    if (str.trim() !== '') out[key] = str;
+    // Persiste vazio para o clear no UI não “voltar” no próximo open.
+    out[key] = String(input[key] ?? '');
   }
   return out;
 }
@@ -194,18 +196,15 @@ function sanitizeLines(
   const allowed = new Set(lineFieldsFor(kind).map((field) => field.key));
   if (!allowed.size) return [];
   if (!Array.isArray(input)) return [];
-  return input
-    .map((line) => {
-      const values: Record<string, string> = {};
-      const src = line?.values || {};
-      for (const key of allowed) {
-        if (!(key in src)) continue;
-        const str = String(src[key] ?? '');
-        if (str.trim() !== '') values[key] = str;
-      }
-      return { values };
-    })
-    .filter((line) => Object.keys(line.values).length > 0);
+  return input.map((line) => {
+    const values: Record<string, string> = {};
+    const src = line?.values || {};
+    for (const key of allowed) {
+      if (!(key in src)) continue;
+      values[key] = String(src[key] ?? '');
+    }
+    return { values };
+  });
 }
 
 async function assertUniqueName(
@@ -253,6 +252,7 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
   const companyId = getActiveCompanyId();
   await assertUniqueName(companyId, kind, name);
 
+  const title = String(input.title || '').trim().slice(0, 200);
   const status = normalizeFormStatus(kind, String(input.status || 'draft'));
   const header = sanitizeHeader(kind, input.header);
   const lines = sanitizeLines(kind, input.lines);
@@ -271,13 +271,14 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
   const id = randomUUID();
   await run(
     `INSERT INTO forms_presets
-      (id, company_odoo_id, kind, name, status, header_json, lines_json, visible_json, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      (id, company_odoo_id, kind, name, title, status, header_json, lines_json, visible_json, sort_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       id,
       companyId,
       kind,
       name,
+      title,
       status,
       JSON.stringify(header),
       JSON.stringify(lines),
@@ -298,6 +299,8 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
   if (!name) throw new Error('Nome do padrão obrigatório');
   await assertUniqueName(current.company_odoo_id, current.kind, name, id);
 
+  const title =
+    input.title != null ? String(input.title || '').trim().slice(0, 200) : current.title;
   const status =
     input.status != null
       ? normalizeFormStatus(current.kind, String(input.status || 'draft'))
@@ -314,12 +317,13 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
 
   await run(
     `UPDATE forms_presets
-     SET name = $2, status = $3, header_json = $4, lines_json = $5, visible_json = $6,
-         sort_order = $7, updated_at = NOW()
-     WHERE id = $1 AND company_odoo_id = $8`,
+     SET name = $2, title = $3, status = $4, header_json = $5, lines_json = $6, visible_json = $7,
+         sort_order = $8, updated_at = NOW()
+     WHERE id = $1 AND company_odoo_id = $9`,
     [
       id,
       name,
+      title,
       status,
       JSON.stringify(header),
       JSON.stringify(lines),

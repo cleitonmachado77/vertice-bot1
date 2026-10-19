@@ -3,6 +3,7 @@ import { many, one, run } from './db.js';
 import { getActiveCompany, getActiveCompanyId } from './forms-companies.js';
 import { emptyHeader } from './forms-fields.js';
 import { listOdooRefsGrouped, type OdooRefItem, type OdooRefType } from './forms-odoo-refs.js';
+import { odooLabelPt } from './odoo-pt.js';
 import type { FormDocument } from './forms.js';
 
 /** Impostos visíveis para a empresa ativa (company_id + país fiscal), como no Odoo. */
@@ -129,8 +130,24 @@ export async function getFormsCatalog(options: { backfill?: boolean } = {}): Pro
   ]);
   const countryId = company?.country_odoo_id || '';
   refs.tax = filterTaxesForCompany(refs.tax, companyId, countryId);
+  // Exibe cadastros auxiliares padrão do Odoo em português (Units → Unidades, etc.).
+  for (const key of ['category', 'uom'] as const) {
+    refs[key] = (refs[key] || []).map((item) => ({
+      ...item,
+      name: odooLabelPt(item.name),
+      meta: {
+        ...item.meta,
+        ...(item.meta?.short_name ? { short_name: odooLabelPt(item.meta.short_name) } : {}),
+      },
+    }));
+  }
+  const productsPt = products.map((item) => ({
+    ...item,
+    uom: odooLabelPt(item.uom),
+    category: odooLabelPt(item.category),
+  }));
   return {
-    products,
+    products: productsPt,
     partners,
     refs,
     activeCompanyId: companyId,
