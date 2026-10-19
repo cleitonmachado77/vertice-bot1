@@ -66,11 +66,15 @@ export function draftFromPreset(blankDraft, preset, fields) {
   const headerKeys = (fields?.header || []).map((field) => field.key);
   const lineKeys = (fields?.lines || []).map((field) => field.key);
 
+  const lineHideSet = new Set(lineKeys.filter((key) => !showLineKeys.has(key)));
   const hide = {
     title: !visible.title,
     status: !visible.status,
     header: new Set(headerKeys.filter((key) => !showHeader.has(key))),
-    lines: (draft.lines || []).map(() => new Set(lineKeys.filter((key) => !showLineKeys.has(key)))),
+    // Sempre pelo menos um Set — “Adicionar linha” reutiliza o mesmo filtro.
+    lines: (draft.lines || []).length
+      ? (draft.lines || []).map(() => new Set(lineHideSet))
+      : [new Set(lineHideSet)],
   };
   return { draft, hide, visible };
 }

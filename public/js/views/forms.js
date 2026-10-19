@@ -779,6 +779,12 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
   const hideStatus = Boolean(hide?.status);
   const hideHeader = hide?.header instanceof Set ? hide.header : new Set();
   const hideLines = Array.isArray(hide?.lines) ? hide.lines : [];
+  /** Mesmo filtro de campos de linha para novas linhas (Adicionar linha). */
+  const sharedLineHide = !isPreset && hideLines[0] instanceof Set ? hideLines[0] : null;
+  const hiddenLineKeysAttr =
+    sharedLineHide && sharedLineHide.size
+      ? ` data-hidden-line-keys="${escapeHtml([...sharedLineHide].join(','))}"`
+      : '';
   const presetShow = options.presetShow || null;
   const showHeaderSet = new Set(presetShow?.header || []);
   const showLineSet = new Set(presetShow?.lines || []);
@@ -920,14 +926,14 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
                 <button class="btn-ghost" type="button" data-add-line>Adicionar linha</button>
               </div>
               ${lineShowBar}
-              <div id="forms-lines">${(doc.lines || [])
+              <div id="forms-lines"${hiddenLineKeysAttr}>${(doc.lines || [])
                 .map((line, index) =>
                   lineHtml(
                     line,
                     fields.lines,
                     index,
                     kind,
-                    isPreset ? null : hideLines[index] || null,
+                    isPreset ? null : hideLines[index] || hideLines[0] || null,
                   ),
                 )
                 .join('')}</div>
@@ -1070,6 +1076,26 @@ function bindDateInputs(form) {
       if (next !== input.value) input.value = next;
     });
   });
+}
+
+/** Lê o filtro de campos ocultos gravado em `#forms-lines` (vindo do padrão). */
+function lineHiddenKeysFromBox(box) {
+  const raw = String(box?.getAttribute('data-hidden-line-keys') || '').trim();
+  if (!raw) return null;
+  return new Set(raw.split(',').map((key) => key.trim()).filter(Boolean));
+}
+
+/** Copia valores dos campos ocultos da 1ª linha (pré-preenchidos pelo padrão). */
+function lineHiddenValuesSeed(box, hiddenKeys) {
+  if (!hiddenKeys?.size) return {};
+  const first = box?.querySelector('.forms-line');
+  if (!first) return {};
+  const values = {};
+  for (const key of hiddenKeys) {
+    const input = first.querySelector(`[data-line-key="${key.replace(/"/g, '')}"]`);
+    if (input) values[key] = input.value || '';
+  }
+  return values;
 }
 
 function lineHtml(line, lineFields, index, kind, hiddenKeys = null) {
@@ -1452,7 +1478,12 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
     const box = form.querySelector('#forms-lines');
     if (!box) return;
     const index = box.querySelectorAll('.forms-line').length;
-    box.insertAdjacentHTML('beforeend', lineHtml({ id: '', values: {} }, fields.lines, index, kind));
+    const hiddenKeys = lineHiddenKeysFromBox(box);
+    const values = lineHiddenValuesSeed(box, hiddenKeys);
+    box.insertAdjacentHTML(
+      'beforeend',
+      lineHtml({ id: '', values }, fields.lines, index, kind, hiddenKeys),
+    );
     bindLineRemoves(form, catalog);
     bindProductCombos(form, catalog);
     bindCatalogCombos(form, catalog);
