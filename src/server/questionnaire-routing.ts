@@ -5,6 +5,7 @@ import {
   getCycleContextsByIds,
   getQuestionnaireForCycle,
   listCycleAnswers,
+  listPendingCycleContextsNearDate,
   setConversationCycleContext,
   setConversationCycleCandidates,
   toCycleContext,
@@ -24,6 +25,9 @@ export type ActiveCycleResolution = {
   selectionConsumed?: boolean;
   completedEditContext?: boolean;
 };
+
+/** Dias recentes (além de hoje) considerados para preferir ciclo notificado. */
+const RECENT_ROUTE_LOOKBACK = 3;
 
 export async function resolveActiveCycleForConversation(input: {
   contactId: string;
@@ -74,15 +78,29 @@ export async function resolveActiveCycleForConversation(input: {
     }
   }
 
-  const candidates = await listActiveCycleContexts(
+  const todayCandidates = await listActiveCycleContexts(
     input.contactId,
     input.date,
     input.weekday,
     Boolean(input.includeCompletedContext),
   );
+  const recentPending = await listPendingCycleContextsNearDate(
+    input.contactId,
+    input.date,
+    RECENT_ROUTE_LOOKBACK,
+  );
+  const candidates = mergeCycleCandidates(todayCandidates, recentPending, input.date);
+
   if (!candidates.length) return { ambiguous: [] };
   const active = candidates.find((item) => item.cycle.id === stored?.active_cycle_id);
   if (active) return { context: active, ambiguous: [] };
+
+  const preferred = preferPromptedRecentCycle(candidates, input.date);
+  if (preferred) {
+    await setConversationCycleContext(input.conversationId, preferred.cycle.id);
+    return { context: preferred, ambiguous: [] };
+  }
+
   if (candidates.length === 1) {
     await setConversationCycleContext(input.conversationId, candidates[0].cycle.id);
     return { context: candidates[0], ambiguous: [] };
@@ -103,6 +121,69 @@ export async function resolveActiveCycleForConversation(input: {
     );
   }
   return { ambiguous: candidates };
+}
+
+/**
+ * Prefere ciclo notificado/em progresso com last_prompted_at recente
+ * em vez de um ciclo de hoje só open sem prompt.
+ */
+export function preferPromptedRecentCycle(
+  candidates: ActiveCycleContext[],
+  today: string,
+): ActiveCycleContext | undefined {
+  if (!candidates.length) return undefined;
+
+  const openPrompted = candidates
+    .filter(
+      (item) =>
+        item.missing.length > 0 &&
+        ['notified', 'in_progress'].includes(item.cycle.status) &&
+        Boolean(item.cycle.last_prompted_at),
+    )
+    .sort((a, b) =>
+      String(b.cycle.last_prompted_at).localeCompare(String(a.cycle.last_prompted_at)),
+    );
+
+  if (!openPrompted.length) return undefined;
+
+  const best = openPrompted[0];
+  // Se o melhor prompt é de dia anterior, prefere-o a um "open" de hoje sem prompt.
+  if (best.cycle.occurrence_date < today) {
+    const todayUnprompted = candidates.filter(
+      (item) =>
+        item.cycle.occurrence_date === today &&
+        item.cycle.status === 'open' &&
+        !item.cycle.last_prompted_at &&
+        item.questionnaire.id === best.questionnaire.id,
+    );
+    if (todayUnprompted.length || candidates.some((c) => c.cycle.id === best.cycle.id)) {
+      return best;
+    }
+  }
+
+  // Mesmo dia: se há um prompted único mais recente, use-o.
+  if (
+    openPrompted.length === 1 ||
+    openPrompted[0].cycle.last_prompted_at !== openPrompted[1]?.cycle.last_prompted_at
+  ) {
+    return best;
+  }
+  return undefined;
+}
+
+/** Une ciclos de hoje com pendentes recentes, sem duplicar id. */
+export function mergeCycleCandidates(
+  todayCandidates: ActiveCycleContext[],
+  recentPending: ActiveCycleContext[],
+  today: string,
+): ActiveCycleContext[] {
+  const byId = new Map<string, ActiveCycleContext>();
+  for (const item of todayCandidates) byId.set(item.cycle.id, item);
+  for (const item of recentPending) {
+    if (item.cycle.occurrence_date > today) continue;
+    if (!byId.has(item.cycle.id)) byId.set(item.cycle.id, item);
+  }
+  return [...byId.values()];
 }
 
 /** Ciclos do contato numa data (cria se ainda não existir e o plano roda nesse dia). */
@@ -164,4 +245,3 @@ function safeIds(value: string): string[] {
 function fold(value: string): string {
   return value.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').trim();
 }
-

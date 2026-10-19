@@ -204,8 +204,38 @@ export function emptyLine(kind: FormKind): Record<string, string> {
   return out;
 }
 
+function partnerName(kind: FormKind, header: Record<string, string>): string {
+  if (kind === 'sale') return String(header.customer || '').trim();
+  if (kind === 'purchase') return String(header.vendor || '').trim();
+  return '';
+}
+
+/** Título padrão: Número + Fornecedor/Cliente (ex.: P00013 · Associação…). */
 export function documentTitle(kind: FormKind, header: Record<string, string>): string {
-  if (kind === 'sale') return header.customer?.trim() || header.order_reference?.trim() || 'Cotação';
-  if (kind === 'purchase') return header.vendor?.trim() || header.order_reference?.trim() || 'Solicitação';
-  return header.name?.trim() || 'Produto';
+  if (kind === 'product') return header.name?.trim() || 'Produto';
+  const ref = String(header.order_reference || '').trim();
+  const partner = partnerName(kind, header);
+  if (ref && partner) return `${ref} · ${partner}`;
+  if (partner) return partner;
+  if (ref) return ref;
+  return kind === 'sale' ? 'Cotação' : 'Solicitação';
+}
+
+/** True quando o título ainda é genérico ou espelha só número/parceiro (pode regenerar). */
+export function shouldAutofillFormTitle(
+  kind: FormKind,
+  title: string,
+  header: Record<string, string>,
+): boolean {
+  if (kind === 'product') return false;
+  const current = String(title || '').trim();
+  if (!current) return true;
+  if (kind === 'sale' && (current === 'Cotação' || current === 'Cotacao')) return true;
+  if (kind === 'purchase' && (current === 'Solicitação' || current === 'Solicitacao')) return true;
+  const ref = String(header.order_reference || '').trim();
+  const partner = partnerName(kind, header);
+  if (ref && current === ref) return true;
+  if (partner && current === partner) return true;
+  if (ref && partner && current === `${ref} · ${partner}`) return true;
+  return false;
 }

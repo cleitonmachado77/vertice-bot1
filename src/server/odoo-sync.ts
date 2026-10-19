@@ -5,6 +5,7 @@ import {
   listFormDocuments,
   type FormDocument,
 } from './forms.js';
+import { documentTitle, shouldAutofillFormTitle } from './forms-fields.js';
 import { odooCreate, odooExecuteKw, odooSearchRead, odooWrite } from './odoo-client.js';
 import {
   findCategoryId,
@@ -158,8 +159,8 @@ async function setDocOdooMeta(
     const order = await fetchOrderNameAndState(options.orderModel, odooId);
     if (order.name) {
       header.order_reference = order.name;
-      if (!title || title === 'Cotação' || title === 'Solicitação') {
-        title = order.name;
+      if (shouldAutofillFormTitle(doc.kind, title, header)) {
+        title = documentTitle(doc.kind, header);
       }
     }
     if (order.state) {
@@ -259,8 +260,8 @@ export async function pushProductToOdoo(doc: FormDocument): Promise<FormDocument
 
   const uomId = await findUomId(doc.header.uom || '');
   if (uomId > 0) {
+    // Só uom_id: no Odoo 19 uom_po_id não existe mais em product.template.
     values.uom_id = uomId;
-    values.uom_po_id = uomId;
   }
 
   const existingId = num(doc.header.odoo_id, 0);

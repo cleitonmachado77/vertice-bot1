@@ -139,6 +139,35 @@ export async function odooWrite(model: string, ids: number[], values: Record<str
   return Boolean(ok);
 }
 
+type FieldPresenceCache = { at: number; present: boolean };
+const fieldPresenceCache = new Map<string, FieldPresenceCache>();
+const FIELD_PRESENCE_TTL_MS = 30 * 60 * 1000;
+
+/** Cacheia se um campo existe no modelo (útil para diferenças entre versões do Odoo). */
+export async function odooModelHasField(model: string, field: string): Promise<boolean> {
+  const key = `${model}:${field}`;
+  const cached = fieldPresenceCache.get(key);
+  if (cached && Date.now() - cached.at < FIELD_PRESENCE_TTL_MS) {
+    return cached.present;
+  }
+  try {
+    // Pedir só o campo: no Odoo 19 fields_get de campo inexistente pode lançar Invalid field.
+    const result = await odooExecuteKw<Record<string, unknown>>(model, 'fields_get', [], {
+      attributes: ['type'],
+    });
+    const present = Boolean(result && typeof result === 'object' && field in result);
+    fieldPresenceCache.set(key, { at: Date.now(), present });
+    return present;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/invalid field/i.test(message)) {
+      fieldPresenceCache.set(key, { at: Date.now(), present: false });
+      return false;
+    }
+    throw error;
+  }
+}
+
 type OdooStatusCache = {
   at: number;
   value: {

@@ -7,6 +7,7 @@ import {
   emptyLine,
   isFormKind,
   normalizeFormStatus,
+  shouldAutofillFormTitle,
   type FormKind,
 } from './forms-fields.js';
 import { syncSharedCatalog } from './forms-catalog.js';
@@ -174,7 +175,12 @@ export async function saveFormDocument(id: string, input: FormSaveInput): Promis
   ) {
     header.order_reference = current.header.order_reference;
   }
-  const title = (input.title || documentTitle(current.kind, header)).trim() || current.title;
+  const rawTitle = String(input.title ?? '').trim();
+  const title = (
+    shouldAutofillFormTitle(current.kind, rawTitle, header)
+      ? documentTitle(current.kind, header)
+      : rawTitle
+  ).trim() || current.title;
   const status = normalizeFormStatus(current.kind, input.status || current.status || 'draft');
   if (current.kind === 'sale' || current.kind === 'purchase') {
     header.odoo_state = status;

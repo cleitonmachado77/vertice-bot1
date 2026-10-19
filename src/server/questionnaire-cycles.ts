@@ -183,6 +183,32 @@ export async function listCompletedCycleContexts(
   return loadCycleContexts(cycles);
 }
 
+/**
+ * Ciclos existentes (não cria) dos últimos dias ainda abertos — para contexto e roteamento.
+ * lookbackDays conta a partir de today (inclui today).
+ */
+export async function listPendingCycleContextsNearDate(
+  contactId: string,
+  today: string,
+  lookbackDays = 7,
+): Promise<ActiveCycleContext[]> {
+  if (!contactId) return [];
+  const dates = recentOccurrenceDates(today, Math.max(1, lookbackDays));
+  const cycles = await many<QuestionnaireCycle>(
+    `SELECT cyc.id, cyc.questionnaire_id, cyc.contact_id, cyc.revision_id,
+            cyc.occurrence_date, cyc.status, cyc.template_sent_at, cyc.completed_at,
+            cyc.error, cyc.updated_at, cyc.last_prompted_at, cyc.last_inbound_at
+     FROM questionnaire_cycles cyc
+     WHERE cyc.contact_id = $1
+       AND cyc.occurrence_date = ANY($2::text[])
+       AND cyc.status IN ('open', 'notified', 'in_progress', 'sending', 'failed')
+     ORDER BY cyc.occurrence_date DESC, cyc.last_prompted_at DESC NULLS LAST`,
+    [contactId, dates],
+  );
+  const contexts = await loadCycleContexts(cycles);
+  return contexts.filter((item) => item.missing.length > 0);
+}
+
 export async function getCycleContextsByIds(ids: string[]): Promise<ActiveCycleContext[]> {
   if (!ids.length) return [];
   const cycles = await many<QuestionnaireCycle>(

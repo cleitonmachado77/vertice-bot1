@@ -36,6 +36,12 @@ import {
   type FormSaveInput,
 } from './forms.js';
 import {
+  createFormPreset,
+  deleteFormPreset,
+  listFormPresets,
+  updateFormPreset,
+} from './forms-presets.js';
+import {
   companiesPayload,
   setActiveCompanyId,
   syncCompaniesFromOdoo,
@@ -81,6 +87,22 @@ function asRecord(value: unknown): Record<string, string> {
     out[key] = item == null ? '' : String(item);
   }
   return out;
+}
+
+function asPresetVisible(value: unknown): {
+  title?: boolean;
+  status?: boolean;
+  header?: string[];
+  lines?: string[];
+} | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  return {
+    title: raw.title == null ? undefined : Boolean(raw.title),
+    status: raw.status == null ? undefined : Boolean(raw.status),
+    header: Array.isArray(raw.header) ? raw.header.map(String) : undefined,
+    lines: Array.isArray(raw.lines) ? raw.lines.map(String) : undefined,
+  };
 }
 
 function parseSave(raw: Record<string, unknown>): FormSaveInput {
@@ -456,6 +478,84 @@ export function registerFormsRoutes(): void {
         throw new Error('Informe kind=all|sale|purchase|product');
       }
       json(ctx.res, 200, await pushFormsByKind(kind));
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('GET', '/api/forms/presets', async (ctx) => {
+    if (!(await requireUser(ctx))) return;
+    try {
+      const kind = text(ctx.query.get('kind'));
+      if (!isFormKind(kind)) throw new Error('Informe kind=sale|purchase|product');
+      json(ctx.res, 200, { items: await listFormPresets(kind) });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('POST', '/api/forms/presets', async (ctx) => {
+    if (!(await requireUser(ctx))) return;
+    try {
+      const raw = body(ctx);
+      json(
+        ctx.res,
+        200,
+        {
+          item: await createFormPreset({
+            kind: text(raw.kind),
+            name: text(raw.name),
+            status: text(raw.status) || undefined,
+            header: raw.header ? asRecord(raw.header) : undefined,
+            lines: Array.isArray(raw.lines)
+              ? raw.lines.map((line) => {
+                  const item = line && typeof line === 'object' ? (line as Record<string, unknown>) : {};
+                  return { values: asRecord(item.values) };
+                })
+              : undefined,
+            visible: asPresetVisible(raw.visible),
+            sort_order: raw.sort_order != null ? Number(raw.sort_order) : undefined,
+          }),
+        },
+      );
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('PUT', '/api/forms/presets/:id', async (ctx) => {
+    if (!(await requireUser(ctx))) return;
+    try {
+      const raw = body(ctx);
+      json(
+        ctx.res,
+        200,
+        {
+          item: await updateFormPreset(ctx.params.id, {
+            name: raw.name != null ? text(raw.name) : undefined,
+            status: raw.status != null ? text(raw.status) : undefined,
+            header: raw.header ? asRecord(raw.header) : undefined,
+            lines: Array.isArray(raw.lines)
+              ? raw.lines.map((line) => {
+                  const item = line && typeof line === 'object' ? (line as Record<string, unknown>) : {};
+                  return { values: asRecord(item.values) };
+                })
+              : undefined,
+            visible: raw.visible !== undefined ? asPresetVisible(raw.visible) : undefined,
+            sort_order: raw.sort_order != null ? Number(raw.sort_order) : undefined,
+          }),
+        },
+      );
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('DELETE', '/api/forms/presets/:id', async (ctx) => {
+    if (!(await requireUser(ctx))) return;
+    try {
+      await deleteFormPreset(ctx.params.id);
+      json(ctx.res, 200, { ok: true });
     } catch (error) {
       fail(ctx, error);
     }

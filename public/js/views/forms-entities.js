@@ -1,26 +1,26 @@
 import { api } from '../api.js';
 import { escapeHtml, formatSyncError, toast } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
+import {
+  closeEditorModal,
+  ensureFormsModal,
+  formsModalShellHtml,
+  getFormsEditor,
+  openEditorModal,
+} from './forms-modal.js';
 
+/** Só erro — sync bem-sucedido fica silencioso. */
 function entitySyncNoticeHtml(item) {
   const err = String(item?.odoo_sync_error || '').trim();
-  if (err) {
-    return `<div class="forms-sync-notice is-error" role="alert" title="${escapeHtml(err)}">
+  if (!err) return '';
+  return `<div class="forms-sync-notice is-error" role="alert" title="${escapeHtml(err)}">
       <span class="forms-sync-msg"><strong>Odoo · não sincronizado.</strong> ${escapeHtml(formatSyncError(err, 420))}</span>
       ${item?.id ? '<button class="btn-ghost" type="button" data-odoo-push>Tentar novamente</button>' : ''}
     </div>`;
-  }
-  if (item?.odoo_id) {
-    return `<div class="forms-sync-notice" role="status">
-      <span class="forms-sync-msg">Odoo #${escapeHtml(item.odoo_id)} · sync automático ao salvar</span>
-    </div>`;
-  }
-  return `<div class="forms-sync-notice is-pending" role="status">
-    <span class="forms-sync-msg">Salvar envia automaticamente ao Odoo</span>
-  </div>`;
 }
 
-async function pollEntityProductSync(productId, reload, token, attempts = 5) {
+/** Sync em background: não redesenha a lista. Só avisa se falhar. */
+async function pollEntityProductSync(productId, token, attempts = 5) {
   for (let i = 0; i < attempts; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 900));
     if (!isNavActive(token)) return;
@@ -30,14 +30,34 @@ async function pollEntityProductSync(productId, reload, token, attempts = 5) {
       if (header.odoo_sync_pending === '1') continue;
       const err = String(header.odoo_sync_error || '').trim();
       if (err) toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
-      else if (header.odoo_id) toast(`Sincronizado com Odoo #${header.odoo_id}`, { tone: 'subtle' });
-      await reload();
       return;
     } catch {
       return;
     }
   }
-  if (isNavActive(token)) await reload();
+}
+
+/** Parceiros: sync em background sem segundo reload da lista. */
+async function pollEntityPartnerSync(partnerId, role, token, attempts = 5) {
+  for (let i = 0; i < attempts; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    if (!isNavActive(token)) return;
+    try {
+      const list = await api(`/api/forms/entities/partners?role=${encodeURIComponent(role)}`);
+      const found = (list.items || []).find((row) => row.id === partnerId);
+      if (!found) return;
+      const err = String(found.odoo_sync_error || '').trim();
+      if (err) {
+        toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
+        return;
+      }
+      // Sem odoo_id ainda e sem erro → pode ainda estar sincronizando.
+      if (!found.odoo_id) continue;
+      return;
+    } catch {
+      return;
+    }
+  }
 }
 
 const ENTITY_TABS = [
@@ -45,6 +65,8 @@ const ENTITY_TABS = [
   { id: 'clientes', label: 'Clientes' },
   { id: 'fornecedores', label: 'Fornecedores' },
 ];
+
+let entityListFilter = { q: '', entity: '' };
 
 export function entityFromSlug(slug) {
   const part =
@@ -57,12 +79,21 @@ export function entityFromSlug(slug) {
 /** Preenche só o corpo da aba Cadastros (shell do Forms permanece). */
 export async function renderEntitiesBody(body, entity = 'produtos', token = getNavToken(), root = null) {
   if (!body) return;
+  document.querySelectorAll('body > #forms-modal').forEach((el) => el.remove());
+  document.body.classList.remove('forms-modal-open');
+
   const summary = await api('/api/forms/entities/summary').catch(() => ({
     products: 0,
     customers: 0,
     vendors: 0,
   }));
   if (!isNavActive(token)) return;
+
+  if (entityListFilter.entity !== entity) {
+    entityListFilter = { q: '', entity };
+  }
+
+  const shellRoot = root || body.closest('#forms-view') || body;
 
   body.innerHTML = `
     <div class="forms-catalog-bar muted">
@@ -71,42 +102,104 @@ export async function renderEntitiesBody(body, entity = 'produtos', token = getN
       <strong>${summary.vendors || 0}</strong> fornecedores
       · salvar localmente e enviar ao Odoo quando quiser
     </div>
-    <nav class="settings-tabs forms-tabs" aria-label="Tipos de cadastro">
+    <nav class="settings-tabs forms-tabs forms-entity-tabs" aria-label="Tipos de cadastro">
       ${ENTITY_TABS.map(
         (tab) =>
           `<a class="settings-tab${tab.id === entity ? ' active' : ''}" href="#/forms/cadastros/${tab.id}">${escapeHtml(tab.label)}</a>`,
       ).join('')}
     </nav>
-    <div id="entities-panel" class="card forms-editor-card" style="padding:16px;"></div>
+    <div class="forms-layout">
+      <section class="card forms-list-card" id="entities-panel"></section>
+    </div>
+    ${formsModalShellHtml()}
     <button type="button" hidden data-entities-new></button>`;
 
   const panel = body.querySelector('#entities-panel');
-  const reload = () => renderEntitiesBody(body, entity, token, root);
+  const role = entity === 'clientes' ? 'customer' : 'vendor';
+  /**
+   * Atualiza a lista. Por padrão é soft (só linhas) — evita piscar toolbar/abas.
+   * Sync do Odoo nunca deve chamar isto; só save/delete/retry.
+   */
+  const reloadList = async (opts = {}) => {
+    const listPanel = body.querySelector('#entities-panel');
+    if (!listPanel || !isNavActive(token)) return;
+    const soft = opts.soft !== false;
+    if (entity === 'produtos') await paintProducts(listPanel, shellRoot, reloadList, token, { soft });
+    else await paintPartners(listPanel, shellRoot, reloadList, role, token, { soft });
+  };
 
   body.querySelector('[data-entities-new]')?.addEventListener('click', () => {
-    if (entity === 'produtos') openProductEditor(panel, reload, null, token);
-    else openPartnerEditor(panel, reload, entity === 'clientes' ? 'customer' : 'vendor', null, token);
+    if (entity === 'produtos') openProductEditor(shellRoot, reloadList, null, token);
+    else openPartnerEditor(shellRoot, reloadList, role, null, token);
   });
 
-  if (entity === 'produtos') await paintProducts(panel, reload, token);
-  else await paintPartners(panel, reload, entity === 'clientes' ? 'customer' : 'vendor', token);
+  if (entity === 'produtos') await paintProducts(panel, shellRoot, reloadList, token);
+  else await paintPartners(panel, shellRoot, reloadList, role, token);
 }
 
-async function paintProducts(panel, reload, token) {
+function filterEntityItems(items, q) {
+  const query = String(q || '')
+    .trim()
+    .toLowerCase();
+  if (!query) return items;
+  return items.filter((item) => {
+    const hay = [
+      item.name,
+      item.internal_ref,
+      item.category,
+      item.uom,
+      item.odoo_id,
+      item.vat,
+      item.email,
+      item.phone,
+      item.city,
+    ]
+      .map((part) => String(part || '').toLowerCase())
+      .join(' ');
+    return hay.includes(query);
+  });
+}
+
+function bindEntityDirtySave(form) {
+  const saveBtn = form.querySelector('[data-save]');
+  if (!saveBtn) return;
+  const snapshot = () => {
+    const data = new FormData(form);
+    return JSON.stringify([...data.entries()]);
+  };
+  let baseline = snapshot();
+  const check = () => {
+    saveBtn.hidden = snapshot() === baseline;
+  };
+  saveBtn.hidden = true;
+  form.addEventListener('input', check);
+  form.addEventListener('change', check);
+  form._checkDirty = check;
+  form._resetDirty = () => {
+    baseline = snapshot();
+    saveBtn.hidden = true;
+  };
+}
+
+async function paintProducts(panel, root, reload, token, opts = {}) {
   const data = await api('/api/forms/entities/products');
   if (!isNavActive(token)) return;
   const items = data.items || [];
-  panel.innerHTML = `
-    <div class="card-head">
-      <h2>Produtos</h2>
-      <p class="muted">${items.length} cadastro(s) · espelho de product.template</p>
-    </div>
-    <div class="forms-list" style="max-height:none;">
-      ${
-        items.length
-          ? items
-              .map(
-                (item) => `
+  const filtered = filterEntityItems(items, entityListFilter.q);
+  const countLabel =
+    filtered.length === items.length
+      ? `${items.length} cadastro(s)`
+      : `${filtered.length} de ${items.length} cadastro(s)`;
+
+  const renderRows = (rows) => {
+    if (!rows.length) {
+      return items.length
+        ? '<p class="muted">Nenhum cadastro corresponde à busca.</p>'
+        : '<p class="muted">Nenhum produto. Use Configurações → Receber dados ou “Novo”.</p>';
+    }
+    return rows
+      .map(
+        (item) => `
         <button class="forms-list-item" type="button" data-edit-product="${escapeHtml(item.id)}">
           <strong>${escapeHtml(item.name || 'Sem nome')}</strong>
           <span>${escapeHtml(
@@ -121,19 +214,75 @@ async function paintProducts(panel, reload, token) {
               .join(' · ') || 'Sem detalhes',
           )}</span>
         </button>`,
-              )
-              .join('')
-          : '<p class="muted">Nenhum produto. Use Configurações → Receber dados ou “Novo”.</p>'
-      }
-    </div>`;
+      )
+      .join('');
+  };
 
-  panel.querySelectorAll('[data-edit-product]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const id = button.getAttribute('data-edit-product');
-      const item = items.find((row) => row.id === id);
-      openProductEditor(panel, reload, item, token);
+  const bindRows = () => {
+    panel.querySelectorAll('[data-edit-product]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const id = button.getAttribute('data-edit-product');
+        const item = items.find((row) => row.id === id);
+        panel.querySelectorAll('.forms-list-item.active').forEach((el) => el.classList.remove('active'));
+        button.classList.add('active');
+        openProductEditor(root, reload, item, token);
+      });
     });
-  });
+  };
+
+  const bindSearch = () => {
+    const input = panel.querySelector('#entities-filter-q');
+    const count = panel.querySelector('#entities-list-count');
+    const list = panel.querySelector('#entities-list');
+    if (!input || input.dataset.boundSearch === '1') return;
+    input.dataset.boundSearch = '1';
+    input.addEventListener('input', () => {
+      entityListFilter = { ...entityListFilter, q: input.value || '' };
+      const next = filterEntityItems(items, entityListFilter.q);
+      if (list) list.innerHTML = renderRows(next);
+      if (count) {
+        count.textContent =
+          next.length === items.length
+            ? `${items.length} cadastro(s)`
+            : `${next.length} de ${items.length} cadastro(s)`;
+      }
+      bindRows();
+    });
+  };
+
+  const existingList = panel.querySelector('#entities-list');
+  const existingCount = panel.querySelector('#entities-list-count');
+  if (opts.soft && existingList && existingCount) {
+    existingList.innerHTML = renderRows(filtered);
+    existingCount.textContent = countLabel;
+    const oldInput = panel.querySelector('#entities-filter-q');
+    if (oldInput) {
+      const nextInput = oldInput.cloneNode(true);
+      delete nextInput.dataset.boundSearch;
+      oldInput.replaceWith(nextInput);
+    }
+    bindSearch();
+    bindRows();
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="card-head forms-list-head">
+      <div>
+        <h2>Produtos</h2>
+        <p class="muted" id="entities-list-count">${escapeHtml(countLabel)}</p>
+      </div>
+    </div>
+    <div class="forms-filters">
+      <label class="forms-filter-search">
+        <span class="sr-only">Buscar</span>
+        <input type="search" id="entities-filter-q" placeholder="Buscar por nome, referência, categoria…" value="${escapeHtml(entityListFilter.q)}" autocomplete="off" />
+      </label>
+    </div>
+    <div class="forms-list" id="entities-list">${renderRows(filtered)}</div>`;
+
+  bindSearch();
+  bindRows();
 }
 
 function entityCombo(name, label, value, placeholder) {
@@ -155,11 +304,38 @@ function bindEntityRefCombos(form, refs) {
     const input = wrap.querySelector('[data-combo-input]');
     const menu = wrap.querySelector('[data-combo-menu]');
     if (!input || !menu) return;
+
+    const placeMenu = () => {
+      const rect = input.getBoundingClientRect();
+      if (menu.parentElement !== document.body) document.body.appendChild(menu);
+      menu.style.position = 'fixed';
+      menu.style.left = `${Math.max(8, rect.left)}px`;
+      menu.style.top = `${rect.bottom + 4}px`;
+      menu.style.width = `${rect.width}px`;
+      menu.style.right = 'auto';
+      menu.style.zIndex = '320';
+    };
+
+    const onDocDown = (event) => {
+      if (wrap.contains(event.target) || menu.contains(event.target)) return;
+      close();
+    };
+
+    const onReposition = () => {
+      if (!menu.hidden) placeMenu();
+    };
+
     const close = () => {
       menu.hidden = true;
       menu.innerHTML = '';
       wrap.classList.remove('is-open');
+      if (menu.parentElement !== wrap) wrap.appendChild(menu);
+      menu.removeAttribute('style');
+      document.removeEventListener('mousedown', onDocDown, true);
+      document.removeEventListener('scroll', onReposition, true);
+      window.removeEventListener('resize', onReposition);
     };
+
     const paint = (query) => {
       const q = String(query || '')
         .trim()
@@ -167,36 +343,44 @@ function bindEntityRefCombos(form, refs) {
       const matches = (q ? items.filter((item) => item.name.toLowerCase().includes(q)) : items).slice(0, 12);
       if (!matches.length) {
         menu.innerHTML = '<div class="forms-combo-empty">Nenhuma opção Odoo (Receber dados)</div>';
-        menu.hidden = false;
-        wrap.classList.add('is-open');
-        return;
-      }
-      menu.innerHTML = matches
-        .map(
-          (item) =>
-            `<button type="button" class="forms-combo-option" data-combo-pick="${escapeHtml(item.name)}">
+      } else {
+        menu.innerHTML = matches
+          .map(
+            (item) =>
+              `<button type="button" class="forms-combo-option" data-combo-pick="${escapeHtml(item.name)}">
               <strong>${escapeHtml(item.name)}</strong>
               ${item.odoo_id ? `<span>Odoo #${escapeHtml(item.odoo_id)}</span>` : ''}
             </button>`,
-        )
-        .join('');
+          )
+          .join('');
+        menu.querySelectorAll('[data-combo-pick]').forEach((btn) => {
+          btn.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            input.value = btn.getAttribute('data-combo-pick') || '';
+            close();
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          });
+        });
+      }
       menu.hidden = false;
       wrap.classList.add('is-open');
-      menu.querySelectorAll('[data-combo-pick]').forEach((btn) => {
-        btn.addEventListener('mousedown', (event) => {
-          event.preventDefault();
-          input.value = btn.getAttribute('data-combo-pick') || '';
-          close();
-        });
-      });
+      placeMenu();
+      document.addEventListener('mousedown', onDocDown, true);
+      document.addEventListener('scroll', onReposition, true);
+      window.addEventListener('resize', onReposition);
     };
+
     input.addEventListener('focus', () => paint(input.value));
     input.addEventListener('input', () => paint(input.value));
-    input.addEventListener('blur', () => window.setTimeout(close, 120));
+    input.addEventListener('blur', () => {
+      window.setTimeout(() => {
+        if (!wrap.contains(document.activeElement) && !menu.contains(document.activeElement)) close();
+      }, 120);
+    });
   });
 }
 
-async function openProductEditor(panel, reload, item, token) {
+async function openProductEditor(root, reload, item, token) {
   const value = item || {
     id: '',
     name: '',
@@ -211,19 +395,32 @@ async function openProductEditor(panel, reload, item, token) {
   };
   const catalog = await api('/api/forms/catalog').catch(() => ({ refs: {} }));
   if (!isNavActive(token)) return;
-  panel.innerHTML = `
+
+  ensureFormsModal(root);
+  const editor = getFormsEditor(root);
+  if (!editor) {
+    toast('Não foi possível abrir o editor');
+    return;
+  }
+
+  editor.innerHTML = `
     <form id="entity-form">
       <div class="card-head forms-editor-head">
         <div>
-          <h2>${item ? 'Editar produto' : 'Novo produto'}</h2>
+          <h2 id="forms-editor-title">${item ? 'Editar produto' : 'Novo produto'}</h2>
           <p class="muted">${
             item?.odoo_id
               ? `product.template · Odoo #${escapeHtml(item.odoo_id)}`
-              : 'product.template · ainda só no Vertice'
+              : 'Altere um campo para salvar. O envio ao Odoo é automático.'
           }</p>
         </div>
-        <button class="btn-ghost" type="button" data-back>Voltar</button>
+        <div class="row">
+          <button class="btn" type="submit" data-save hidden>Salvar</button>
+          ${item?.id ? '<button class="btn-danger" type="button" data-delete>Excluir</button>' : ''}
+          <button class="btn-ghost" type="button" data-close-modal>Fechar</button>
+        </div>
       </div>
+      ${entitySyncNoticeHtml(item)}
       <div class="grid-2">
         <label>Nome *<input name="name" required value="${escapeHtml(value.name || '')}" /></label>
         ${entityCombo('category', 'Categoria do produto', value.category, 'Buscar categoria…')}
@@ -239,74 +436,79 @@ async function openProductEditor(panel, reload, item, token) {
           </select>
         </label>
       </div>
-      ${entitySyncNoticeHtml(item)}
-      <div class="row forms-actions">
-        <button class="btn" type="submit">Salvar</button>
-        ${item?.id ? '<button class="btn-danger" type="button" data-delete>Excluir</button>' : ''}
-      </div>
     </form>`;
 
-  const form = panel.querySelector('#entity-form');
+  openEditorModal(root);
+  const form = editor.querySelector('#entity-form');
   bindEntityRefCombos(form, catalog.refs || {});
-  panel.querySelector('[data-back]')?.addEventListener('click', () => paintProducts(panel, reload, token));
+  bindEntityDirtySave(form);
+
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const saveBtn = form.querySelector('[data-save]');
+    if (saveBtn?.hidden) return;
+    const data = new FormData(form);
     const payload = Object.fromEntries(data.entries());
     try {
       const result = item?.id
         ? await api(`/api/forms/entities/products/${item.id}`, { method: 'PUT', body: payload })
         : await api('/api/forms/entities/products', { method: 'POST', body: payload });
       const savedId = result.item?.id || item?.id;
-      toast('Produto salvo · sincronizando com Odoo…', { tone: 'subtle' });
-      await reload();
-      if (savedId) void pollEntityProductSync(savedId, reload, token);
+      closeEditorModal(root);
+      await reload({ soft: true });
+      if (savedId) void pollEntityProductSync(savedId, token);
     } catch (error) {
       toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
-  panel.querySelector('[data-odoo-push]')?.addEventListener('click', async () => {
+
+  editor.querySelector('[data-odoo-push]')?.addEventListener('click', async () => {
     try {
-      const result = await api(`/api/forms/entities/products/${item.id}/odoo-push`, {
+      await api(`/api/forms/entities/products/${item.id}/odoo-push`, {
         method: 'POST',
         body: {},
       });
-      const odooId = result.item?.header?.odoo_id || result.item?.odoo_id || '';
-      toast(odooId ? `Enviado ao Odoo #${odooId}` : 'Enviado ao Odoo', { tone: 'subtle' });
-      await reload();
+      closeEditorModal(root);
+      await reload({ soft: true });
+      void pollEntityProductSync(item.id, token);
     } catch (error) {
       toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
-      await reload();
     }
   });
-  panel.querySelector('[data-delete]')?.addEventListener('click', async () => {
+
+  editor.querySelector('[data-delete]')?.addEventListener('click', async () => {
     if (!confirm('Excluir este produto do Vertice? Ele será arquivado no Odoo.')) return;
     try {
       await api(`/api/forms/entities/products/${item.id}`, { method: 'DELETE' });
       toast('Excluído · arquivado no Odoo', { tone: 'subtle' });
-      await reload();
+      closeEditorModal(root);
+      await reload({ soft: true });
     } catch (error) {
       toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
 }
 
-async function paintPartners(panel, reload, role, token) {
+async function paintPartners(panel, root, reload, role, token, opts = {}) {
   const data = await api(`/api/forms/entities/partners?role=${encodeURIComponent(role)}`);
   if (!isNavActive(token)) return;
   const items = data.items || [];
   const title = role === 'customer' ? 'Clientes' : 'Fornecedores';
-  panel.innerHTML = `
-    <div class="card-head">
-      <h2>${title}</h2>
-      <p class="muted">${items.length} cadastro(s) · espelho de res.partner</p>
-    </div>
-    <div class="forms-list" style="max-height:none;">
-      ${
-        items.length
-          ? items
-              .map(
-                (item) => `
+  const filtered = filterEntityItems(items, entityListFilter.q);
+  const countLabel =
+    filtered.length === items.length
+      ? `${items.length} cadastro(s)`
+      : `${filtered.length} de ${items.length} cadastro(s)`;
+
+  const renderRows = (rows) => {
+    if (!rows.length) {
+      return items.length
+        ? '<p class="muted">Nenhum cadastro corresponde à busca.</p>'
+        : '<p class="muted">Nenhum cadastro. Use Configurações → Receber dados ou “Novo”.</p>';
+    }
+    return rows
+      .map(
+        (item) => `
         <button class="forms-list-item" type="button" data-edit-partner="${escapeHtml(item.id)}">
           <strong>${escapeHtml(item.name || 'Sem nome')}</strong>
           <span>${[
@@ -320,23 +522,78 @@ async function paintPartners(panel, reload, role, token) {
             .map(escapeHtml)
             .join(' · ')}</span>
         </button>`,
-              )
-              .join('')
-          : `<p class="muted">Nenhum cadastro. Use Configurações → Receber dados ou “Novo”.</p>`
-      }
-    </div>`;
+      )
+      .join('');
+  };
 
-  panel.querySelectorAll('[data-edit-partner]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const id = button.getAttribute('data-edit-partner');
-      const item = items.find((row) => row.id === id);
-      openPartnerEditor(panel, reload, role, item, token);
+  const bindRows = () => {
+    panel.querySelectorAll('[data-edit-partner]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const id = button.getAttribute('data-edit-partner');
+        const item = items.find((row) => row.id === id);
+        panel.querySelectorAll('.forms-list-item.active').forEach((el) => el.classList.remove('active'));
+        button.classList.add('active');
+        openPartnerEditor(root, reload, role, item, token);
+      });
     });
-  });
+  };
+
+  const bindSearch = () => {
+    const input = panel.querySelector('#entities-filter-q');
+    const count = panel.querySelector('#entities-list-count');
+    const list = panel.querySelector('#entities-list');
+    if (!input || input.dataset.boundSearch === '1') return;
+    input.dataset.boundSearch = '1';
+    input.addEventListener('input', () => {
+      entityListFilter = { ...entityListFilter, q: input.value || '' };
+      const next = filterEntityItems(items, entityListFilter.q);
+      if (list) list.innerHTML = renderRows(next);
+      if (count) {
+        count.textContent =
+          next.length === items.length
+            ? `${items.length} cadastro(s)`
+            : `${next.length} de ${items.length} cadastro(s)`;
+      }
+      bindRows();
+    });
+  };
+
+  const existingList = panel.querySelector('#entities-list');
+  const existingCount = panel.querySelector('#entities-list-count');
+  if (opts.soft && existingList && existingCount) {
+    existingList.innerHTML = renderRows(filtered);
+    existingCount.textContent = countLabel;
+    const oldInput = panel.querySelector('#entities-filter-q');
+    if (oldInput) {
+      const nextInput = oldInput.cloneNode(true);
+      delete nextInput.dataset.boundSearch;
+      oldInput.replaceWith(nextInput);
+    }
+    bindSearch();
+    bindRows();
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="card-head forms-list-head">
+      <div>
+        <h2>${title}</h2>
+        <p class="muted" id="entities-list-count">${escapeHtml(countLabel)}</p>
+      </div>
+    </div>
+    <div class="forms-filters">
+      <label class="forms-filter-search">
+        <span class="sr-only">Buscar</span>
+        <input type="search" id="entities-filter-q" placeholder="Buscar por nome, documento, e-mail…" value="${escapeHtml(entityListFilter.q)}" autocomplete="off" />
+      </label>
+    </div>
+    <div class="forms-list" id="entities-list">${renderRows(filtered)}</div>`;
+
+  bindSearch();
+  bindRows();
 }
 
-function openPartnerEditor(panel, reload, role, item, token) {
-  // Como no Odoo: o menu (Clientes/Fornecedores) define o papel; is_company é Indivíduo/Empresa.
+function openPartnerEditor(root, reload, role, item, token) {
   const value = item || {
     id: '',
     name: '',
@@ -356,19 +613,31 @@ function openPartnerEditor(panel, reload, role, item, token) {
   const otherLabel = role === 'customer' ? 'Também é fornecedor' : 'Também é cliente';
   const roleLabel = role === 'customer' ? 'Cliente' : 'Fornecedor';
 
-  panel.innerHTML = `
+  ensureFormsModal(root);
+  const editor = getFormsEditor(root);
+  if (!editor) {
+    toast('Não foi possível abrir o editor');
+    return;
+  }
+
+  editor.innerHTML = `
     <form id="entity-form">
       <div class="card-head forms-editor-head">
         <div>
-          <h2>${item ? `Editar ${roleLabel.toLowerCase()}` : `Novo ${roleLabel.toLowerCase()}`}</h2>
+          <h2 id="forms-editor-title">${item ? `Editar ${roleLabel.toLowerCase()}` : `Novo ${roleLabel.toLowerCase()}`}</h2>
           <p class="muted">${
             item?.odoo_id
               ? `res.partner · Odoo #${escapeHtml(item.odoo_id)}`
-              : 'res.partner · ainda só no Vertice'
+              : 'Altere um campo para salvar. O envio ao Odoo é automático.'
           }</p>
         </div>
-        <button class="btn-ghost" type="button" data-back>Voltar</button>
+        <div class="row">
+          <button class="btn" type="submit" data-save hidden>Salvar</button>
+          ${item?.id ? '<button class="btn-danger" type="button" data-delete>Excluir</button>' : ''}
+          <button class="btn-ghost" type="button" data-close-modal>Fechar</button>
+        </div>
       </div>
+      ${entitySyncNoticeHtml(item)}
       <fieldset class="forms-partner-type">
         <legend>Tipo de contato</legend>
         <label>
@@ -404,33 +673,29 @@ function openPartnerEditor(panel, reload, role, item, token) {
         <input type="checkbox" name="also_other" ${alsoOther ? 'checked' : ''} />
         ${escapeHtml(otherLabel)}
       </label>
-      <p class="muted" style="margin:8px 0 0;font-size:0.82rem;">
-        No Odoo o papel principal vem do menu (${escapeHtml(roleLabel)}). Cliente/fornecedor não são mais checkboxes fixos na ficha.
-      </p>
       ${
-        item?.odoo_id
-          ? entitySyncNoticeHtml(item)
-          : `<div class="forms-sync-notice is-pending" role="status">
-              <span class="forms-sync-msg">Salvar envia automaticamente ao Odoo</span>
-            </div>`
+        item?.id && !item?.odoo_id
+          ? '<div class="row forms-actions"><button class="btn-ghost" type="button" data-odoo-push>Tentar novamente</button></div>'
+          : ''
       }
-      <div class="row forms-actions">
-        <button class="btn" type="submit">Salvar</button>
-        ${item?.id && !item?.odoo_id ? '<button class="btn-ghost" type="button" data-odoo-push>Tentar novamente</button>' : ''}
-        ${item?.id ? '<button class="btn-danger" type="button" data-delete>Excluir</button>' : ''}
-      </div>
     </form>`;
 
-  panel.querySelector('[data-back]')?.addEventListener('click', () => paintPartners(panel, reload, role, token));
-  panel.querySelectorAll('input[name="company_type"]').forEach((radio) => {
+  openEditorModal(root);
+  const form = editor.querySelector('#entity-form');
+  bindEntityDirtySave(form);
+
+  editor.querySelectorAll('input[name="company_type"]').forEach((radio) => {
     radio.addEventListener('change', () => {
-      const label = panel.querySelector('[data-vat-label]');
+      const label = editor.querySelector('[data-vat-label]');
       if (label) label.textContent = `${radio.value === 'company' ? 'CNPJ' : 'CPF'} (VAT)`;
+      form?._checkDirty?.();
     });
   });
-  panel.querySelector('#entity-form')?.addEventListener('submit', async (event) => {
+
+  form?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
+    const saveBtn = form.querySelector('[data-save]');
+    if (saveBtn?.hidden) return;
     const companyType = form.querySelector('input[name="company_type"]:checked')?.value || 'company';
     const alsoOtherChecked = Boolean(form.also_other?.checked);
     const payload = {
@@ -441,7 +706,6 @@ function openPartnerEditor(panel, reload, role, item, token) {
       street: form.street.value,
       city: form.city.value,
       is_company: companyType === 'company',
-      // Papel principal = aba atual (igual menu Odoo); o outro só se marcado.
       is_customer: role === 'customer' ? true : alsoOtherChecked,
       is_vendor: role === 'vendor' ? true : alsoOtherChecked,
     };
@@ -449,46 +713,36 @@ function openPartnerEditor(panel, reload, role, item, token) {
       const result = item?.id
         ? await api(`/api/forms/entities/partners/${item.id}`, { method: 'PUT', body: payload })
         : await api('/api/forms/entities/partners', { method: 'POST', body: payload });
-      toast('Cadastro salvo · sincronizando com Odoo…', { tone: 'subtle' });
-      await reload();
+      closeEditorModal(root);
+      await reload({ soft: true });
       const savedId = result.item?.id || item?.id;
-      if (savedId) {
-        setTimeout(async () => {
-          if (!isNavActive(token)) return;
-          try {
-            const list = await api('/api/forms/entities/partners?role=all');
-            const found = (list.items || []).find((row) => row.id === savedId);
-            if (found?.odoo_id) {
-              toast(`Sincronizado com Odoo #${found.odoo_id}`, { tone: 'subtle' });
-            }
-            await reload();
-          } catch (error) {
-            toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
-          }
-        }, 2500);
-      }
+      if (savedId) void pollEntityPartnerSync(savedId, role, token);
     } catch (error) {
       toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
-  panel.querySelector('[data-odoo-push]')?.addEventListener('click', async () => {
+
+  editor.querySelector('[data-odoo-push]')?.addEventListener('click', async () => {
     try {
-      const result = await api(`/api/forms/entities/partners/${item.id}/odoo-push`, {
+      await api(`/api/forms/entities/partners/${item.id}/odoo-push`, {
         method: 'POST',
         body: {},
       });
-      toast(`Enviado ao Odoo #${result.item?.odoo_id || ''}`, { tone: 'subtle' });
-      await reload();
+      closeEditorModal(root);
+      await reload({ soft: true });
+      void pollEntityPartnerSync(item.id, role, token);
     } catch (error) {
       toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
     }
   });
-  panel.querySelector('[data-delete]')?.addEventListener('click', async () => {
+
+  editor.querySelector('[data-delete]')?.addEventListener('click', async () => {
     if (!confirm('Excluir este cadastro do Vertice? Ele será arquivado no Odoo.')) return;
     try {
       await api(`/api/forms/entities/partners/${item.id}`, { method: 'DELETE' });
       toast('Excluído · arquivado no Odoo', { tone: 'subtle' });
-      await reload();
+      closeEditorModal(root);
+      await reload({ soft: true });
     } catch (error) {
       toast(formatSyncError(error.message || error), { tone: 'error' });
     }

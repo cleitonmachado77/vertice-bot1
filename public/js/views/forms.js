@@ -2,6 +2,20 @@ import { api } from '../api.js';
 import { escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import { entityFromSlug, renderEntitiesBody } from './forms-entities.js';
+import {
+  closeEditorModal,
+  ensureFormsModal,
+  getFormsEditor,
+  openEditorModal,
+} from './forms-modal.js';
+import {
+  collectPresetVisible,
+  draftFromPreset,
+  loadPresets,
+  normalizePresetVisible,
+  openPresetsManager,
+  presetsToolbarHtml,
+} from './forms-presets.js';
 
 const TABS = [
   { id: 'purchase', slug: 'compras', label: 'Compras' },
@@ -12,6 +26,14 @@ const TABS = [
 
 let schemaCache = null;
 let catalogCache = { products: [], partners: [], refs: {}, at: 0 };
+/** Filtros da lista de registros (persistem entre refreshes da mesma aba). */
+let listFilters = { q: '', partner: '', date: '', kind: '' };
+/** Itens da lista atual — soft refresh atualiza sem remontar o shell (evita piscar). */
+let listSession = { kind: '', items: [], schema: null, catalog: null, token: null };
+
+function rememberListSession(kind, schema, catalog, items, token) {
+  listSession = { kind, schema, catalog, items: items || [], token };
+}
 
 export function tabFromSlug(slug) {
   const raw = String(slug || '');
@@ -58,23 +80,24 @@ function mainTabsHtml(activeKind) {
   }).join('');
 }
 
-function topActions(kind) {
+function topActions(kind, presets = []) {
   if (kind === 'cadastros') {
     return `<button class="btn" type="button" data-new>Novo</button>`;
   }
   return `
+    ${presetsToolbarHtml(presets)}
     <button class="btn-ghost" type="button" data-export-all>Exportar Excel</button>
     <button class="btn" type="button" data-new>Novo registro</button>`;
 }
 
-function ensureFormsShell(root, kind) {
+function ensureFormsShell(root, kind, presets = []) {
   let pane = root.querySelector('.forms-pane');
   if (!pane) {
     root.innerHTML = `
       <div class="view-pane forms-pane">
         <div class="forms-toolbar">
           <nav class="settings-tabs forms-tabs" id="forms-main-tabs" aria-label="Abas do Forms"></nav>
-          <div class="row" id="forms-top-actions"></div>
+          <div class="row forms-top-actions" id="forms-top-actions"></div>
         </div>
         <div id="forms-body" class="forms-body"></div>
       </div>`;
@@ -88,14 +111,17 @@ function ensureFormsShell(root, kind) {
       toolbar.className = 'forms-toolbar';
       toolbar.innerHTML = `
         <nav class="settings-tabs forms-tabs" id="forms-main-tabs" aria-label="Abas do Forms"></nav>
-        <div class="row" id="forms-top-actions"></div>`;
+        <div class="row forms-top-actions" id="forms-top-actions"></div>`;
       pane.insertBefore(toolbar, body || pane.firstChild);
     }
   }
   const tabs = root.querySelector('#forms-main-tabs');
   if (tabs) tabs.innerHTML = mainTabsHtml(kind);
   const actions = root.querySelector('#forms-top-actions');
-  if (actions) actions.innerHTML = topActions(kind);
+  if (actions) {
+    actions.classList.add('forms-top-actions');
+    actions.innerHTML = topActions(kind, presets);
+  }
   return root.querySelector('#forms-body');
 }
 
@@ -115,27 +141,32 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
     root.innerHTML = viewLoading('Abrindo Vertice Forms…');
   }
 
-  const body = ensureFormsShell(root, kind);
+  const body = ensureFormsShell(root, kind, []);
   if (!body || !isNavActive(token)) return;
 
+  document.body.classList.remove('forms-modal-open');
   body.classList.add('is-switching');
   body.innerHTML = `<p class="muted forms-body-loading">Carregando…</p>`;
 
   try {
     if (kind === 'cadastros') {
       await renderEntitiesBody(body, entityFromSlug(slug), token, root);
-      bindShellActions(root, kind, null, null, [], token);
+      bindShellActions(root, kind, null, null, [], token, []);
       return;
     }
 
-    const [schema, catalog, data] = await Promise.all([
+    const [schema, catalog, data, presets] = await Promise.all([
       loadSchema(),
       loadCatalog(false),
       api(`/api/forms?kind=${encodeURIComponent(kind)}`),
+      loadPresets(kind).catch(() => []),
     ]);
     if (!isNavActive(token)) return;
+    ensureFormsShell(root, kind, presets);
+    rememberListSession(kind, schema, catalog, data.items || [], token);
     paintBody(body, kind, schema, catalog, data.items || [], null);
-    bindShellActions(root, kind, schema, catalog, data.items || [], token);
+    bindShellActions(root, kind, schema, catalog, data.items || [], token, presets);
+    bindFilters(root, kind, schema, catalog, data.items || [], token);
     bindList(root, kind, schema, catalog, data.items || [], token);
   } finally {
     body.classList.remove('is-switching');
@@ -143,30 +174,210 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
 }
 
 function paintBody(body, kind, schema, catalog, items, editing) {
-  const fields = schema.fields[kind];
+  // Remove modal portaled para o body em aberturas anteriores (evita IDs duplicados).
+  document.querySelectorAll('body > #forms-modal').forEach((el) => el.remove());
+  document.body.classList.remove('forms-modal-open');
+  if (listFilters.kind !== kind) {
+    listFilters = { q: '', partner: '', date: '', kind };
+  }
+  const filtered = filterItems(items, schema, kind, listFilters);
+  const filterCfg = listFilterConfig(kind);
+  const partnerOpts = partnerFilterOptions(items, kind);
+  const countLabel =
+    filtered.length === items.length
+      ? `${items.length} item(ns)`
+      : `${filtered.length} de ${items.length} item(ns)`;
   body.innerHTML = `
     ${catalogSummary(catalog)}
     <div class="forms-layout">
       <section class="card forms-list-card">
-        <div class="card-head">
-          <h2>Registros</h2>
-          <p class="muted">${items.length} item(ns)</p>
+        <div class="card-head forms-list-head">
+          <div>
+            <h2>Registros</h2>
+            <p class="muted" id="forms-list-count">${escapeHtml(countLabel)}</p>
+          </div>
         </div>
-        <div class="forms-list" id="forms-list">
+        <div class="forms-filters" id="forms-filters">
+          <label class="forms-filter-search">
+            <span class="sr-only">Buscar</span>
+            <input
+              type="search"
+              id="forms-filter-q"
+              placeholder="${escapeHtml(filterCfg.searchPlaceholder)}"
+              value="${escapeHtml(listFilters.q)}"
+              autocomplete="off"
+            />
+          </label>
           ${
-            items.length
-              ? items.map((item) => listRow(item, editing?.id, schema, kind)).join('')
-              : '<p class="muted">Nenhum registro ainda.</p>'
+            filterCfg.selectLabel
+              ? `<label class="forms-filter-partner">
+                  <span class="sr-only">${escapeHtml(filterCfg.selectLabel)}</span>
+                  <select id="forms-filter-partner">
+                    <option value="">${escapeHtml(filterCfg.selectAll)}</option>
+                    ${partnerOpts
+                      .map(
+                        (name) =>
+                          `<option value="${escapeHtml(name)}"${
+                            listFilters.partner === name ? ' selected' : ''
+                          }>${escapeHtml(name)}</option>`,
+                      )
+                      .join('')}
+                  </select>
+                </label>
+                <label class="forms-filter-date">
+                  <span class="sr-only">Data</span>
+                  <input
+                    type="text"
+                    id="forms-filter-date"
+                    placeholder="dd/mm/aaaa"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    data-date-br="1"
+                    maxlength="10"
+                    value="${escapeHtml(toDisplayDate(listFilters.date || ''))}"
+                  />
+                </label>`
+              : ''
           }
         </div>
+        <div class="forms-list" id="forms-list">
+          ${listRowsHtml(filtered, editing?.id, schema, kind, items.length)}
+        </div>
       </section>
-      <section class="card forms-editor-card" id="forms-editor">
-        ${editing ? editorHtml(editing, fields, kind, catalog, schema) : '<p class="muted">Selecione um registro ou crie um novo.</p>'}
+    </div>
+    <div class="forms-modal${editing ? ' is-open' : ''}" id="forms-modal" ${editing ? '' : 'hidden'}>
+      <div class="forms-modal-backdrop" data-close-modal tabindex="-1"></div>
+      <section
+        class="card forms-editor-card forms-modal-dialog"
+        id="forms-editor"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="forms-editor-title"
+      >
+        ${
+          editing
+            ? editorHtml(editing, schema.fields[kind], kind, catalog, schema)
+            : ''
+        }
       </section>
     </div>`;
 }
 
-function bindShellActions(root, kind, schema, catalog, items, token) {
+function listRowsHtml(filtered, activeId, schema, kind, totalCount) {
+  if (!filtered.length) {
+    if (totalCount === 0) return '<p class="muted">Nenhum registro ainda.</p>';
+    return '<p class="muted">Nenhum registro corresponde aos filtros.</p>';
+  }
+  return filtered.map((item) => listRow(item, activeId, schema, kind)).join('');
+}
+
+function listFilterConfig(kind) {
+  if (kind === 'purchase') {
+    return {
+      selectKey: 'vendor',
+      selectLabel: 'Fornecedor',
+      selectAll: 'Todos os fornecedores',
+      dateMode: 'header',
+      dateKeys: ['order_deadline', 'expected_arrival'],
+      searchPlaceholder: 'Buscar por título, número, fornecedor…',
+    };
+  }
+  if (kind === 'sale') {
+    return {
+      selectKey: 'customer',
+      selectLabel: 'Cliente',
+      selectAll: 'Todos os clientes',
+      dateMode: 'header',
+      dateKeys: ['order_date', 'expiration'],
+      searchPlaceholder: 'Buscar por título, número, cliente…',
+    };
+  }
+  if (kind === 'product') {
+    return {
+      selectKey: 'category',
+      selectLabel: 'Categoria',
+      selectAll: 'Todas as categorias',
+      dateMode: 'updated',
+      dateKeys: [],
+      searchPlaceholder: 'Buscar por nome, referência, categoria…',
+    };
+  }
+  return {
+    selectKey: '',
+    selectLabel: '',
+    selectAll: '',
+    dateMode: '',
+    dateKeys: [],
+    searchPlaceholder: 'Buscar…',
+  };
+}
+
+function partnerFilterOptions(items, kind) {
+  const key = listFilterConfig(kind).selectKey;
+  if (!key) return [];
+  const names = new Set();
+  for (const item of items || []) {
+    const name = String(item.header?.[key] || '').trim();
+    if (name) names.add(name);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+/** Normaliza data do header (ISO ou dd/mm/aaaa) para AAAA-MM-DD. */
+function itemFilterDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const br = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (br) return `${br[3]}-${br[2].padStart(2, '0')}-${br[1].padStart(2, '0')}`;
+  return '';
+}
+
+function filterItems(items, schema, kind, filters) {
+  const cfg = listFilterConfig(kind);
+  const q = String(filters?.q || '')
+    .trim()
+    .toLowerCase();
+  const partner = String(filters?.partner || '').trim().toLowerCase();
+  const dateIso = toIsoDate(String(filters?.date || '').trim());
+  const dateReady = /^\d{4}-\d{2}-\d{2}$/.test(dateIso);
+  return items.filter((item) => {
+    if (partner && cfg.selectKey) {
+      const value = String(item.header?.[cfg.selectKey] || '')
+        .trim()
+        .toLowerCase();
+      if (value !== partner) return false;
+    }
+    if (dateReady) {
+      if (cfg.dateMode === 'updated') {
+        const updated = itemFilterDate(item.updated_at);
+        if (updated !== dateIso) return false;
+      } else if (cfg.dateKeys?.length) {
+        const hit = cfg.dateKeys.some((key) => itemFilterDate(item.header?.[key]) === dateIso);
+        if (!hit) return false;
+      }
+    }
+    if (!q) return true;
+    const hay = [
+      item.title,
+      item.status,
+      statusLabel(schema, kind, item.status),
+      item.header?.order_reference,
+      item.header?.odoo_id,
+      item.header?.customer,
+      item.header?.vendor,
+      item.header?.name,
+      item.header?.category,
+      item.header?.internal_ref,
+    ]
+      .map((part) => String(part || '').toLowerCase())
+      .join(' ');
+    return hay.includes(q);
+  });
+}
+
+function bindShellActions(root, kind, schema, catalog, items, token, presets = []) {
   if (kind === 'cadastros') {
     root.querySelector('[data-new]')?.addEventListener('click', () => {
       root.querySelector('[data-entities-new]')?.click();
@@ -174,14 +385,24 @@ function bindShellActions(root, kind, schema, catalog, items, token) {
     return;
   }
 
-  root.querySelector('[data-new]')?.addEventListener('click', async () => {
-    try {
-      const created = await api('/api/forms', { method: 'POST', body: { kind } });
-      toast('Registro criado');
-      await refresh(root, kind, schema, created.item?.id, token);
-    } catch (error) {
-      toast(error.message);
-    }
+  root.querySelector('[data-new]')?.addEventListener('click', () => {
+    openNewRecord(root, kind, schema, catalog, items, token);
+  });
+
+  root.querySelectorAll('[data-preset-new]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.getAttribute('data-preset-new');
+      const preset = (presets || []).find((item) => item.id === id);
+      if (!preset) {
+        toast('Padrão não encontrado');
+        return;
+      }
+      openNewFromPreset(root, kind, schema, catalog, items, token, preset);
+    });
+  });
+
+  root.querySelector('[data-presets]')?.addEventListener('click', () => {
+    showPresetsManager(root, kind, schema, catalog, items, token, presets);
   });
 
   root.querySelector('[data-export-all]')?.addEventListener('click', async () => {
@@ -194,11 +415,62 @@ function bindShellActions(root, kind, schema, catalog, items, token) {
   });
 }
 
-function paint(root, kind, schema, catalog, items, editing, token) {
-  const body = ensureFormsShell(root, kind);
+function paint(root, kind, schema, catalog, items, editing, token, presets = []) {
+  const body = ensureFormsShell(root, kind, presets);
   paintBody(body, kind, schema, catalog, items, editing);
-  bindShellActions(root, kind, schema, catalog, items, token);
+  bindShellActions(root, kind, schema, catalog, items, token, presets);
+  bindFilters(root, kind, schema, catalog, items, token);
   bindList(root, kind, schema, catalog, items, token);
+  if (editing) {
+    openEditorModal(root);
+    bindEditor(root, kind, schema, catalog, items, editing, token);
+  } else {
+    closeEditorModal(root);
+  }
+}
+
+function bindFilters(root, kind, schema, catalog, items, token) {
+  rememberListSession(kind, schema, catalog, items, token);
+  const qInput = root.querySelector('#forms-filter-q');
+  const partnerSelect = root.querySelector('#forms-filter-partner');
+  const dateInput = root.querySelector('#forms-filter-date');
+  const apply = () => {
+    const sess = listSession;
+    listFilters = {
+      q: qInput?.value || '',
+      partner: partnerSelect?.value || '',
+      date: dateInput?.value || '',
+      kind: sess.kind || kind,
+    };
+    const filtered = filterItems(sess.items, sess.schema || schema, sess.kind || kind, listFilters);
+    const list = root.querySelector('#forms-list');
+    const count = root.querySelector('#forms-list-count');
+    if (list) {
+      list.innerHTML = listRowsHtml(
+        filtered,
+        null,
+        sess.schema || schema,
+        sess.kind || kind,
+        sess.items.length,
+      );
+      bindList(root, sess.kind || kind, sess.schema || schema, sess.catalog || catalog, sess.items, sess.token || token);
+    }
+    if (count) {
+      count.textContent =
+        filtered.length === sess.items.length
+          ? `${sess.items.length} item(ns)`
+          : `${filtered.length} de ${sess.items.length} item(ns)`;
+    }
+  };
+  if (dateInput) bindDateInputs(dateInput.closest('#forms-filters') || root);
+  if (qInput?.dataset.boundFilters === '1') return;
+  if (qInput) qInput.dataset.boundFilters = '1';
+  if (partnerSelect) partnerSelect.dataset.boundFilters = '1';
+  if (dateInput) dateInput.dataset.boundFilters = '1';
+  qInput?.addEventListener('input', apply);
+  partnerSelect?.addEventListener('change', apply);
+  dateInput?.addEventListener('input', apply);
+  dateInput?.addEventListener('change', apply);
 }
 
 function catalogSummary(catalog) {
@@ -233,39 +505,206 @@ function isOrderLocked(doc, kind) {
   return Boolean(state) && state !== 'draft' && state !== 'sent' && state !== 'to approve';
 }
 
-function syncBadgeHtml(doc) {
-  const header = doc?.header || {};
-  const pending = header.odoo_sync_pending === '1';
-  const error = formatSyncError(header.odoo_sync_error || '', 420);
-  const rawError = String(header.odoo_sync_error || '').trim();
-  const odooId = header.odoo_id || '';
-  const ref = header.order_reference || '';
-  const when = header.odoo_synced_at
-    ? ` · ${new Date(header.odoo_synced_at).toLocaleString('pt-BR')}`
-    : '';
-  if (pending) {
-    return `<div class="forms-sync-notice is-pending" data-sync-badge role="status">
-      <span class="forms-sync-msg">Odoo · sincronizando…</span>
-    </div>`;
+function blankDraft(kind, schema) {
+  const fields = schema.fields[kind] || { header: [], lines: [] };
+  const header = {};
+  for (const field of fields.header || []) {
+    header[field.key] = field.key === 'track_inventory' ? 'True' : '';
   }
-  if (rawError) {
-    return `<div class="forms-sync-notice is-error" data-sync-badge role="alert" title="${escapeHtml(rawError)}">
+  const hasLines = (fields.lines || []).length > 0;
+  const lineValues = {};
+  for (const field of fields.lines || []) lineValues[field.key] = '';
+  return {
+    id: '',
+    kind,
+    title: kind === 'sale' ? 'Cotação' : kind === 'purchase' ? 'Solicitação' : 'Produto',
+    status: 'draft',
+    header,
+    lines: hasLines ? [{ id: '', values: lineValues }] : [],
+    updated_at: '',
+  };
+}
+
+function openNewRecord(root, kind, schema, catalog, items, token) {
+  if (!schema?.fields?.[kind]) {
+    toast('Schema do formulário indisponível');
+    return;
+  }
+  const draft = blankDraft(kind, schema);
+  ensureFormsModal(root);
+  const editor = getFormsEditor(root);
+  if (!editor) {
+    toast('Não foi possível abrir o editor');
+    return;
+  }
+  root.querySelectorAll('.forms-list-item.active').forEach((el) => el.classList.remove('active'));
+  editor.innerHTML = editorHtml(draft, schema.fields[kind], kind, catalog, schema);
+  openEditorModal(root);
+  bindEditor(root, kind, schema, catalog, items, draft, token);
+}
+
+async function applyPresetsToolbar(root, kind, schema, catalog, items, token) {
+  const next = await loadPresets(kind).catch(() => []);
+  ensureFormsShell(root, kind, next);
+  bindShellActions(root, kind, schema, catalog, items, token, next);
+  return next;
+}
+
+function showPresetsManager(root, kind, schema, catalog, items, token, presets) {
+  openPresetsManager(root, kind, presets || [], {
+    openPresetEditor: (preset) => {
+      openPresetEditor(root, kind, schema, catalog, items, token, preset, async () => {
+        const next = await applyPresetsToolbar(root, kind, schema, catalog, items, token);
+        showPresetsManager(root, kind, schema, catalog, items, token, next);
+      });
+    },
+    onPresetsChanged: async (list) => {
+      ensureFormsShell(root, kind, list);
+      bindShellActions(root, kind, schema, catalog, items, token, list);
+    },
+  });
+}
+
+function openNewFromPreset(root, kind, schema, catalog, items, token, preset) {
+  if (!schema?.fields?.[kind]) {
+    toast('Schema do formulário indisponível');
+    return;
+  }
+  const fields = schema.fields[kind];
+  const { draft, hide } = draftFromPreset(blankDraft(kind, schema), preset, fields);
+  ensureFormsModal(root);
+  const editor = getFormsEditor(root);
+  if (!editor) {
+    toast('Não foi possível abrir o editor');
+    return;
+  }
+  root.querySelectorAll('.forms-list-item.active').forEach((el) => el.classList.remove('active'));
+  editor.innerHTML = editorHtml(draft, fields, kind, catalog, schema, {
+    hide,
+    title: `Novo · ${preset.name}`,
+    subtitle: 'Só os campos marcados como “Mostrar” no padrão aparecem aqui. Salve para criar.',
+  });
+  openEditorModal(root);
+  bindEditor(root, kind, schema, catalog, items, draft, token);
+}
+
+function openPresetEditor(root, kind, schema, catalog, items, token, preset, onSaved) {
+  if (!schema?.fields?.[kind]) {
+    toast('Schema do formulário indisponível');
+    return;
+  }
+  const fields = schema.fields[kind];
+  const base = blankDraft(kind, schema);
+  const draft = preset
+    ? {
+        ...base,
+        status: preset.status || base.status,
+        header: { ...base.header, ...(preset.header || {}) },
+        lines: preset.lines?.length
+          ? preset.lines.map((line) => ({ id: '', values: { ...(line.values || {}) } }))
+          : base.lines,
+      }
+    : base;
+  const presetShow = normalizePresetVisible(preset, fields, kind);
+  ensureFormsModal(root);
+  const editor = getFormsEditor(root);
+  if (!editor) {
+    toast('Não foi possível abrir o editor');
+    return;
+  }
+  editor.innerHTML = editorHtml(draft, fields, kind, catalog, schema, {
+    mode: 'preset',
+    presetId: preset?.id || '',
+    presetName: preset?.name || '',
+    presetShow,
+    title: preset ? `Editar padrão · ${preset.name}` : 'Novo padrão',
+    subtitle:
+      'Marque “Mostrar” nos campos que devem aparecer ao criar. Desmarque (ex.: Número) para ocultar mesmo vazios. Valores preenchidos são aplicados automaticamente.',
+  });
+  openEditorModal(root);
+  bindPresetEditor(root, kind, schema, catalog, items, token, preset, onSaved);
+}
+
+function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onSaved) {
+  const form =
+    getFormsEditor(root)?.querySelector('#forms-form') || root.querySelector('#forms-form');
+  if (!form) return;
+  const fields = schema.fields[kind];
+  bindPartnerCombos(form, catalog);
+  bindProductCombos(form, catalog);
+  bindCatalogCombos(form, catalog);
+  bindDateInputs(form);
+  bindProductAutofill(form, catalog);
+  bindLineRemoves(form, catalog);
+
+  const saveBtn = form.querySelector('[data-save]');
+  if (saveBtn) saveBtn.hidden = false;
+
+  form.querySelector('[data-add-line]')?.addEventListener('click', () => {
+    const box = form.querySelector('#forms-lines');
+    if (!box) return;
+    const index = box.querySelectorAll('.forms-line').length;
+    box.insertAdjacentHTML('beforeend', lineHtml({ id: '', values: {} }, fields.lines, index, kind));
+    bindLineRemoves(form, catalog);
+    bindProductCombos(form, catalog);
+    bindCatalogCombos(form, catalog);
+    bindProductAutofill(form, catalog);
+  });
+
+  form.querySelector('[data-preset-back]')?.addEventListener('click', async () => {
+    if (typeof onSaved === 'function') await onSaved();
+    else closeEditorModal(root);
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = String(new FormData(form).get('preset_name') || '').trim();
+    if (!name) {
+      toast('Informe o nome do padrão');
+      return;
+    }
+    try {
+      const payload = collectPayload(form, fields);
+      const body = {
+        kind,
+        name,
+        status: payload.status,
+        header: payload.header,
+        lines: payload.lines || [],
+        visible: collectPresetVisible(form, fields),
+      };
+      if (preset?.id) {
+        await api(`/api/forms/presets/${encodeURIComponent(preset.id)}`, {
+          method: 'PUT',
+          body,
+        });
+        toast('Padrão atualizado');
+      } else {
+        await api('/api/forms/presets', { method: 'POST', body });
+        toast('Padrão criado');
+      }
+      if (typeof onSaved === 'function') await onSaved();
+    } catch (error) {
+      toast(error.message || 'Falha ao salvar padrão');
+    }
+  });
+}
+
+/** Só aviso de erro — sucesso/pendente ficam silenciosos (sync em background). */
+function syncBadgeHtml(doc) {
+  if (!doc?.id) return '';
+  const header = doc?.header || {};
+  const rawError = String(header.odoo_sync_error || '').trim();
+  if (!rawError) return '';
+  const error = formatSyncError(rawError, 420);
+  return `<div class="forms-sync-notice is-error" data-sync-badge role="alert" title="${escapeHtml(rawError)}">
       <span class="forms-sync-msg"><strong>Odoo · não sincronizado.</strong> ${escapeHtml(error)}</span>
       <button class="btn-ghost" type="button" data-odoo-retry>Tentar novamente</button>
     </div>`;
-  }
-  if (odooId || ref) {
-    return `<div class="forms-sync-notice" data-sync-badge role="status">
-      <span class="forms-sync-msg">Odoo · sincronizado${
-        ref ? ` · ${escapeHtml(ref)}` : ''
-      }${odooId ? ` #${escapeHtml(odooId)}` : ''}${escapeHtml(when)}</span>
-    </div>`;
-  }
-  return `<div class="forms-sync-notice is-pending" data-sync-badge role="status">
-    <span class="forms-sync-msg">Odoo · ainda não sincronizado</span>
-  </div>`;
 }
 
+/** Atualiza a lista em silêncio após o push ao Odoo (sem reabrir o modal). */
+/** Sync em background: não redesenha a lista (evita piscar). Só avisa se falhar. */
 async function pollSyncStatus(root, kind, schema, docId, token, attempts = 6) {
   for (let i = 0; i < attempts; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 900));
@@ -274,66 +713,97 @@ async function pollSyncStatus(root, kind, schema, docId, token, attempts = 6) {
       const detail = await api(`/api/forms/${encodeURIComponent(docId)}`);
       const item = detail.item;
       if (!item) return;
-      const pending = item.header?.odoo_sync_pending === '1';
-      if (!pending) {
-        const err = String(item.header?.odoo_sync_error || '').trim();
-        if (err) {
-          toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
-        } else if (item.header?.order_reference || item.header?.odoo_id) {
-          const label = item.header.order_reference || `#${item.header.odoo_id}`;
-          toast(`Sincronizado com Odoo · ${label}`, { tone: 'subtle' });
-        }
-        await refresh(root, kind, schema, docId, token);
-        return;
-      }
+      if (item.header?.odoo_sync_pending === '1') continue;
+      const err = String(item.header?.odoo_sync_error || '').trim();
+      if (err) toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
+      return;
     } catch {
       return;
     }
-  }
-  if (isNavActive(token)) {
-    try {
-      const detail = await api(`/api/forms/${encodeURIComponent(docId)}`);
-      const err = String(detail.item?.header?.odoo_sync_error || '').trim();
-      if (err) toast(`Odoo: ${formatSyncError(err, 220)}`, { tone: 'error' });
-      else if (detail.item?.header?.odoo_sync_pending === '1') {
-        toast('Odoo ainda sincronizando — abra o registro em instantes', { tone: 'subtle' });
-      }
-    } catch {
-      /* ignore */
-    }
-    await refresh(root, kind, schema, docId, token);
   }
 }
 
 function listRow(item, activeId, schema, kind) {
   const when = item.updated_at ? new Date(item.updated_at).toLocaleString('pt-BR') : '';
+  const ref = String(item.header?.order_reference || '').trim();
+  const partner =
+    kind === 'purchase'
+      ? String(item.header?.vendor || '').trim()
+      : kind === 'sale'
+        ? String(item.header?.customer || '').trim()
+        : '';
+  const headline =
+    kind === 'product'
+      ? item.title || item.header?.name || 'Sem título'
+      : ref && partner
+        ? `${ref} · ${partner}`
+        : ref || partner || item.title || 'Sem título';
   let odoo = '';
   if (item.header?.odoo_sync_pending === '1') odoo = ' · sync…';
   else if (item.header?.odoo_sync_error) {
     odoo = ` · ${formatSyncError(item.header.odoo_sync_error, 72)}`;
-  } else if (item.header?.order_reference) odoo = ` · ${item.header.order_reference}`;
-  else if (item.header?.odoo_id) odoo = ` · Odoo #${item.header.odoo_id}`;
+  } else if (item.header?.odoo_id && !ref) odoo = ` · Odoo #${item.header.odoo_id}`;
   const locked = isOrderLocked(item, kind) ? ' · bloqueado' : '';
   const statusText =
     kind === 'product' ? '' : `${escapeHtml(statusLabel(schema, kind, item.status))} · `;
   return `
     <button class="forms-list-item${item.id === activeId ? ' active' : ''}" type="button" data-open="${escapeHtml(item.id)}">
-      <strong>${escapeHtml(item.title || 'Sem título')}</strong>
+      <strong>${escapeHtml(headline)}</strong>
       <span>${statusText}${escapeHtml(when)}${escapeHtml(odoo)}${escapeHtml(locked)}</span>
     </button>`;
 }
 
-function editorHtml(doc, fields, kind, catalog, schema) {
+function presetShowToggle(name, checked) {
+  return `<label class="forms-preset-show">
+    <input type="checkbox" name="${escapeHtml(name)}" value="1"${checked ? ' checked' : ''} />
+    <span>Mostrar</span>
+  </label>`;
+}
+
+function wrapPresetField(innerHtml, showName, checked) {
+  return `<div class="forms-preset-field">
+    ${presetShowToggle(showName, checked)}
+    ${innerHtml}
+  </div>`;
+}
+
+function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
+  const isPreset = options.mode === 'preset';
+  const isNew = !doc?.id;
   const hasLines = (fields.lines || []).length > 0;
   const statuses = statusOptions(schema, kind);
   const currentStatus = String(doc.header?.odoo_state || doc.status || 'draft');
-  const locked = isOrderLocked(doc, kind);
-  const lockAttr = locked ? ' disabled' : '';
-  const statusSelect =
+  const confirmed = !isNew && !isPreset && isOrderLocked(doc, kind);
+  const hide = options.hide || null;
+  const hideTitle = Boolean(hide?.title);
+  const hideStatus = Boolean(hide?.status);
+  const hideHeader = hide?.header instanceof Set ? hide.header : new Set();
+  const hideLines = Array.isArray(hide?.lines) ? hide.lines : [];
+  const presetShow = options.presetShow || null;
+  const showHeaderSet = new Set(presetShow?.header || []);
+  const showLineSet = new Set(presetShow?.lines || []);
+  const heading =
+    options.title || (isPreset ? 'Padrão' : isNew ? 'Novo registro' : 'Editar registro');
+  const subtitle =
+    options.subtitle ||
+    (confirmed
+      ? 'Pedido confirmado no Odoo — altere um campo para salvar e reenviar.'
+      : isPreset
+        ? 'Defina o nome do botão e os valores padrão.'
+        : isNew
+          ? 'Preencha e salve para criar. Fechar sem salvar não cria o registro.'
+          : 'Altere um campo para salvar. O envio ao Odoo é automático.');
+
+  const statusControl =
     statuses.length === 0
-      ? ''
-      : `<label>Status
-        <select name="status"${lockAttr}>
+      ? isPreset
+        ? `<input type="hidden" name="status" value="draft" />`
+        : ''
+      : hideStatus && !isPreset
+        ? `<input type="hidden" name="status" value="${escapeHtml(currentStatus)}" />`
+        : (() => {
+            const select = `<label>Status
+        <select name="status">
           ${statuses
             .map(
               (item) =>
@@ -350,52 +820,120 @@ function editorHtml(doc, fields, kind, catalog, schema) {
             .join('')}
         </select>
       </label>`;
+            return isPreset
+              ? wrapPresetField(select, 'show_status', Boolean(presetShow?.status))
+              : select;
+          })();
+
+  const actions = isPreset
+    ? `<button class="btn-ghost" type="button" data-preset-back>Voltar</button>
+       <button class="btn" type="submit" data-save>Salvar padrão</button>`
+    : `<button class="btn" type="submit" data-save hidden>Salvar</button>
+       ${isNew ? '' : '<button class="btn-danger" type="button" data-delete>Excluir</button>'}
+       <button class="btn-ghost" type="button" data-close-modal>Fechar</button>`;
+
+  const headerFields = fields.header || [];
+  const visibleHeader = isPreset
+    ? headerFields
+    : headerFields.filter((field) => !hideHeader.has(field.key));
+  const hiddenHeaderHtml = isPreset
+    ? ''
+    : headerFields
+        .filter((field) => hideHeader.has(field.key))
+        .map((field) =>
+          headerInput(field, doc.header?.[field.key] || '', kind, { hidden: true }),
+        )
+        .join('');
+
+  const titleBlock = isPreset
+    ? `<label>Nome do padrão (botão)
+        <input name="preset_name" value="${escapeHtml(options.presetName || '')}" placeholder="ex.: Plastico" required maxlength="60" />
+      </label>
+      ${wrapPresetField(
+        `<label>Título (no novo registro)
+          <input name="title" value="${escapeHtml(doc.title || '')}" placeholder="Opcional" />
+        </label>`,
+        'show_title',
+        Boolean(presetShow?.title),
+      )}`
+    : hideTitle
+      ? `<input type="hidden" name="title" value="${escapeHtml(doc.title || '')}" />`
+      : `<label>Título
+          <input name="title" value="${escapeHtml(doc.title || '')}" />
+        </label>`;
+
+  const lineShowBar =
+    isPreset && hasLines
+      ? `<div class="forms-preset-line-show" role="group" aria-label="Campos de linha visíveis">
+          ${(fields.lines || [])
+            .map(
+              (field) =>
+                `<label class="forms-preset-show">
+                  <input type="checkbox" name="show_l_${escapeHtml(field.key)}" value="1"${
+                    showLineSet.has(field.key) ? ' checked' : ''
+                  } />
+                  <span>${escapeHtml(field.label)}</span>
+                </label>`,
+            )
+            .join('')}
+        </div>`
+      : '';
+
   return `
-    <form id="forms-form" data-id="${escapeHtml(doc.id)}" data-kind="${escapeHtml(kind)}"${
-      locked ? ' data-locked="1"' : ''
-    }>
+    <form id="forms-form" data-id="${escapeHtml(doc.id || '')}" data-kind="${escapeHtml(kind)}"${
+      isNew && !isPreset ? ' data-new-draft="1"' : ''
+    }${isPreset ? ` data-preset-editor="1" data-preset-id="${escapeHtml(options.presetId || '')}"` : ''}>
       <div class="card-head forms-editor-head">
         <div>
-          <h2>Editar registro</h2>
-          <p class="muted">${
-            locked
-              ? 'Pedido confirmado no Odoo — edição e exclusão bloqueadas no Vertice.'
-              : 'Salvar envia automaticamente ao Odoo. Sugestões vêm do catálogo compartilhado.'
-          }</p>
+          <h2 id="forms-editor-title">${escapeHtml(heading)}</h2>
+          <p class="muted">${escapeHtml(subtitle)}</p>
         </div>
         <div class="row">
-          <button class="btn-danger" type="button" data-delete${lockAttr}>Excluir</button>
+          ${actions}
         </div>
       </div>
-      ${syncBadgeHtml(doc)}
-      <label>Título
-        <input name="title" value="${escapeHtml(doc.title || '')}"${lockAttr} />
-      </label>
-      ${statusSelect}
-      <div class="forms-section">
+      ${isPreset ? '' : syncBadgeHtml(doc)}
+      ${titleBlock}
+      ${statusControl}
+      ${hiddenHeaderHtml}
+      ${
+        visibleHeader.length
+          ? `<div class="forms-section">
         <h2>Dados principais</h2>
         <div class="grid-2">
-          ${(fields.header || []).map((field) => headerInput(field, doc.header?.[field.key] || '', kind)).join('')}
+          ${visibleHeader
+            .map((field) => {
+              const input = headerInput(field, doc.header?.[field.key] || '', kind);
+              if (!isPreset) return input;
+              return wrapPresetField(input, `show_h_${field.key}`, showHeaderSet.has(field.key));
+            })
+            .join('')}
         </div>
-      </div>
+      </div>`
+          : ''
+      }
       ${
         hasLines
           ? `<div class="forms-section">
               <div class="row forms-lines-head">
                 <h2>Linhas de produto</h2>
-                ${
-                  locked
-                    ? ''
-                    : '<button class="btn-ghost" type="button" data-add-line>Adicionar linha</button>'
-                }
+                <button class="btn-ghost" type="button" data-add-line>Adicionar linha</button>
               </div>
-              <div id="forms-lines">${(doc.lines || []).map((line, index) => lineHtml(line, fields.lines, index, kind)).join('')}</div>
+              ${lineShowBar}
+              <div id="forms-lines">${(doc.lines || [])
+                .map((line, index) =>
+                  lineHtml(
+                    line,
+                    fields.lines,
+                    index,
+                    kind,
+                    isPreset ? null : hideLines[index] || null,
+                  ),
+                )
+                .join('')}</div>
             </div>`
           : ''
       }
-      <div class="row forms-actions">
-        <button class="btn" type="submit"${lockAttr}>Salvar</button>
-      </div>
     </form>`;
 }
 
@@ -422,7 +960,11 @@ function catalogComboField(field, value, options = {}) {
     </label>`;
 }
 
-function headerInput(field, value, kind) {
+function headerInput(field, value, kind, options = {}) {
+  if (options.hidden) {
+    const stored = field.date ? toIsoDate(value) || value : value;
+    return `<input type="hidden" name="h_${escapeHtml(field.key)}" value="${escapeHtml(stored || '')}" />`;
+  }
   const readonly = field.readonly ? ' readonly' : '';
   const isPartner =
     (field.key === 'customer' && kind === 'sale') || (field.key === 'vendor' && kind === 'purchase');
@@ -530,15 +1072,27 @@ function bindDateInputs(form) {
   });
 }
 
-function lineHtml(line, lineFields, index, kind) {
+function lineHtml(line, lineFields, index, kind, hiddenKeys = null) {
+  const hide = hiddenKeys instanceof Set ? hiddenKeys : new Set();
+  const visibleFields = lineFields.filter((field) => !hide.has(field.key));
+  const hiddenInputs = lineFields
+    .filter((field) => hide.has(field.key))
+    .map(
+      (field) =>
+        `<input type="hidden" data-line-key="${escapeHtml(field.key)}" value="${escapeHtml(line.values?.[field.key] || '')}" />`,
+    )
+    .join('');
   return `
     <div class="forms-line" data-line-id="${escapeHtml(line.id || '')}">
       <div class="forms-line-top">
         <strong>Item ${index + 1}</strong>
         <button class="btn-ghost" type="button" data-remove-line>Remover</button>
       </div>
-      <div class="grid-2">
-        ${lineFields
+      ${hiddenInputs}
+      ${
+        visibleFields.length
+          ? `<div class="grid-2">
+        ${visibleFields
           .map((field) => {
             if (field.key === 'product') {
               return `
@@ -570,7 +1124,9 @@ function lineHtml(line, lineFields, index, kind) {
           </label>`;
           })
           .join('')}
-      </div>
+      </div>`
+          : `<p class="muted forms-line-preset-note">Linha pré-preenchida pelo padrão</p>`
+      }
     </div>`;
 }
 
@@ -664,11 +1220,36 @@ function bindTextCombo(wrap, options) {
   const pool = options.items || [];
   let activeIndex = -1;
 
+  const placeMenu = () => {
+    const rect = input.getBoundingClientRect();
+    if (menu.parentElement !== document.body) document.body.appendChild(menu);
+    menu.style.position = 'fixed';
+    menu.style.left = `${Math.max(8, rect.left)}px`;
+    menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.width = `${rect.width}px`;
+    menu.style.right = 'auto';
+    menu.style.zIndex = '320';
+  };
+
+  const onDocDown = (event) => {
+    if (wrap.contains(event.target) || menu.contains(event.target)) return;
+    close();
+  };
+
+  const onReposition = () => {
+    if (!menu.hidden) placeMenu();
+  };
+
   const close = () => {
     menu.hidden = true;
     menu.innerHTML = '';
     activeIndex = -1;
     wrap.classList.remove('is-open');
+    if (menu.parentElement !== wrap) wrap.appendChild(menu);
+    menu.removeAttribute('style');
+    document.removeEventListener('mousedown', onDocDown, true);
+    document.removeEventListener('scroll', onReposition, true);
+    window.removeEventListener('resize', onReposition);
   };
 
   const pick = (value) => {
@@ -687,30 +1268,32 @@ function bindTextCombo(wrap, options) {
     ).slice(0, 12);
     if (!matches.length) {
       menu.innerHTML = `<div class="forms-combo-empty">${escapeHtml(options.emptyLabel || 'Nenhum resultado')}</div>`;
-      menu.hidden = false;
-      wrap.classList.add('is-open');
-      activeIndex = -1;
-      return;
-    }
-    menu.innerHTML = matches
-      .map((item, index) => {
-        const meta = options.getMeta?.(item) || '';
-        return `<button type="button" class="forms-combo-option${
-          index === activeIndex ? ' is-active' : ''
-        }" data-combo-pick="${escapeHtml(item.name)}" role="option">
+    } else {
+      menu.innerHTML = matches
+        .map((item, index) => {
+          const meta = options.getMeta?.(item) || '';
+          return `<button type="button" class="forms-combo-option${
+            index === activeIndex ? ' is-active' : ''
+          }" data-combo-pick="${escapeHtml(item.name)}" role="option">
             <strong>${escapeHtml(item.name)}</strong>
             ${meta ? `<span>${escapeHtml(meta)}</span>` : ''}
           </button>`;
-      })
-      .join('');
+        })
+        .join('');
+      menu.querySelectorAll('[data-combo-pick]').forEach((btn) => {
+        btn.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          pick(btn.getAttribute('data-combo-pick') || '');
+        });
+      });
+    }
     menu.hidden = false;
     wrap.classList.add('is-open');
-    menu.querySelectorAll('[data-combo-pick]').forEach((btn) => {
-      btn.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-        pick(btn.getAttribute('data-combo-pick') || '');
-      });
-    });
+    placeMenu();
+    document.addEventListener('mousedown', onDocDown, true);
+    document.addEventListener('scroll', onReposition, true);
+    window.addEventListener('resize', onReposition);
+    if (!matches.length) activeIndex = -1;
   };
 
   input.addEventListener('focus', () => paint(input.value));
@@ -746,7 +1329,11 @@ function bindTextCombo(wrap, options) {
     }
   });
   input.addEventListener('blur', () => {
-    window.setTimeout(close, 120);
+    window.setTimeout(() => {
+      if (!wrap.contains(document.activeElement) && !menu.contains(document.activeElement)) {
+        close();
+      }
+    }, 120);
   });
 }
 
@@ -775,6 +1362,7 @@ function applyProductPrice(input, catalog) {
   const kind = input.getAttribute('data-price-kind');
   price.value =
     kind === 'purchase' ? match.cost || match.sales_price || '' : match.sales_price || match.cost || '';
+  price.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function bindProductCombos(form, catalog) {
@@ -797,9 +1385,16 @@ function bindList(root, kind, schema, catalog, items, token) {
         const found = detail.item;
         if (!found) return;
         const nextItems = items.map((item) => (item.id === found.id ? found : item));
-        const body = root.querySelector('#forms-body');
-        paintBody(body, kind, schema, catalog, nextItems, found);
-        bindList(root, kind, schema, catalog, nextItems, token);
+        ensureFormsModal(root);
+        const editor = getFormsEditor(root);
+        if (!editor) {
+          toast('Não foi possível abrir o editor');
+          return;
+        }
+        editor.innerHTML = editorHtml(found, schema.fields[kind], kind, catalog, schema);
+        root.querySelectorAll('.forms-list-item.active').forEach((el) => el.classList.remove('active'));
+        button.classList.add('active');
+        openEditorModal(root);
         bindEditor(root, kind, schema, catalog, nextItems, found, token);
       } catch (error) {
         toast(error.message);
@@ -809,58 +1404,51 @@ function bindList(root, kind, schema, catalog, items, token) {
 }
 
 function bindEditor(root, kind, schema, catalog, items, doc, token) {
-  const form = root.querySelector('#forms-form');
+  const form = getFormsEditor(root)?.querySelector('#forms-form') || root.querySelector('#forms-form');
   if (!form) return;
   const fields = schema.fields[kind];
-  const locked = form.dataset.locked === '1' || isOrderLocked(doc, kind);
   bindPartnerCombos(form, catalog);
   bindProductCombos(form, catalog);
   bindCatalogCombos(form, catalog);
   bindDateInputs(form);
   bindProductAutofill(form, catalog);
   bindLineRemoves(form, catalog);
-
-  if (locked) {
-    form
-      .querySelectorAll(
-        'input, select, textarea, button[type="submit"], [data-delete], [data-add-line], [data-remove-line], [data-odoo-retry]',
-      )
-      .forEach((el) => {
-        el.disabled = true;
-      });
-  }
+  bindDirtySave(form, fields);
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (locked) {
-      toast('Pedido confirmado no Odoo; edição bloqueada');
-      return;
-    }
+    const saveBtn = form.querySelector('[data-save]');
+    if (saveBtn?.hidden) return;
     try {
       const payload = collectPayload(form, fields);
-      await api(`/api/forms/${doc.id}`, { method: 'PUT', body: payload });
-      toast('Salvo · sincronizando com Odoo…');
-      await refresh(root, kind, schema, doc.id, token);
-      void pollSyncStatus(root, kind, schema, doc.id, token);
+      let id = doc.id;
+      if (!id) {
+        const created = await api('/api/forms', { method: 'POST', body: { kind } });
+        id = created.item?.id;
+        if (!id) throw new Error('Falha ao criar registro');
+      }
+      await api(`/api/forms/${id}`, { method: 'PUT', body: payload });
+      closeEditorModal(root);
+      await refreshListQuiet(root, kind, schema, token);
+      void pollSyncStatus(root, kind, schema, id, token);
     } catch (error) {
       toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
 
   form.querySelector('[data-odoo-retry]')?.addEventListener('click', async () => {
+    if (!doc.id) return;
     try {
       await api(`/api/forms/${doc.id}/odoo-push`, { method: 'POST', body: {} });
-      toast('Reenviado ao Odoo', { tone: 'subtle' });
-      await refresh(root, kind, schema, doc.id, token);
+      closeEditorModal(root);
+      await refreshListQuiet(root, kind, schema, token);
       void pollSyncStatus(root, kind, schema, doc.id, token);
     } catch (error) {
       toast(`Odoo: ${formatSyncError(error.message || error)}`, { tone: 'error' });
-      await refresh(root, kind, schema, doc.id, token);
     }
   });
 
   form.querySelector('[data-add-line]')?.addEventListener('click', () => {
-    if (locked) return;
     const box = form.querySelector('#forms-lines');
     if (!box) return;
     const index = box.querySelectorAll('.forms-line').length;
@@ -869,23 +1457,38 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
     bindProductCombos(form, catalog);
     bindCatalogCombos(form, catalog);
     bindProductAutofill(form, catalog);
+    form._checkDirty?.();
   });
 
   form.querySelector('[data-delete]')?.addEventListener('click', async () => {
-    if (locked) {
-      toast('Pedido confirmado no Odoo; exclusão bloqueada');
-      return;
-    }
+    if (!doc.id) return;
     if (!confirm('Excluir este registro? O pedido correspondente será cancelado no Odoo.')) return;
     try {
       await api(`/api/forms/${doc.id}`, { method: 'DELETE' });
       toast('Excluído · cancelado no Odoo', { tone: 'subtle' });
-      await refresh(root, kind, schema, null, token);
+      closeEditorModal(root);
+      await refreshListQuiet(root, kind, schema, token);
     } catch (error) {
       toast(formatSyncError(error.message || error), { tone: 'error' });
     }
   });
 
+}
+
+function bindDirtySave(form, fields) {
+  const saveBtn = form.querySelector('[data-save]');
+  if (!saveBtn) return;
+  let baseline = '';
+  const snapshot = () => JSON.stringify(collectPayload(form, fields));
+  const checkDirty = () => {
+    saveBtn.hidden = snapshot() === baseline;
+  };
+  // Baseline após combos/máscaras estabilizarem os valores iniciais.
+  baseline = snapshot();
+  saveBtn.hidden = true;
+  form._checkDirty = checkDirty;
+  form.addEventListener('input', checkDirty);
+  form.addEventListener('change', checkDirty);
 }
 
 function bindProductAutofill(form, catalog) {
@@ -898,7 +1501,10 @@ function bindProductAutofill(form, catalog) {
 
 function bindLineRemoves(form, catalog) {
   form.querySelectorAll('[data-remove-line]').forEach((button) => {
-    button.onclick = () => button.closest('.forms-line')?.remove();
+    button.onclick = () => {
+      button.closest('.forms-line')?.remove();
+      form._checkDirty?.();
+    };
   });
   bindProductCombos(form, catalog);
   bindCatalogCombos(form, catalog);
@@ -930,10 +1536,41 @@ function collectPayload(form, fields) {
   };
 }
 
-async function refresh(root, kind, schema, openId, token) {
+/**
+ * Atualiza só as linhas da lista (sem remontar toolbar/modal).
+ * Usado após salvar/excluir para não piscar a tela enquanto o Odoo sincroniza.
+ */
+async function refreshListQuiet(root, kind, schema, token) {
   const [catalog, data] = await Promise.all([
     loadCatalog(false),
     api(`/api/forms?kind=${encodeURIComponent(kind)}`),
+  ]);
+  if (!isNavActive(token)) return;
+  const items = data.items || [];
+  const list = root.querySelector('#forms-list');
+  const count = root.querySelector('#forms-list-count');
+  if (!list) {
+    await refresh(root, kind, schema, null, token);
+    return;
+  }
+  rememberListSession(kind, schema, catalog, items, token);
+  const filtered = filterItems(items, schema, kind, listFilters);
+  list.innerHTML = listRowsHtml(filtered, null, schema, kind, items.length);
+  if (count) {
+    count.textContent =
+      filtered.length === items.length
+        ? `${items.length} item(ns)`
+        : `${filtered.length} de ${items.length} item(ns)`;
+  }
+  bindList(root, kind, schema, catalog, items, token);
+  closeEditorModal(root);
+}
+
+async function refresh(root, kind, schema, openId, token) {
+  const [catalog, data, presets] = await Promise.all([
+    loadCatalog(false),
+    api(`/api/forms?kind=${encodeURIComponent(kind)}`),
+    loadPresets(kind).catch(() => []),
   ]);
   if (!isNavActive(token)) return;
   let items = data.items || [];
@@ -947,11 +1584,18 @@ async function refresh(root, kind, schema, openId, token) {
       editing = items.find((item) => item.id === openId) || null;
     }
   }
-  const body = ensureFormsShell(root, kind);
+  rememberListSession(kind, schema, catalog, items, token);
+  const body = ensureFormsShell(root, kind, presets);
   paintBody(body, kind, schema, catalog, items, editing);
-  bindShellActions(root, kind, schema, catalog, items, token);
+  bindShellActions(root, kind, schema, catalog, items, token, presets);
+  bindFilters(root, kind, schema, catalog, items, token);
   bindList(root, kind, schema, catalog, items, token);
-  if (editing) bindEditor(root, kind, schema, catalog, items, editing, token);
+  if (editing) {
+    openEditorModal(root);
+    bindEditor(root, kind, schema, catalog, items, editing, token);
+  } else {
+    closeEditorModal(root);
+  }
 }
 
 async function download(path) {

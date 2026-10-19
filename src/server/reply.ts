@@ -2,6 +2,10 @@ import { draftReply, type Draft } from './agent.js';
 import { getSetting, one, withTransaction } from './db.js';
 import { zonedNow } from './clock.js';
 import {
+  buildConversationContextPack,
+  type ConversationContextPack,
+} from './conversation-context.js';
+import {
   draftQuestionnaireReply,
   type QuestionnaireDraft,
 } from './questionnaire-agent.js';
@@ -111,7 +115,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   const channelId = input.channelId || conversation?.channel_id || getSetting('nevoa_channel_id');
   if (!phone) return empty('Contato sem telefone');
 
-  const limit = Number(getSetting('agent_history') || '8');
+  const limit = Number(getSetting('agent_history') || '16');
   const history = (await recentMessages(input.conversationId, limit)).filter(
     (item, index, all) =>
       !(index === all.length - 1 && item.direction === 'INBOUND' && item.text === inboundText),
@@ -135,6 +139,24 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   const contactName =
     contact?.name || input.contactName || conversation?.contact_name || '';
   const historyRows = history.map((item) => ({ direction: item.direction, text: item.text }));
+  const contextPack: ConversationContextPack = contactId
+    ? await buildConversationContextPack({
+        contactId,
+        today: clock.date,
+        inbound: inboundText,
+        history: historyRows,
+        lookbackDays: 7,
+      })
+    : {
+        history: historyRows,
+        contextBrief: '',
+        hints: {
+          likelyQuestionnaireAck: false,
+          hasPendingQuestionnaire: false,
+          pendingPreviousDays: [],
+        },
+        pendingCycles: [],
+      };
 
   let cycle: ActiveCycleContext | undefined;
   let draft: QuestionnaireDraft | Draft | null = null;
@@ -242,6 +264,8 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
               history: historyRows,
               forceCompletedEdit: resolution.completedEditContext,
               today: clock.date,
+              contextBrief: contextPack.contextBrief,
+              hints: contextPack.hints,
             })
           : null;
   }
@@ -271,6 +295,8 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
       inbound: inboundText,
       hasText: true,
       allowReply: true,
+      contextBrief: contextPack.contextBrief,
+      hints: contextPack.hints,
     });
   }
 

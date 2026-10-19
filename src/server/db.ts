@@ -377,6 +377,21 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_forms_documents_kind ON forms_documents(kind, updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_forms_document_lines_doc ON forms_document_lines(document_id, sort_order);
   CREATE INDEX IF NOT EXISTS idx_forms_partners_role ON forms_partners(is_customer, is_vendor);
+  CREATE TABLE IF NOT EXISTS forms_presets (
+    id TEXT PRIMARY KEY,
+    company_odoo_id TEXT NOT NULL DEFAULT '1',
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
+    header_json TEXT NOT NULL DEFAULT '{}',
+    lines_json TEXT NOT NULL DEFAULT '[]',
+    visible_json TEXT NOT NULL DEFAULT '{}',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_forms_presets_company_kind
+    ON forms_presets(company_odoo_id, kind, sort_order, name);
 `;
 
 const DEFAULT_PROMPT = `Você é o assistente de WhatsApp da Vértice Inovação.
@@ -448,6 +463,30 @@ async function migrate(): Promise<void> {
   );
   await run(`CREATE INDEX IF NOT EXISTS idx_forms_documents_company ON forms_documents(company_odoo_id, kind)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_forms_partners_company ON forms_partners(company_odoo_id)`);
+  await run(`
+    CREATE TABLE IF NOT EXISTS forms_presets (
+      id TEXT PRIMARY KEY,
+      company_odoo_id TEXT NOT NULL DEFAULT '1',
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft',
+      header_json TEXT NOT NULL DEFAULT '{}',
+      lines_json TEXT NOT NULL DEFAULT '[]',
+      visible_json TEXT NOT NULL DEFAULT '{}',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS visible_json TEXT NOT NULL DEFAULT '{}'`);
+  await run(
+    `CREATE INDEX IF NOT EXISTS idx_forms_presets_company_kind
+     ON forms_presets(company_odoo_id, kind, sort_order, name)`,
+  );
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_forms_presets_company_kind_name
+     ON forms_presets(company_odoo_id, kind, lower(name))`,
+  );
   await run(`
     CREATE TABLE IF NOT EXISTS forms_odoo_refs (
       id TEXT PRIMARY KEY,
@@ -630,7 +669,7 @@ async function seedSettings(): Promise<void> {
     agent_active: '1',
     agent_auto_reply: '0',
     agent_fallback: 'Recebi sua mensagem. Em instantes alguém da Vértice Inovação continua o atendimento.',
-    agent_history: '8',
+    agent_history: '16',
     nevoa_base_url: env(
       'NEVOA_BASE_URL',
       'https://nevoa-manager-backend-9e27f965f73e.herokuapp.com/api/public/v1',

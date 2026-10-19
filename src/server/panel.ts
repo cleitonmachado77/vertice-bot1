@@ -225,7 +225,7 @@ export function registerPanelRoutes(): void {
     const autoReply = typeof input.autoReply === 'boolean' ? input.autoReply : active;
     await setSetting('agent_auto_reply', autoReply ? '1' : '0');
     await setSetting('agent_fallback', text(input.fallback));
-    await setSetting('agent_history', String(clamp(Number(input.history ?? 8), 1, 30)));
+    await setSetting('agent_history', String(clamp(Number(input.history ?? 16), 1, 30)));
     const models = await listAgentModels();
     json(ctx.res, 200, { ...agentPayload(true), models: models.models, modelsError: models.error });
   });
@@ -433,7 +433,7 @@ function agentPayload(maskKey: boolean) {
     active: getSetting('agent_active') === '1',
     autoReply: getSetting('agent_auto_reply') === '1',
     fallback: getSetting('agent_fallback'),
-    history: Number(getSetting('agent_history') || '8'),
+    history: Number(getSetting('agent_history') || '16'),
   };
 }
 

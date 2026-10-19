@@ -185,13 +185,15 @@ async function upsertDoc(input: {
 
   const prev = existing ? parseHeader(existing.header_json) : {};
   const header = { ...prev, ...input.header, odoo_id: input.odooId, company_odoo_id: input.companyId };
-  const title = input.title || documentTitle(input.kind, header);
+  // Sempre Número · Parceiro (evita título só com fornecedor após o pull).
+  const title = documentTitle(input.kind, header) || input.title || 'Registro';
 
   if (existing) {
     await withTransaction(async () => {
+      // Não mexe em updated_at no pull — a lista continua com os últimos salvos no topo.
       await run(
         `UPDATE forms_documents
-         SET title = $2, status = $3, header_json = $4, company_odoo_id = $5, updated_at = NOW()
+         SET title = $2, status = $3, header_json = $4, company_odoo_id = $5
          WHERE id = $1`,
         [existing.id, title, input.status, JSON.stringify(header), input.companyId],
       );
@@ -535,7 +537,7 @@ async function pullSales(): Promise<number> {
       kind: 'sale',
       companyId,
       odooId: String(order.id),
-      title: header.customer || header.order_reference,
+      title: documentTitle('sale', header),
       status: orderStatus(order.state),
       header,
       lines,
@@ -661,7 +663,7 @@ async function pullPurchases(): Promise<number> {
       kind: 'purchase',
       companyId,
       odooId: String(order.id),
-      title: header.vendor || header.order_reference,
+      title: documentTitle('purchase', header),
       status: orderStatus(order.state),
       header,
       lines,

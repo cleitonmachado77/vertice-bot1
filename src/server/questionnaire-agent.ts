@@ -49,6 +49,10 @@ import {
   formatAnswers,
   mentionsUnderstoodAnswers,
 } from './questionnaire-replies.js';
+import {
+  pendingPreviousDaysNotice,
+  type ConversationHints,
+} from './conversation-context.js';
 
 export type QuestionnaireDraft = {
   text: string;
@@ -71,6 +75,10 @@ export async function draftQuestionnaireReply(input: {
   listQuestionsOnly?: boolean;
   /** Data de calendário de hoje (YYYY-MM-DD), para temporalidade. */
   today?: string;
+  /** Resumo estruturado (histórico + ciclos por data). */
+  contextBrief?: string;
+  /** Hints determinísticos — orientam, não decidem sozinhos. */
+  hints?: ConversationHints;
 }): Promise<QuestionnaireDraft> {
   const fallback = getSetting('agent_fallback');
   if (getSetting('agent_active') !== '1') {
@@ -308,10 +316,11 @@ export async function draftQuestionnaireReply(input: {
     'Exemplos de cenários (decida caso a caso pelo contexto):',
     '- Pedir para lembrar/listar as perguntas → related:true e liste na reply (numeradas).',
     '- Conteúdo que responde às perguntas (direto ou por paráfrase) → related:true e preencha answers com o questionId certo.',
-    '- Confirmar que quer continuar → apresente o questionário completo, numerado.',
+    '- Confirmar que quer continuar (ok, sim, pode, certo após convite) → related:true e apresente o questionário completo, numerado. NÃO use related:false só porque a mensagem é curta.',
     '- Pedir só uma pergunta (“qual é a terceira?”) → responda só essa, com o texto da pergunta.',
     '- Responder várias perguntas numa mensagem só → salve TODAS em "answers" com o questionId correto.',
     '- Resposta parcial (ex.: 3 de 5) → salve o que veio em "answers", complete:false, e na reply peça com naturalidade SÓ o que ainda falta.',
+    '- Se houver dias anteriores incompletos no contexto, avise o usuário de forma breve e conduza a coleta.',
     '- Conversa sem relação com o questionário (ex.: “oi”, horário comercial genérico, assunto outro) → related:false, reply:"", answers:[].',
     '',
     'Importante:',
@@ -328,6 +337,8 @@ export async function draftQuestionnaireReply(input: {
     ...rfqSeparationPromptLines(),
     '- Aceite texto, áudio (já transcrito), imagem (já descrita) e vídeo.',
     '- Não invente respostas. Não mencione que você é um modelo.',
+    '',
+    input.contextBrief ? `Contexto da conversa (histórico + ciclos):\n${input.contextBrief}` : '',
     '',
     `Questionário: ${input.context.questionnaire.name}`,
     `Contato: ${input.contactName || 'não informado'}`,
@@ -348,7 +359,9 @@ export async function draftQuestionnaireReply(input: {
     '',
     'Responda APENAS com JSON válido:',
     '{"related":true,"reply":"mensagem natural","answers":[{"questionId":"id","text":"conteúdo","type":"text|audio|image|video"}],"complete":false}',
-  ].join('\n');
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
 
   try {
     const messages: ChatMessage[] = [
@@ -364,6 +377,24 @@ export async function draftQuestionnaireReply(input: {
     const extracted = parseExtracted(raw, media);
 
     if (!extracted.related && extracted.answers.length === 0 && !seededFromHeuristic) {
+      // Fallback leve: confirmação após convite → apresenta perguntas (modelo decide o resto).
+      if (input.hints?.likelyQuestionnaireAck && !amending) {
+        const notice = pendingPreviousDaysNotice(input.hints);
+        const base = defaultQuestionnaireReply(
+          questions,
+          alreadySaved,
+          pendingMissing,
+          false,
+          media,
+          input.contactName,
+        );
+        return {
+          text: [base, notice].filter(Boolean).join('\n\n').slice(0, 1500),
+          source: 'fallback',
+          detail: 'ack do convite (fallback contextual)',
+          completed: false,
+        };
+      }
       return {
         text: '',
         source: 'model',
@@ -459,6 +490,10 @@ export async function draftQuestionnaireReply(input: {
         contactName: input.contactName,
         questions,
       });
+      const notice = input.hints ? pendingPreviousDaysNotice(input.hints) : '';
+      if (notice && !reply.includes(notice) && cycleDate === today) {
+        reply = `${reply}\n\n${notice}`;
+      }
     }
 
     return {

@@ -1,4 +1,5 @@
 import { getSetting } from './db.js';
+import type { ConversationHints } from './conversation-context.js';
 
 export type Draft = {
   text: string;
@@ -110,6 +111,8 @@ export async function draftReply(input: {
   hasText: boolean;
   force?: boolean;
   allowReply?: boolean;
+  contextBrief?: string;
+  hints?: ConversationHints;
 }): Promise<Draft> {
   if (!input.force && getSetting('agent_active') !== '1') {
     return { text: '', source: 'none', detail: 'Agente desligado' };
@@ -142,12 +145,27 @@ export async function draftReply(input: {
     { role: 'user', content: input.inbound },
   ];
 
+  const blockNoReply =
+    Boolean(input.hints?.likelyQuestionnaireAck) ||
+    Boolean(input.hints?.hasPendingQuestionnaire) ||
+    Boolean(input.hints?.pendingPreviousDays.length);
+
   try {
     const text = await completeChat(messages);
     if (!text) {
       return { text: fallback, source: 'fallback', detail: 'Modelo devolveu vazio' };
     }
     if (isNoReply(text)) {
+      if (blockNoReply) {
+        return {
+          text: (
+            fallback ||
+            'Certo! Pode seguir com o questionário de acompanhamento — estou à escuta.'
+          ).slice(0, 1500),
+          source: 'fallback',
+          detail: 'NO_REPLY bloqueado por contexto pendente',
+        };
+      }
       return { text: '', source: 'none', detail: 'Sem necessidade de resposta' };
     }
     return { text: text.slice(0, 1500), source: 'model', detail: getSetting('agent_model') };
@@ -209,10 +227,16 @@ function systemPrompt(input: {
   notes: string;
   instructions: string;
   prompt: string;
+  contextBrief?: string;
+  hints?: ConversationHints;
 }): string {
   const base = input.prompt.trim() || getSetting('agent_prompt');
   const script = input.instructions.trim() || 'Nenhuma instrução específica. Use só as regras gerais.';
   const notes = input.notes.trim() || 'nenhuma';
+  const pending =
+    Boolean(input.hints?.likelyQuestionnaireAck) ||
+    Boolean(input.hints?.hasPendingQuestionnaire) ||
+    Boolean(input.hints?.pendingPreviousDays.length);
   return [
     base,
     '',
@@ -221,13 +245,21 @@ function systemPrompt(input: {
     'Siga as instruções deste contato. Não invente etapas, preços ou promessas fora delas.',
     'Se a mensagem for áudio, vídeo ou imagem, confirme o recebimento e continue as instruções.',
     'Se não souber responder com segurança, diga que vai passar o atendimento para um atendente humano.',
-    'Interprete a intenção: se o usuário só agradece, confirma ou encerra sem trazer pergunta/assunto novo (ex.: "ok", "por nada", "valeu", "obrigado", "tchau"), NÃO continue o papo.',
-    'Nesses casos de encerramento curto, responda exatamente com a palavra: NO_REPLY',
-    'Evite loops de educação ("estou à disposição", "se precisar é só chamar") quando a conversa já está se encerrando.',
+    'Interprete a intenção pelo CONTEXTO da conversa (histórico + ciclos), não por regra única de palavra.',
+    'NO_REPLY só quando for encerramento real: agradecimento/tchau após assunto já resolvido, SEM convite pendente de questionário e SEM coleta em aberto.',
+    'Se a empresa acabou de pedir para responder o questionário / iniciar atendimento e o usuário confirma (ok, sim, pode), CONTINUE o atendimento — apresente ou relembre o acompanhamento; NÃO use NO_REPLY.',
+    'Se houver dias anteriores incompletos no contexto, avise brevemente o usuário.',
+    pending
+      ? 'Há coleta/questionário pendente no contexto: não encerre com NO_REPLY; conduza o próximo passo.'
+      : 'Se for só encerramento curto sem pendência, responda exatamente com a palavra: NO_REPLY',
+    'Evite loops de educação ("estou à disposição", "se precisar é só chamar") quando a conversa já está se encerrando de verdade.',
+    input.contextBrief ? `\nContexto da conversa (histórico + ciclos):\n${input.contextBrief}` : '',
     `Instruções: ${script}`,
     `Contato: ${input.contactName || 'não informado'} ${input.contactPhone}`.trim(),
     `Notas internas: ${notes}`,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function isNoReply(text: string): boolean {
