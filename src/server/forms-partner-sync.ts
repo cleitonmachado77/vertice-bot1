@@ -1,5 +1,9 @@
 import { one, run } from './db.js';
-import { getActiveCompanyId } from './forms-companies.js';
+import {
+  getActiveCompanyId,
+  SHARED_COMPANY_ODOO_ID,
+  sqlPartnerVisibleInCompany,
+} from './forms-companies.js';
 import { odooCreate, odooSearchRead, odooWrite } from './odoo-client.js';
 import type { EntityPartner } from './forms-entities.js';
 
@@ -22,21 +26,24 @@ export async function pushPartnerToOdoo(id: string): Promise<EntityPartner> {
     street: string;
     city: string;
     is_company: number;
+    company_odoo_id: string;
     updated_at: string;
   }>(
     `SELECT id, name, is_customer, is_vendor, COALESCE(odoo_id, '') AS odoo_id,
             COALESCE(email, '') AS email, COALESCE(phone, '') AS phone,
             COALESCE(vat, '') AS vat, COALESCE(street, '') AS street,
             COALESCE(city, '') AS city, COALESCE(is_company, 0) AS is_company,
+            COALESCE(company_odoo_id, '1') AS company_odoo_id,
             updated_at
      FROM forms_partners
-     WHERE id = $1 AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`,
+     WHERE id = $1 AND ${sqlPartnerVisibleInCompany('$2')}`,
     [id, companyId],
   );
   if (!row) throw new Error('Parceiro não encontrado');
   const name = text(row.name);
   if (!name) throw new Error('Nome obrigatório');
 
+  const shared = row.company_odoo_id === SHARED_COMPANY_ODOO_ID;
   const values: Record<string, unknown> = {
     name,
     email: text(row.email) || false,
@@ -47,7 +54,7 @@ export async function pushPartnerToOdoo(id: string): Promise<EntityPartner> {
     is_company: Number(row.is_company) === 1,
     customer_rank: Number(row.is_customer) === 1 ? 1 : 0,
     supplier_rank: Number(row.is_vendor) === 1 ? 1 : 0,
-    company_id: Number(companyId) || false,
+    company_id: shared ? false : Number(companyId) || false,
   };
 
   let odooId = Number(row.odoo_id || 0);

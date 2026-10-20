@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { many, one, run } from './db.js';
-import { getActiveCompanyId } from './forms-companies.js';
+import { getActiveCompanyId, sqlPartnerVisibleInCompany } from './forms-companies.js';
 import { emptyHeader } from './forms-fields.js';
 import { listCatalogProducts, type CatalogProduct } from './forms-catalog.js';
 
@@ -96,7 +96,7 @@ export async function getEntityPartner(id: string): Promise<EntityPartner | unde
   }>(
     `SELECT ${PARTNER_SELECT}
      FROM forms_partners
-     WHERE id = $1 AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`,
+     WHERE id = $1 AND ${sqlPartnerVisibleInCompany('$2')}`,
     [id, companyId],
   );
   return row ? mapPartner(row) : undefined;
@@ -108,7 +108,7 @@ export async function listEntityPartners(
   const companyId = getActiveCompanyId();
   let sql = `SELECT ${PARTNER_SELECT}
              FROM forms_partners
-             WHERE COALESCE(NULLIF(company_odoo_id, ''), '1') = $1`;
+             WHERE ${sqlPartnerVisibleInCompany('$1')}`;
   const params: unknown[] = [companyId];
   if (role === 'customer') sql += ` AND is_customer = 1`;
   if (role === 'vendor') sql += ` AND is_vendor = 1`;
@@ -163,7 +163,7 @@ export async function saveEntityPartner(input: {
        SET name = $2, name_key = $3, is_customer = $4, is_vendor = $5,
            email = $6, phone = $7, vat = $8, street = $9, city = $10, is_company = $11,
            updated_at = NOW()
-       WHERE id = $1 AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $12`,
+       WHERE id = $1 AND ${sqlPartnerVisibleInCompany('$12')}`,
       [input.id, clean, key, isCustomer, isVendor, email, phone, vat, street, city, isCompany, companyId],
     );
     const row = await one<{
@@ -186,7 +186,9 @@ export async function saveEntityPartner(input: {
 
   const conflict = await one<{ id: string }>(
     `SELECT id FROM forms_partners
-     WHERE name_key = $1 AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`,
+     WHERE name_key = $1 AND ${sqlPartnerVisibleInCompany('$2')}
+     ORDER BY CASE WHEN company_odoo_id = $2 THEN 0 ELSE 1 END
+     LIMIT 1`,
     [key, companyId],
   );
   if (conflict) {

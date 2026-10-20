@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { many, one, run } from './db.js';
-import { getActiveCompany, getActiveCompanyId } from './forms-companies.js';
+import {
+  getActiveCompany,
+  getActiveCompanyId,
+  sqlPartnerVisibleInCompany,
+} from './forms-companies.js';
 import { emptyHeader } from './forms-fields.js';
 import { listOdooRefsGrouped, type OdooRefItem, type OdooRefType } from './forms-odoo-refs.js';
 import { odooLabelPt } from './odoo-pt.js';
@@ -99,7 +103,7 @@ export async function listCatalogPartners(): Promise<CatalogPartner[]> {
   }>(
     `SELECT id, name, is_customer, is_vendor, COALESCE(odoo_id, '') AS odoo_id
      FROM forms_partners
-     WHERE COALESCE(NULLIF(company_odoo_id, ''), '1') = $1
+     WHERE ${sqlPartnerVisibleInCompany('$1')}
      ORDER BY name ASC`,
     [companyId],
   );
@@ -202,7 +206,9 @@ export async function upsertPartner(
     is_vendor: number;
   }>(
     `SELECT id, name, is_customer, is_vendor FROM forms_partners
-     WHERE name_key = $1 AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`,
+     WHERE name_key = $1 AND ${sqlPartnerVisibleInCompany('$2')}
+     ORDER BY CASE WHEN company_odoo_id = $2 THEN 0 ELSE 1 END
+     LIMIT 1`,
     [key, companyId],
   );
 

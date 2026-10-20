@@ -3,6 +3,7 @@ import { getSetting, one, run, setSetting, withTransaction } from './db.js';
 import {
   DEFAULT_COMPANY_ODOO_ID,
   resolveCompanyOdooId,
+  resolvePartnerCompanyOdooId,
   syncCompaniesFromOdoo,
 } from './forms-companies.js';
 import { documentTitle, emptyHeader, emptyLine } from './forms-fields.js';
@@ -127,18 +128,27 @@ async function upsertPartnerRow(input: {
   const street = String(input.street || '').trim();
   const city = String(input.city || '').trim();
   const isCompany = input.isCompany ? 1 : 0;
-  const existing = await one<{ id: string }>(
-    `SELECT id FROM forms_partners
-     WHERE company_odoo_id = $1 AND (odoo_id = $2 OR name_key = $3)
-     LIMIT 1`,
-    [companyId, String(input.odooId), key],
-  );
+  // Preferir odoo_id global (reclassifica company_id false → compartilhado).
+  const existing =
+    (input.odooId > 0
+      ? await one<{ id: string }>(
+          `SELECT id FROM forms_partners WHERE odoo_id = $1 AND odoo_id <> '' LIMIT 1`,
+          [String(input.odooId)],
+        )
+      : undefined) ||
+    (await one<{ id: string }>(
+      `SELECT id FROM forms_partners
+       WHERE company_odoo_id = $1 AND name_key = $2
+       LIMIT 1`,
+      [companyId, key],
+    ));
   if (existing) {
     if (input.withDetails) {
+      // Pull completo: espelha ranks do Odoo (não GREATEST — senão nunca remove fornecedor).
       await run(
         `UPDATE forms_partners
-         SET name = $2, name_key = $3, is_customer = GREATEST(is_customer, $4),
-             is_vendor = GREATEST(is_vendor, $5), odoo_id = $6, company_odoo_id = $7,
+         SET name = $2, name_key = $3, is_customer = $4, is_vendor = $5,
+             odoo_id = $6, company_odoo_id = $7,
              email = $8, phone = $9, vat = $10, street = $11, city = $12, is_company = $13,
              updated_at = NOW()
          WHERE id = $1`,
@@ -460,11 +470,21 @@ async function pullPartners(sinceIso?: string | null): Promise<number> {
     if (!name) continue;
     let isCustomer = Number(row.customer_rank || 0) > 0;
     let isVendor = Number(row.supplier_rank || 0) > 0;
+    // Empresa sem rank: só cliente (não poluir lista de fornecedores).
     if (!isCustomer && !isVendor) {
       if (row.is_company) {
         isCustomer = true;
-        isVendor = true;
       } else {
+        // Pessoa sem rank: se já existir no Vertice, zera cliente/fornecedor.
+        if (row.id > 0) {
+          await run(
+            `UPDATE forms_partners
+             SET is_customer = 0, is_vendor = 0,
+                 company_odoo_id = $2, updated_at = NOW()
+             WHERE odoo_id = $1`,
+            [String(row.id), resolvePartnerCompanyOdooId(row.company_id)],
+          );
+        }
         continue;
       }
     }
@@ -473,7 +493,7 @@ async function pullPartners(sinceIso?: string | null): Promise<number> {
       isCustomer,
       isVendor,
       odooId: row.id,
-      companyOdooId: resolveCompanyOdooId(row.company_id),
+      companyOdooId: resolvePartnerCompanyOdooId(row.company_id),
       withDetails: true,
       email: row.email ? String(row.email) : '',
       phone: row.phone ? String(row.phone) : '',
@@ -1025,4 +1045,12 @@ export async function pullFromOdoo(
 /** Compat: alias usado pelas rotas antigas. */
 export async function pullOdooCatalog(): Promise<OdooPullResult> {
   return pullFromOdoo({ auto: false });
+}
+
+/** Reprocessa só parceiros (full domain) — útil após mudança de company compartilhada. */
+export async function pullOdooPartnersOnly(): Promise<number> {
+  if (!odooConfigured()) {
+    throw new Error('Configure URL, banco, login e API Key do Odoo');
+  }
+  return pullPartners(null);
 }

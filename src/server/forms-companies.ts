@@ -4,6 +4,30 @@ import { odooSearchRead } from './odoo-client.js';
 /** Empresa padrão (Reciclarenda) para registros sem company_id no Odoo. */
 export const DEFAULT_COMPANY_ODOO_ID = '1';
 
+/**
+ * Parceiros Odoo com company_id vazio são compartilhados entre empresas.
+ * Usamos '0' (id inexistente) para não colidir com COALESCE(..., '1') nem com a migração que zera ''.
+ */
+export const SHARED_COMPANY_ODOO_ID = '0';
+
+/** True quando o many2one/company_id do Odoo está vazio (False/null). */
+export function isOdooCompanyUnset(raw: unknown): boolean {
+  if (raw === false || raw == null || raw === '') return true;
+  if (Array.isArray(raw) && (raw[0] === false || raw[0] == null || raw[0] === '')) return true;
+  return false;
+}
+
+/** company_odoo_id para res.partner: compartilhado ('0') ou id da empresa. */
+export function resolvePartnerCompanyOdooId(raw: unknown): string {
+  if (isOdooCompanyUnset(raw)) return SHARED_COMPANY_ODOO_ID;
+  return resolveCompanyOdooId(raw);
+}
+
+/** SQL: parceiros da empresa ativa + compartilhados. `param` = placeholder ($1, $2…). */
+export function sqlPartnerVisibleInCompany(param: string, column = 'company_odoo_id'): string {
+  return `(${column} = ${param} OR ${column} = '${SHARED_COMPANY_ODOO_ID}')`;
+}
+
 export type FormsCompany = {
   id: string;
   name: string;
