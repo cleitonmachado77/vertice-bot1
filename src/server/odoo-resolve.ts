@@ -1,4 +1,4 @@
-import { odooSearchRead } from './odoo-client.js';
+import { odooCreate, odooSearchRead } from './odoo-client.js';
 import { odooLookupNames } from './odoo-pt.js';
 
 function cleanName(value: string): string {
@@ -185,6 +185,87 @@ export async function findIncomingPickingTypeId(companyId: number): Promise<numb
     { limit: 1 },
   );
   return types[0]?.id || 0;
+}
+
+/**
+ * Garante um tipo de recebimento para a empresa: usa o existente ou cria um
+ * stock.warehouse padrão no Odoo (fonte da verdade de inventário).
+ */
+export async function ensureIncomingPickingTypeId(companyId: number): Promise<number> {
+  const existing = await findIncomingPickingTypeId(companyId);
+  if (existing > 0) return existing;
+  if (!companyId || companyId <= 0) return 0;
+
+  const companies = await odooSearchRead<{ id: number; name: string }>(
+    'res.company',
+    [['id', '=', companyId]],
+    ['id', 'name'],
+    { limit: 1 },
+  );
+  const companyName = String(companies[0]?.name || `Empresa ${companyId}`).trim();
+  const codeBase = `C${companyId}`.slice(0, 5);
+  const codes = [codeBase, `W${companyId}`.slice(0, 5), `E${companyId}`.slice(0, 5)];
+
+  let lastError = '';
+  for (const code of codes) {
+    try {
+      const whId = await odooCreate(
+        'stock.warehouse',
+        {
+          name: (companyName || `Depósito ${companyId}`).slice(0, 80),
+          code,
+          company_id: companyId,
+        },
+        {
+          context: {
+            allowed_company_ids: [companyId],
+            force_company: companyId,
+          },
+        },
+      );
+      const created = await odooSearchRead<{ id: number; in_type_id: unknown }>(
+        'stock.warehouse',
+        [['id', '=', whId]],
+        ['id', 'in_type_id'],
+        { limit: 1 },
+      );
+      const typeId = m2oIdNum(created[0]?.in_type_id);
+      if (typeId > 0) return typeId;
+      const again = await findIncomingPickingTypeId(companyId);
+      if (again > 0) return again;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      // Código duplicado ou warehouse já existe — tenta achar de novo.
+      const again = await findIncomingPickingTypeId(companyId);
+      if (again > 0) return again;
+    }
+  }
+  if (lastError) {
+    throw new Error(
+      `Empresa Odoo ${companyId} sem depósito/tipo de recebimento e falha ao criar warehouse: ${lastError}`,
+    );
+  }
+  return 0;
+}
+
+/** Empresas Odoo sem warehouse com recebimento — para aviso em Configurações. */
+export async function listCompaniesWithoutIncomingWarehouse(): Promise<
+  Array<{ id: number; name: string }>
+> {
+  const companies = await odooSearchRead<{ id: number; name: string }>(
+    'res.company',
+    [],
+    ['id', 'name'],
+    { limit: 50, order: 'id asc' },
+  );
+  const missing: Array<{ id: number; name: string }> = [];
+  for (const company of companies) {
+    const typeId = await findIncomingPickingTypeId(company.id);
+    if (typeId <= 0) {
+      missing.push({ id: company.id, name: String(company.name || company.id) });
+    }
+  }
+  return missing;
 }
 
 export async function namesByIds(

@@ -139,8 +139,14 @@ export async function odooSearchRead<T extends Record<string, unknown>>(
   return Array.isArray(rows) ? rows : [];
 }
 
-export async function odooCreate(model: string, values: Record<string, unknown>): Promise<number> {
-  const id = await odooExecuteKw<number>(model, 'create', [values]);
+export async function odooCreate(
+  model: string,
+  values: Record<string, unknown>,
+  extras: { context?: Record<string, unknown> } = {},
+): Promise<number> {
+  const kwargs: Record<string, unknown> = {};
+  if (extras.context) kwargs.context = extras.context;
+  const id = await odooExecuteKw<number>(model, 'create', [values], kwargs);
   if (typeof id !== 'number') throw new OdooError(`create(${model}) não retornou id`);
   return id;
 }

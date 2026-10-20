@@ -44,6 +44,9 @@ export async function renderWebSettings(root, me = null, tab = 'usuarios') {
     ? new Date(status.lastPullAt).toLocaleString('pt-BR')
     : 'ainda não';
   const pull = status.lastPull || {};
+  const warehouseWarn = Array.isArray(status.companiesWithoutWarehouse)
+    ? status.companiesWithoutWarehouse
+    : [];
   const canEditOdoo = data.canEditOdoo !== false && isAdm;
 
   root.innerHTML = `
@@ -62,7 +65,7 @@ export async function renderWebSettings(root, me = null, tab = 'usuarios') {
       </nav>
 
       <div class="web-settings-panel" id="web-settings-panel">
-        ${renderPanel({ active, isAdm, user, usersPack, data, lastPull, pull, canEditOdoo })}
+        ${renderPanel({ active, isAdm, user, usersPack, data, lastPull, pull, warehouseWarn, canEditOdoo })}
       </div>
     </div>`;
 
@@ -76,11 +79,13 @@ export async function renderWebSettings(root, me = null, tab = 'usuarios') {
   if (active === 'odoo' && canEditOdoo) bindOdooForm();
 }
 
-function renderPanel({ active, isAdm, user, usersPack, data, lastPull, pull, canEditOdoo }) {
+function renderPanel({ active, isAdm, user, usersPack, data, lastPull, pull, warehouseWarn, canEditOdoo }) {
   if (active === 'usuarios' && isAdm) {
     return `${renderAccountCard(user, true)}${renderUsersSection(usersPack)}`;
   }
-  if (active === 'sincronizacao' && canEditOdoo) return renderSyncSection(lastPull, pull);
+  if (active === 'sincronizacao' && canEditOdoo) {
+    return renderSyncSection(lastPull, pull, warehouseWarn || []);
+  }
   if (active === 'odoo' && canEditOdoo) return renderOdooSection(data);
   return renderAccountCard(user, false);
 }
@@ -115,7 +120,15 @@ function renderAccountCard(user, compact) {
     </section>`;
 }
 
-function renderSyncSection(lastPull, pull) {
+function renderSyncSection(lastPull, pull, warehouseWarn = []) {
+  const warnHtml =
+    warehouseWarn.length > 0
+      ? `<p class="forms-sync-notice is-error" role="status">
+          Empresas sem depósito de recebimento no Odoo:
+          ${escapeHtml(warehouseWarn.map((c) => c.name || `#${c.id}`).join('; '))}.
+          Use “Sincronizar empresas” para criar o warehouse padrão automaticamente.
+        </p>`
+      : '';
   return `
     <section class="card stack web-odoo-card">
       <div class="card-head">
@@ -129,6 +142,7 @@ function renderSyncSection(lastPull, pull) {
         · ${pull.sales || 0} vendas
         · ${pull.purchases || 0} compras
       </p>
+      ${warnHtml}
       <pre id="odoo-sync-log" class="odoo-sync-log" hidden aria-live="polite"></pre>
       <div class="row">
         <button class="btn" id="odoo-pull" type="button">Receber dados</button>

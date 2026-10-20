@@ -1,5 +1,9 @@
 import { getSetting, many, one, run, setSetting } from './db.js';
 import { odooSearchRead } from './odoo-client.js';
+import {
+  ensureIncomingPickingTypeId,
+  listCompaniesWithoutIncomingWarehouse,
+} from './odoo-resolve.js';
 
 /** Empresa padrão (Reciclarenda) para registros sem company_id no Odoo. */
 export const DEFAULT_COMPANY_ODOO_ID = '1';
@@ -182,5 +186,33 @@ export async function syncCompaniesFromOdoo(): Promise<FormsCompany[]> {
     await setSetting('odoo_active_company_id', DEFAULT_COMPANY_ODOO_ID);
   }
 
+  // Garante depósito/recebimento no Odoo para cada empresa (necessário em compras).
+  for (const row of rows) {
+    try {
+      await ensureIncomingPickingTypeId(row.id);
+    } catch (error) {
+      console.warn(
+        `odoo-companies: warehouse empresa ${row.id}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+  try {
+    const missing = await listCompaniesWithoutIncomingWarehouse();
+    await setSetting('odoo_companies_without_warehouse', JSON.stringify(missing));
+  } catch {
+    await setSetting('odoo_companies_without_warehouse', '[]');
+  }
+
   return listCompanies();
+}
+
+export function companiesWithoutWarehouseFromCache(): Array<{ id: number; name: string }> {
+  try {
+    const raw = getSetting('odoo_companies_without_warehouse') || '[]';
+    const parsed = JSON.parse(raw) as Array<{ id: number; name: string }>;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }

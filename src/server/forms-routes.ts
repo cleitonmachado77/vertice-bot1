@@ -43,6 +43,7 @@ import {
 } from './forms-presets.js';
 import {
   companiesPayload,
+  companiesWithoutWarehouseFromCache,
   setActiveCompanyId,
   syncCompaniesFromOdoo,
 } from './forms-companies.js';
@@ -200,6 +201,16 @@ export function registerFormsRoutes(): void {
           version: '',
           cached: true,
         };
+    let companiesWithoutWarehouse = companiesWithoutWarehouseFromCache();
+    if (live && status.configured) {
+      try {
+        const { listCompaniesWithoutIncomingWarehouse } = await import('./odoo-resolve.js');
+        companiesWithoutWarehouse = await listCompaniesWithoutIncomingWarehouse();
+        await setSetting('odoo_companies_without_warehouse', JSON.stringify(companiesWithoutWarehouse));
+      } catch {
+        /* mantém cache */
+      }
+    }
     json(ctx.res, 200, {
       ...status,
       lastPullAt: getSetting('odoo_last_pull_at') || '',
@@ -211,6 +222,7 @@ export function registerFormsRoutes(): void {
         purchases: Number(getSetting('odoo_last_pull_purchases') || 0),
         stockUpdated: Number(getSetting('odoo_last_pull_stock') || 0),
       },
+      companiesWithoutWarehouse,
     });
   });
 

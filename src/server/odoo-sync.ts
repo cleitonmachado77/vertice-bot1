@@ -9,7 +9,7 @@ import { documentTitle, shouldAutofillFormTitle } from './forms-fields.js';
 import { odooCreate, odooExecuteKw, odooSearchRead, odooWrite } from './odoo-client.js';
 import {
   findCategoryId,
-  findIncomingPickingTypeId,
+  ensureIncomingPickingTypeId,
   findPaymentTermId,
   findSaleTagIds,
   findSalesTeamId,
@@ -412,10 +412,10 @@ export async function pushPurchaseToOdoo(doc: FormDocument): Promise<FormDocumen
   const companyId = docCompanyId(doc);
   const partnerId = await findPartnerId(doc.header.vendor || '', 'vendor');
   const lines = await buildPurchaseLines(doc, companyId);
-  const pickingTypeId = await findIncomingPickingTypeId(companyId);
+  const pickingTypeId = await ensureIncomingPickingTypeId(companyId);
   if (pickingTypeId <= 0) {
     throw new Error(
-      `Empresa Odoo ${companyId} sem depósito/tipo de recebimento (picking_type_id). Configure um warehouse no Odoo ou troque a empresa ativa.`,
+      `Empresa Odoo ${companyId} sem depósito/tipo de recebimento (picking_type_id). Não foi possível criar um warehouse automático — configure um depósito no Odoo.`,
     );
   }
 
