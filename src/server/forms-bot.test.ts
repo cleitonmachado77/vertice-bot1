@@ -38,10 +38,11 @@ test('buildFormsBotQuestions gera header e bloco de linhas', () => {
       },
     }),
   );
-  assert.equal(built.questions.length, 3);
+  assert.equal(built.questions.length, 4);
   assert.equal(built.questions[0].exportField, 'vendor');
   assert.equal(built.questions[1].exportField, 'order_deadline');
   assert.equal(built.questions[2].exportField, FORMS_BOT_LINES_FIELD);
+  assert.equal(built.questions[3].exportField, '__lines_more__');
 });
 
 test('buildFormsBotQuestions pula campos com valor padrão', () => {
@@ -80,7 +81,21 @@ test('buildFormsBotQuestions pergunta linhas quando quantidade visível está va
   );
   assert.deepEqual(
     built.questions.map((item) => item.exportField),
-    ['vendor', FORMS_BOT_LINES_FIELD],
+    ['vendor', FORMS_BOT_LINES_FIELD, '__lines_more__'],
   );
-  assert.match(built.questions[1].body, /Quantidade de ABACATE/i);
+  assert.match(built.questions[1].body, /Qtd de ABACATE/i);
+  assert.equal(built.questions[1].fixedValue, 'ABACATE - KG');
+  assert.match(built.questions[2].body, /Mais produtos/i);
+});
+
+test('produto visível no padrão não fica fixo na pergunta de linhas', () => {
+  const built = buildFormsBotQuestions(
+    preset({
+      kind: 'purchase',
+      lines: [{ values: { product: 'ABACATE - KG', quantity: '' } }],
+      visible: { title: false, status: false, header: [], lines: ['product', 'quantity'] },
+    }),
+  );
+  assert.equal(built.questions[0].exportField, FORMS_BOT_LINES_FIELD);
+  assert.equal(built.questions[0].fixedValue, '');
 });

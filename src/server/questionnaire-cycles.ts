@@ -7,6 +7,7 @@ import {
   type Questionnaire,
   type QuestionnaireQuestion,
 } from './questionnaires.js';
+import { isUsableAnswerForQuestion } from './questionnaire-rules.js';
 
 const now = () => new Date().toISOString();
 
@@ -32,7 +33,14 @@ export type QuestionnaireCycle = {
   updated_at?: string;
   last_prompted_at?: string;
   last_inbound_at?: string;
+  pending_question_id?: string;
+  pending_question_set_by?: string;
+  superseded_at?: string;
 };
+
+const CYCLE_COLS = `id, questionnaire_id, contact_id, revision_id, occurrence_date, status,
+            template_sent_at, completed_at, error, updated_at, last_prompted_at, last_inbound_at,
+            pending_question_id, pending_question_set_by, superseded_at`;
 
 export type CycleAnswer = {
   id: string;
@@ -85,12 +93,11 @@ export function toCycleContext(
   questionnaire: Questionnaire,
   answers: CycleAnswer[],
 ): ActiveCycleContext {
-  const answered = new Set(answers.map((row) => row.question_id));
   return {
     cycle,
     questionnaire,
     answers,
-    missing: questionnaire.questions.filter((question) => !answered.has(question.id)),
+    missing: missingQuestions(questionnaire.questions, answers),
   };
 }
 
@@ -172,10 +179,12 @@ export async function listCompletedCycleContexts(
   const cycles = await many<QuestionnaireCycle>(
     `SELECT cyc.id, cyc.questionnaire_id, cyc.contact_id, cyc.revision_id,
             cyc.occurrence_date, cyc.status, cyc.template_sent_at, cyc.completed_at,
-            cyc.error, cyc.updated_at, cyc.last_prompted_at, cyc.last_inbound_at
+            cyc.error, cyc.updated_at, cyc.last_prompted_at, cyc.last_inbound_at,
+            cyc.pending_question_id, cyc.pending_question_set_by, cyc.superseded_at
      FROM questionnaire_cycles cyc
      WHERE cyc.contact_id = $1
        AND cyc.status = 'completed'
+       AND cyc.superseded_at = ''
        AND cyc.occurrence_date = ANY($2::text[])
      ORDER BY cyc.occurrence_date DESC, cyc.updated_at DESC NULLS LAST`,
     [contactId, dates],
@@ -197,10 +206,12 @@ export async function listPendingCycleContextsNearDate(
   const cycles = await many<QuestionnaireCycle>(
     `SELECT cyc.id, cyc.questionnaire_id, cyc.contact_id, cyc.revision_id,
             cyc.occurrence_date, cyc.status, cyc.template_sent_at, cyc.completed_at,
-            cyc.error, cyc.updated_at, cyc.last_prompted_at, cyc.last_inbound_at
+            cyc.error, cyc.updated_at, cyc.last_prompted_at, cyc.last_inbound_at,
+            cyc.pending_question_id, cyc.pending_question_set_by, cyc.superseded_at
      FROM questionnaire_cycles cyc
      WHERE cyc.contact_id = $1
        AND cyc.occurrence_date = ANY($2::text[])
+       AND cyc.superseded_at = ''
        AND cyc.status IN ('open', 'notified', 'in_progress', 'sending', 'failed')
      ORDER BY cyc.occurrence_date DESC, cyc.last_prompted_at DESC NULLS LAST`,
     [contactId, dates],
@@ -212,8 +223,7 @@ export async function listPendingCycleContextsNearDate(
 export async function getCycleContextsByIds(ids: string[]): Promise<ActiveCycleContext[]> {
   if (!ids.length) return [];
   const cycles = await many<QuestionnaireCycle>(
-    `SELECT id, questionnaire_id, contact_id, revision_id, occurrence_date, status,
-            template_sent_at, completed_at, error, updated_at, last_prompted_at, last_inbound_at
+    `SELECT ${CYCLE_COLS}
      FROM questionnaire_cycles WHERE id = ANY($1::text[])`,
     [ids],
   );
@@ -294,10 +304,10 @@ export async function getOrCreateCycle(
   date: string,
 ): Promise<QuestionnaireCycle> {
   const existing = await one<QuestionnaireCycle>(
-    `SELECT id, questionnaire_id, contact_id, revision_id, occurrence_date, status,
-            template_sent_at, completed_at, error, updated_at, last_prompted_at, last_inbound_at
+    `SELECT ${CYCLE_COLS}
      FROM questionnaire_cycles
-     WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3`,
+     WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3
+       AND superseded_at = ''`,
     [questionnaireId, contactId, date],
   );
   if (existing) return existing;
@@ -314,22 +324,103 @@ export async function getOrCreateCycle(
     await run(
       `INSERT INTO questionnaire_cycles(
          id, questionnaire_id, contact_id, revision_id, occurrence_date, status,
-         template_sent_at, completed_at, error, created_at, updated_at, last_prompted_at, last_inbound_at
-       ) VALUES($1, $2, $3, $4, $5, 'open', '', '', '', $6, $6, '', '')`,
+         template_sent_at, completed_at, error, created_at, updated_at, last_prompted_at, last_inbound_at,
+         pending_question_id, superseded_at
+       ) VALUES($1, $2, $3, $4, $5, 'open', '', '', '', $6, $6, '', '', '', '')`,
       [id, questionnaireId, contactId, revision.id, date, stamp],
     );
   } catch {
     // Concorrência: outro processo criou o ciclo do dia.
   }
   const created = await one<QuestionnaireCycle>(
-    `SELECT id, questionnaire_id, contact_id, revision_id, occurrence_date, status,
-            template_sent_at, completed_at, error, updated_at, last_prompted_at, last_inbound_at
+    `SELECT ${CYCLE_COLS}
      FROM questionnaire_cycles
-     WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3`,
+     WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3
+       AND superseded_at = ''`,
     [questionnaireId, contactId, date],
   );
   if (!created) throw new Error('Falha ao abrir ciclo do questionário');
   return created;
+}
+
+/** Encerra o ciclo vivo do dia e abre outro (reenvio manual). O histórico antigo permanece. */
+export async function openFreshCycle(
+  questionnaireId: string,
+  contactId: string,
+  date: string,
+): Promise<QuestionnaireCycle> {
+  const stamp = now();
+  await run(
+    `UPDATE questionnaire_cycles
+     SET superseded_at = $4, updated_at = $4
+     WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3
+       AND superseded_at = ''`,
+    [questionnaireId, contactId, date, stamp],
+  );
+  const revision = await one<{ id: string }>(
+    `SELECT id FROM questionnaire_revisions
+     WHERE questionnaire_id = $1 ORDER BY version DESC LIMIT 1`,
+    [questionnaireId],
+  );
+  if (!revision) throw new Error('Questionário sem versão disponível');
+  const id = randomUUID();
+  try {
+    await run(
+      `INSERT INTO questionnaire_cycles(
+         id, questionnaire_id, contact_id, revision_id, occurrence_date, status,
+         template_sent_at, completed_at, error, created_at, updated_at, last_prompted_at, last_inbound_at,
+         pending_question_id, superseded_at
+       ) VALUES($1, $2, $3, $4, $5, 'open', '', '', '', $6, $6, '', '', '', '')`,
+      [id, questionnaireId, contactId, revision.id, date, stamp],
+    );
+  } catch {
+    /* índice único: outro worker abriu o ciclo vivo */
+  }
+  const created = await one<QuestionnaireCycle>(
+    `SELECT ${CYCLE_COLS}
+     FROM questionnaire_cycles
+     WHERE questionnaire_id = $1 AND contact_id = $2 AND occurrence_date = $3
+       AND superseded_at = ''`,
+    [questionnaireId, contactId, date],
+  );
+  if (!created) throw new Error('Falha ao abrir ciclo novo do questionário');
+  return created;
+}
+
+/** Grava a pergunta que o bot acabou de fazer; `setBy` identifica o ponto do fluxo (diagnóstico). */
+export async function rememberCyclePrompt(
+  cycleId: string,
+  questionId = '',
+  setBy = '',
+): Promise<void> {
+  if (!cycleId) return;
+  const next = String(questionId || '').trim();
+  const previous = await one<{ pending_question_id: string }>(
+    `SELECT pending_question_id FROM questionnaire_cycles WHERE id = $1`,
+    [cycleId],
+  );
+  await run(
+    `UPDATE questionnaire_cycles
+     SET pending_question_id = $2, pending_question_set_by = $3, updated_at = $4
+     WHERE id = $1`,
+    [cycleId, next, setBy, now()],
+  );
+  if (previous && previous.pending_question_id !== next) {
+    console.log(
+      `questionário: ciclo ${cycleId.slice(0, 8)} pendente ${previous.pending_question_id.slice(0, 8) || '—'} → ${next.slice(0, 8) || '—'} (${setBy || 'sem origem'})`,
+    );
+  }
+}
+
+export async function readCyclePrompt(
+  cycleId: string,
+): Promise<{ questionId: string; setBy: string } | null> {
+  if (!cycleId) return null;
+  const row = await one<{ pending_question_id: string; pending_question_set_by: string }>(
+    `SELECT pending_question_id, pending_question_set_by FROM questionnaire_cycles WHERE id = $1`,
+    [cycleId],
+  );
+  return row ? { questionId: row.pending_question_id, setBy: row.pending_question_set_by } : null;
 }
 
 /** Libera ciclos travados em "sending" após queda do processo. */
@@ -375,8 +466,7 @@ export async function claimCycleForSend(
          status IN ('open', 'failed')
          OR (status = 'in_progress' AND COALESCE(template_sent_at, '') = '')
        )
-     RETURNING id, questionnaire_id, contact_id, revision_id, occurrence_date, status,
-               template_sent_at, completed_at, error, updated_at, last_prompted_at, last_inbound_at`,
+     RETURNING ${CYCLE_COLS}`,
     [stamp, cycle.id],
   );
 }
@@ -426,7 +516,7 @@ export async function markCycleCompleted(cycleId: string): Promise<void> {
   const stamp = now();
   await run(
     `UPDATE questionnaire_cycles
-     SET status = 'completed', completed_at = $1, error = '', updated_at = $1
+     SET status = 'completed', completed_at = $1, error = '', pending_question_id = '', updated_at = $1
      WHERE id = $2`,
     [stamp, cycleId],
   );
@@ -504,8 +594,8 @@ export function missingQuestions(
   questions: QuestionnaireQuestion[],
   answers: CycleAnswer[],
 ): QuestionnaireQuestion[] {
-  const answered = new Set(answers.map((item) => item.question_id));
-  return questions.filter((item) => !answered.has(item.id));
+  const byQuestion = new Map(answers.map((item) => [item.question_id, item.answer_text]));
+  return questions.filter((item) => !isUsableAnswerForQuestion(item, byQuestion.get(item.id) || ''));
 }
 
 export async function listCollectedData(questionnaireId = ''): Promise<CollectedRow[]> {
@@ -528,7 +618,7 @@ export async function listCollectedData(questionnaireId = ''): Promise<Collected
      JOIN contacts ct ON ct.id = cyc.contact_id
      JOIN questionnaire_revision_questions qq ON qq.revision_id = rev.id
      LEFT JOIN questionnaire_answers ans ON ans.cycle_id = cyc.id AND ans.question_id = qq.question_id
-     WHERE ct.hidden = 0
+     WHERE ct.hidden = 0 AND cyc.superseded_at = ''
        ${filter}
      ORDER BY cyc.occurrence_date DESC, rev.name, ct.name, qq.sort_order`,
     params,

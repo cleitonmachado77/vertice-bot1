@@ -1,4 +1,4 @@
-import { getSetting, many, one, run, setSetting } from './db.js';
+import { getSetting, many, one, run } from './db.js';
 import { zonedNow } from './clock.js';
 import {
   createFormDocument,
@@ -8,8 +8,11 @@ import {
 import { resolveCatalogValue } from './forms-bot-match.js';
 import {
   FORMS_BOT_LINES_FIELD,
+  FORMS_BOT_LINES_MORE_FIELD,
   formsBotQuestionnaireId,
+  quantityOnlyLinesQuestion,
 } from './forms-bot-fields.js';
+import { planBotLines } from './forms-bot-lines.js';
 import {
   KIND_LABELS,
   documentTitle,
@@ -19,6 +22,7 @@ import {
   type FormField,
   type FormKind,
 } from './forms-fields.js';
+import { isUnusableQuestionnaireAnswer } from './questionnaire-rules.js';
 import {
   getFormPreset,
   getFormPresetById,
@@ -39,11 +43,10 @@ import {
   type Questionnaire,
 } from './questionnaires.js';
 import {
-  deleteCycleAnswers,
-  getOrCreateCycle,
   listCycleAnswers,
   markCycleNotified,
-  reopenCycle,
+  openFreshCycle,
+  rememberCyclePrompt,
   type CycleAnswer,
 } from './questionnaire-cycles.js';
 import { getContact } from './store.js';
@@ -57,7 +60,7 @@ function questionBodyFor(field: FormField): string {
     return `${field.label}? (${field.options.map((item) => item.label).join(' / ')})`;
   }
   if (field.catalog || field.key === 'vendor' || field.key === 'customer' || field.key === 'product') {
-    return `${field.label}? (nome ou escolha da lista se pedirmos)`;
+    return `${field.label}?`;
   }
   return `${field.label}?`;
 }
@@ -73,12 +76,12 @@ function linesQuestionBody(
   const hint = labels.length ? labels.join(', ') : 'produto, quantidade, preço';
   const productDefault = String(templateLines[0]?.values?.product || '').trim();
   if (visibleLineKeys.length === 1 && visibleLineKeys[0] === 'quantity' && productDefault) {
-    return `Quantidade de ${productDefault}? Pode enviar várias (uma por linha) se houver mais itens.`;
+    return quantityOnlyLinesQuestion(productDefault);
   }
   if (productDefault && visibleLineKeys.includes('quantity')) {
-    return `Informe ${hint} (produto padrão: ${productDefault}). Pode enviar vários itens, um por linha.`;
+    return `${hint}? (padrão: ${productDefault})`;
   }
-  return `Liste os itens (${hint}). Pode enviar vários de uma vez, um por linha.`;
+  return `${hint}?`;
 }
 
 /** Pergunta linhas se algum campo visível ainda precisa do usuário. */
@@ -94,13 +97,13 @@ function needsLinesQuestion(
 }
 
 export function buildFormsBotQuestions(preset: FormPreset): {
-  questions: { id?: string; body: string; expectedType: string; exportField: string }[];
+  questions: { id?: string; body: string; expectedType: string; exportField: string; fixedValue?: string }[];
   defaultValues: Record<string, string>;
 } {
   const visibleHeader = new Set(preset.visible.header || []);
   const visibleLines = new Set(preset.visible.lines || []);
   const defaultValues: Record<string, string> = {};
-  const questions: { id?: string; body: string; expectedType: string; exportField: string }[] = [];
+  const questions: { id?: string; body: string; expectedType: string; exportField: string; fixedValue?: string }[] = [];
 
   for (const field of headerFieldsFor(preset.kind)) {
     if (field.readonly) continue;
@@ -121,10 +124,18 @@ export function buildFormsBotQuestions(preset: FormPreset): {
     const visibleKeys = [...visibleLines];
     const templateLines = preset.lines || [];
     if (needsLinesQuestion(visibleKeys, templateLines)) {
+      // Produto do padrão sem “Produto” visível: o usuário só informa quantidade/preço.
+      const productDefault = String(templateLines[0]?.values?.product || '').trim();
       questions.push({
         body: linesQuestionBody(preset.kind, visibleKeys, templateLines),
         expectedType: 'any',
         exportField: FORMS_BOT_LINES_FIELD,
+        fixedValue: visibleLines.has('product') ? '' : productDefault,
+      });
+      questions.push({
+        body: 'Mais produtos? (produto + qtd, ou “não”)',
+        expectedType: 'any',
+        exportField: FORMS_BOT_LINES_MORE_FIELD,
       });
     }
   }
@@ -176,8 +187,7 @@ export async function syncFormsBotQuestionnaire(preset: FormPreset): Promise<Que
   const contactIds = [recipient.id];
 
   const kindLabel = KIND_LABELS[preset.kind];
-  const greeting =
-    `Oi {{1}}! Aqui é o Vertice Bot. Vamos preencher ${kindLabel} pelo padrão "${preset.name}".`;
+  const greeting = `Oi {{1}}! ${kindLabel} — ${preset.name}`;
 
   const existing = await getQuestionnaire(questionnaireId, true);
   const saved = await upsertQuestionnaire({
@@ -321,54 +331,6 @@ export async function listFormsBotPresetActivity(presetId: string): Promise<Form
   };
 }
 
-function parseLinesAnswer(raw: string, kind: FormKind, visibleKeys: string[]): Array<Record<string, string>> {
-  const text = String(raw || '').trim();
-  if (!text) return [];
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => {
-        const values: Record<string, string> = {};
-        const src = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-        for (const key of visibleKeys) {
-          values[key] = src[key] == null ? '' : String(src[key]);
-        }
-        return values;
-      }).filter((row) => Object.values(row).some((value) => value.trim()));
-    }
-  } catch {
-    /* texto livre */
-  }
-
-  const lineFields = lineFieldsFor(kind).filter((field) => visibleKeys.includes(field.key));
-  const rows = text
-    .split(/\n+/)
-    .map((line) => line.replace(/^\s*[-*]?\s*\d+[).:-]\s*/, '').trim())
-    .filter(Boolean);
-
-  return rows.map((line) => {
-    const parts = line.split(/[;|,]/).map((part) => part.trim()).filter(Boolean);
-    const values: Record<string, string> = {};
-    for (const field of lineFields) values[field.key] = '';
-    if (parts.length === 1 && lineFields[0]) {
-      values[lineFields[0].key] = parts[0];
-      return values;
-    }
-    for (let index = 0; index < lineFields.length; index += 1) {
-      values[lineFields[index].key] = parts[index] || '';
-    }
-    // Heurística: se 2ª parte parece preço e quantity vazia, realinha
-    if (lineFields.some((field) => field.key === 'quantity') && lineFields.some((field) => field.key === 'unit_price')) {
-      const qty = values.quantity || '';
-      const price = values.unit_price || '';
-      if (qty && !/\d/.test(qty) && price && /\d/.test(price) === false && parts[1] && /\d/.test(parts[1])) {
-        /* keep */
-      }
-    }
-    return values;
-  }).filter((row) => Object.values(row).some((value) => value.trim()));
-}
-
 async function resolveHeaderValues(input: {
   kind: FormKind;
   companyOdooId: string;
@@ -428,15 +390,15 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     return null;
   }
 
+  // Ciclo reaberto (“Enviar agora”) ou corrigido após concluir: atualiza o doc do ciclo
+  // em vez de descartar as novas respostas em silêncio.
   const existingDoc = await one<{ id: string }>(
     `SELECT id FROM forms_documents
      WHERE header_json LIKE $1
+     ORDER BY created_at DESC
      LIMIT 1`,
     [`%"source_cycle_id":"${cycleId}"%`],
   );
-  if (existingDoc) {
-    return null;
-  }
 
   const preset = await getFormPresetById(questionnaire.sourcePresetId);
   if (!preset) {
@@ -450,8 +412,9 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
   const answersByField: Record<string, string> = {};
   for (const question of questionnaire.questions) {
     const answer = answers.find((row) => row.question_id === question.id);
-    if (!answer?.answer_text.trim()) continue;
-    answersByField[question.export_field || ''] = answer.answer_text.trim();
+    const text = String(answer?.answer_text || '').trim();
+    if (!text || isUnusableQuestionnaireAnswer(text)) continue;
+    answersByField[question.export_field || ''] = text;
   }
 
   const defaults = { ...(questionnaire.defaultValues || {}) };
@@ -465,6 +428,15 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     defaults,
     answersByField,
   });
+  // Não cria Forms com fornecedor/cliente inválido (saudação, pedido de lista, etc.).
+  if (kind === 'purchase' && isUnusableQuestionnaireAnswer(header.vendor || '')) {
+    console.warn(`forms-bot: ciclo ${cycleId} sem fornecedor válido — não materializa`);
+    return null;
+  }
+  if (kind === 'sale' && isUnusableQuestionnaireAnswer(header.customer || '')) {
+    console.warn(`forms-bot: ciclo ${cycleId} sem cliente válido — não materializa`);
+    return null;
+  }
   header.source = 'bot';
   header.source_cycle_id = cycleId;
   header.source_preset_id = questionnaire.sourcePresetId;
@@ -473,54 +445,40 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     ? preset.visible.lines
     : lineFieldsFor(kind).map((field) => field.key);
 
-  let lines: Array<{ values: Record<string, string> }> = [];
-  if (lineFieldsFor(kind).length) {
-    if (answersByField[FORMS_BOT_LINES_FIELD]) {
-      const parsed = parseLinesAnswer(
-        answersByField[FORMS_BOT_LINES_FIELD],
-        kind,
-        visibleLineKeys,
-      );
-      const baseLines = preset.lines?.length ? preset.lines : [{ values: {} as Record<string, string> }];
-      const merged = parsed.map((row, index) => {
-        const base = { ...(baseLines[Math.min(index, baseLines.length - 1)]?.values || {}) };
-        return { ...base, ...row };
-      });
-      lines = await resolveLineValues({
-        kind,
-        companyOdooId,
-        lines: merged,
-        visibleKeys: [
-          ...new Set([
-            ...visibleLineKeys,
-            ...Object.keys(baseLines[0]?.values || {}),
-          ]),
-        ],
-      });
-    } else if (preset.lines?.length) {
-      lines = preset.lines.map((line) => ({ values: { ...line.values } }));
-    }
+  const plan = planBotLines({
+    kind,
+    presetLines: preset.lines || [],
+    visibleLineKeys,
+    linesAnswer: answersByField[FORMS_BOT_LINES_FIELD] || '',
+    moreAnswer: answersByField[FORMS_BOT_LINES_MORE_FIELD] || '',
+  });
+  let lines = plan.resolvePrimary
+    ? await resolveLineValues({ kind, companyOdooId, lines: plan.primary, visibleKeys: plan.primaryKeys })
+    : plan.primary.map((values) => ({ values }));
+  if (plan.extra.length) {
+    const extra = await resolveLineValues({
+      kind,
+      companyOdooId,
+      lines: plan.extra,
+      visibleKeys: plan.extraKeys,
+    });
+    lines = [...lines, ...extra];
   }
 
   const title = (preset.title || '').trim() || documentTitle(kind, header);
-  const previousCompany = getSetting('odoo_active_company_id');
-  try {
-    if (companyOdooId) await setSetting('odoo_active_company_id', companyOdooId);
-    const doc = await createFormDocument(kind, { companyOdooId });
-    const saved = await saveFormDocument(doc.id, {
-      title,
-      status: preset.status || 'draft',
-      header,
-      lines: kind === 'product' ? undefined : lines.length ? lines : [{ values: {} }],
-    });
-    await markDocSyncPending(saved.id);
-    scheduleOdooPush(saved.id);
-    return saved;
-  } finally {
-    if (previousCompany != null && previousCompany !== '') {
-      await setSetting('odoo_active_company_id', previousCompany);
-    }
-  }
+  // A empresa viaja com o documento (company_odoo_id) — saveFormDocument/syncSharedCatalog
+  // usam a do próprio doc, sem tocar na empresa “ativa” do painel.
+  const docId = existingDoc?.id || (await createFormDocument(kind, { companyOdooId })).id;
+  const saved = await saveFormDocument(docId, {
+    title,
+    status: existingDoc ? undefined : preset.status || 'draft',
+    header,
+    lines: kind === 'product' ? undefined : lines.length ? lines : [{ values: {} }],
+  });
+  await markDocSyncPending(saved.id);
+  scheduleOdooPush(saved.id);
+  if (existingDoc) console.log(`forms-bot: doc ${saved.id} atualizado a partir do ciclo ${cycleId}`);
+  return saved;
 }
 
 export async function sendFormsBotPresetNow(input: {
@@ -545,12 +503,22 @@ export async function sendFormsBotPresetNow(input: {
   );
 
   const clock = zonedNow();
-  let cycle = await getOrCreateCycle(questionnaire.id, contactId, clock.date);
-  if (cycle.status === 'completed') {
-    await reopenCycle(cycle.id);
-    await deleteCycleAnswers(cycle.id);
-    cycle = (await getOrCreateCycle(questionnaire.id, contactId, clock.date))!;
+  // Reenvio manual abre ciclo novo: o anterior fica no histórico (superseded_at).
+  const cycle = await openFreshCycle(questionnaire.id, contactId, clock.date);
+  try {
+    const { unskipFormsBotQuestionnaire } = await import('./forms-bot-agenda.js');
+    await unskipFormsBotQuestionnaire(contactId, clock.date, questionnaire.id);
+  } catch {
+    /* agenda opcional */
   }
+  await run(
+    `UPDATE conversation_questionnaire_context
+     SET active_cycle_id = $2, candidate_cycle_ids_json = '[]', awaiting_selection = 0, updated_at = $3
+     WHERE conversation_id IN (
+       SELECT id FROM conversations WHERE contact_id = $1
+     )`,
+    [contactId, cycle.id, new Date().toISOString()],
+  );
 
   const name = recipient.name || phone;
   const channelId = getSetting('nevoa_channel_id');
@@ -560,10 +528,8 @@ export async function sendFormsBotPresetNow(input: {
     .replace(/\{\{\s*1\s*\}\}/g, name)
     .replace(/\{\{nome\}\}/gi, name)
     .trim();
-  const lines = questionnaire.questions.map((question, index) => `${index + 1}) ${question.body.trim()}`);
-  const text = [greeting, '', ...lines, '', 'Pode responder por texto, áudio, imagem ou vídeo.']
-    .join('\n')
-    .trim();
+  const { buildFormsBotGuidedInvite } = await import('./forms-bot-catalog-context.js');
+  const text = await buildFormsBotGuidedInvite({ greeting, questionnaire });
 
   const windowOpen = await hasOpenCustomerWindow(contactId, phone);
   const alreadyStarted = (await listCycleAnswers(cycle.id)).length > 0;
@@ -620,6 +586,7 @@ export async function sendFormsBotPresetNow(input: {
     });
   }
   await markCycleNotified(cycle.id);
+  await rememberCyclePrompt(cycle.id, questionnaire.questions[0]?.id || '', 'envio manual');
 
   return {
     cycleId: cycle.id,

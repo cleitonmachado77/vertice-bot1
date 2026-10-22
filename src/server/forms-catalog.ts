@@ -6,6 +6,7 @@ import {
   sqlPartnerVisibleInCompany,
 } from './forms-companies.js';
 import { emptyHeader } from './forms-fields.js';
+import { partnerNameKey } from './forms-name-key.js';
 import { listOdooRefsGrouped, type OdooRefItem, type OdooRefType } from './forms-odoo-refs.js';
 import { odooLabelPt } from './odoo-pt.js';
 import type { FormDocument } from './forms.js';
@@ -194,11 +195,12 @@ async function backfillSharedCatalog(): Promise<void> {
 export async function upsertPartner(
   name: string,
   role: 'customer' | 'vendor',
+  companyOdooId = '',
 ): Promise<CatalogPartner | null> {
   const clean = name.trim();
   if (!clean) return null;
-  const key = nameKey(clean);
-  const companyId = getActiveCompanyId();
+  const key = partnerNameKey(clean);
+  const companyId = String(companyOdooId || '').trim() || getActiveCompanyId();
   const existing = await one<{
     id: string;
     name: string;
@@ -246,11 +248,12 @@ export async function upsertPartner(
 export async function ensureProductByName(
   name: string,
   hints: Partial<CatalogProduct> = {},
+  companyOdooId = '',
 ): Promise<CatalogProduct | null> {
   const clean = name.trim();
   if (!clean) return null;
   const key = nameKey(clean);
-  const companyId = getActiveCompanyId();
+  const companyId = String(companyOdooId || '').trim() || getActiveCompanyId();
   const existing = await one<{ id: string; header_json: string }>(
     `SELECT id, header_json FROM forms_documents
      WHERE kind = 'product'
@@ -302,26 +305,28 @@ export async function ensureProductByName(
 
 /** Propaga vínculos compartilhados após salvar um documento. */
 export async function syncSharedCatalog(doc: FormDocument): Promise<void> {
+  // Empresa do próprio documento — não a “ativa” do painel (o bot roda fora de requisição do painel).
+  const companyId = doc.company_odoo_id;
   if (doc.kind === 'sale') {
-    await upsertPartner(doc.header.customer || '', 'customer');
+    await upsertPartner(doc.header.customer || '', 'customer', companyId);
     for (const line of doc.lines) {
       const productName = line.values.product || '';
       if (!productName.trim()) continue;
-      await ensureProductByName(productName, {
-        sales_price: line.values.unit_price || '',
-      });
+      await ensureProductByName(
+        productName,
+        { sales_price: line.values.unit_price || '' },
+        companyId,
+      );
     }
     return;
   }
 
   if (doc.kind === 'purchase') {
-    await upsertPartner(doc.header.vendor || '', 'vendor');
+    await upsertPartner(doc.header.vendor || '', 'vendor', companyId);
     for (const line of doc.lines) {
       const productName = line.values.product || '';
       if (!productName.trim()) continue;
-      await ensureProductByName(productName, {
-        cost: line.values.unit_price || '',
-      });
+      await ensureProductByName(productName, { cost: line.values.unit_price || '' }, companyId);
     }
     return;
   }

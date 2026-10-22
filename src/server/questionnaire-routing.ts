@@ -1,4 +1,10 @@
 import { many, one } from './db.js';
+import { zonedNow } from './clock.js';
+import {
+  isFormsBotQuestionnaire,
+  listSkippedFormsBotQuestionnaireIds,
+  resolveFormsBotAgendaContext,
+} from './forms-bot-agenda.js';
 import { runsOnWeekday } from './plans.js';
 import {
   getOrCreateCycle,
@@ -104,6 +110,21 @@ export async function resolveActiveCycleForConversation(input: {
   if (candidates.length === 1) {
     await setConversationCycleContext(input.conversationId, candidates[0].cycle.id);
     return { context: candidates[0], ambiguous: [] };
+  }
+
+  const formsCandidates = candidates.filter((item) => isFormsBotQuestionnaire(item.questionnaire));
+  const otherCandidates = candidates.filter((item) => !isFormsBotQuestionnaire(item.questionnaire));
+  if (formsCandidates.length && !otherCandidates.length) {
+    const skipped = await listSkippedFormsBotQuestionnaireIds(input.contactId, input.date);
+    const agendaPick = resolveFormsBotAgendaContext(
+      formsCandidates,
+      skipped,
+      zonedNow().minutes,
+    );
+    if (agendaPick) {
+      await setConversationCycleContext(input.conversationId, agendaPick.cycle.id);
+      return { context: agendaPick, ambiguous: [] };
+    }
   }
 
   const prompted = candidates

@@ -12,6 +12,7 @@ import {
   markCycleFailed,
   missingQuestions,
   recoverStuckSendingCycles,
+  rememberCyclePrompt,
 } from './questionnaire-cycles.js';
 import {
   QUESTIONNAIRE_FIRST_CONTACT_PHRASE,
@@ -148,6 +149,11 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
             cycleId: cycle.id,
           },
         });
+        await rememberCyclePrompt(
+          cycle.id,
+          (alreadyStarted ? missing : questionnaire.questions)[0]?.id || '',
+          'disparo agendado: texto',
+        );
         result.sent += 1;
         result.items.push({
           phone: item.phone,
@@ -195,6 +201,7 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
           cycleId: cycle.id,
         },
       });
+      await rememberCyclePrompt(cycle.id, questionnaire.questions[0]?.id || '', 'disparo agendado: template');
       result.sent += 1;
       result.items.push({
         phone: item.phone,

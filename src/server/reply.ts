@@ -3,8 +3,10 @@ import { getSetting, one, withTransaction } from './db.js';
 import { zonedNow } from './clock.js';
 import {
   buildConversationContextPack,
+  pendingPreviousDaysNotice,
   type ConversationContextPack,
 } from './conversation-context.js';
+import { questionIdForCatalogList } from './forms-bot-capture.js';
 import { tryFormsCatalogListReply } from './forms-bot-catalog-context.js';
 import {
   draftQuestionnaireReply,
@@ -24,6 +26,8 @@ import {
 import {
   clearConversationCompletedEditContext,
   listCompletedCycleContexts,
+  readCyclePrompt,
+  rememberCyclePrompt,
   setConversationCycleCandidates,
   type ActiveCycleContext,
 } from './questionnaire-cycles.js';
@@ -32,6 +36,13 @@ import {
   resolveActiveCycleForConversation,
   type ActiveCycleResolution,
 } from './questionnaire-routing.js';
+import {
+  applyFormsBotAgendaIntent,
+  isFormsBotQuestionnaire,
+  looksLikeFormsBotAgendaMeta,
+  offerRemainingFormsBotAgenda,
+} from './forms-bot-agenda.js';
+import { isFormsCatalogListAsk } from './forms-bot-catalog-context.js';
 import { looksLikeHumanHandoff } from './human-handoff.js';
 import { enqueueOutbound } from './outbound-outbox.js';
 import {
@@ -161,9 +172,39 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
 
   let cycle: ActiveCycleContext | undefined;
   let draft: QuestionnaireDraft | Draft | null = null;
+  const awaitingFormsOffer = await isAwaitingQuestionnaireSelection(input.conversationId);
+
+  // Agenda Forms: oferta entre formulários / intenção explícita (pular, trocar, só X…).
+  // Pedido de lista de catálogo (“quais fornecedores?”) nunca entra na agenda.
+  if (
+    !multiDayIntent &&
+    !otherDayIntent &&
+    contactId &&
+    !isFormsCatalogListAsk(inboundText) &&
+    (awaitingFormsOffer || looksLikeFormsBotAgendaMeta(inboundText, { awaitingOffer: awaitingFormsOffer }))
+  ) {
+    const agendaResult = await applyFormsBotAgendaIntent({
+      contactId,
+      conversationId: input.conversationId,
+      date: clock.date,
+      weekday: clock.weekday,
+      nowMinutes: clock.minutes,
+      inbound: inboundText,
+      awaitingOffer: awaitingFormsOffer,
+    });
+    if (agendaResult.handled && agendaResult.text) {
+      draft = {
+        text: agendaResult.text,
+        source: 'fallback',
+        detail: agendaResult.detail || 'agenda Forms',
+        completed: Boolean(agendaResult.completed),
+      };
+      if (agendaResult.cycle) cycle = agendaResult.cycle;
+    }
+  }
 
   // Várias datas na mesma mensagem → um ciclo por data.
-  if (multiDayIntent && contactId) {
+  if (!draft && multiDayIntent && contactId) {
     draft = await draftMultiDayQuestionnaireReply({
       contactId,
       contactName,
@@ -178,8 +219,8 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   // Sempre carrega ciclos do dia alvo (inclui concluídos): o agente de questionário decide pelo contexto.
   const completed =
     !draft && contactId ? await listCompletedCycleContexts(contactId, [targetDate]) : [];
-  const explicitlyNamed = selectExplicitlyNamedCycle(completed, inboundText);
-  cycle = explicitlyNamed;
+  const explicitlyNamed = !draft ? selectExplicitlyNamedCycle(completed, inboundText) : undefined;
+  cycle = cycle || explicitlyNamed;
 
   // Passado/futuro explícito (ontem, amanhã, 15/10, sexta…): grava naquela data.
   if (!draft && !cycle && !resolution.ambiguous.length && contactId && otherDayIntent) {
@@ -232,6 +273,36 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     }
   }
 
+  // Mid-coleta: troca/pulo explícito de formulário Forms.
+  if (
+    !draft &&
+    cycle &&
+    contactId &&
+    !otherDayIntent &&
+    isFormsBotQuestionnaire(cycle.questionnaire) &&
+    !isFormsCatalogListAsk(inboundText) &&
+    looksLikeFormsBotAgendaMeta(inboundText)
+  ) {
+    const agendaResult = await applyFormsBotAgendaIntent({
+      contactId,
+      conversationId: input.conversationId,
+      date: clock.date,
+      weekday: clock.weekday,
+      nowMinutes: clock.minutes,
+      inbound: inboundText,
+      awaitingOffer: false,
+    });
+    if (agendaResult.handled && agendaResult.text) {
+      draft = {
+        text: agendaResult.text,
+        source: 'fallback',
+        detail: agendaResult.detail || 'agenda Forms',
+        completed: Boolean(agendaResult.completed),
+      };
+      if (agendaResult.cycle) cycle = agendaResult.cycle;
+    }
+  }
+
   if (!draft) {
     draft = resolution.ambiguous.length
       ? {
@@ -260,10 +331,20 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
               const catalogList = await tryFormsCatalogListReply({
                 inbound: inboundText,
                 questionnaire: cycle.questionnaire,
+                history: historyRows,
               });
               if (catalogList) {
+                const notice = pendingPreviousDaysNotice(contextPack.hints);
+                await rememberCyclePrompt(
+                  cycle.cycle.id,
+                  questionIdForCatalogList(cycle.questionnaire, catalogList) ||
+                    cycle.missing[0]?.id ||
+                    cycle.questionnaire.questions[0]?.id ||
+                    '',
+                  'reply: lista de catálogo',
+                );
                 return {
-                  text: catalogList,
+                  text: [catalogList, notice].filter(Boolean).join('\n\n'),
                   source: 'fallback' as const,
                   detail: 'listagem de catálogo Forms',
                   completed: cycle.cycle.status === 'completed',
@@ -295,6 +376,34 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     await clearConversationCompletedEditContext(input.conversationId);
   }
 
+  // Após concluir um Forms Bot, oferece os outros pendentes do dia.
+  if (
+    draft?.text &&
+    'completed' in draft &&
+    draft.completed &&
+    contactId &&
+    cycle &&
+    isFormsBotQuestionnaire(cycle.questionnaire) &&
+    !String(draft.detail || '').startsWith('agenda Forms')
+  ) {
+    const offer = await offerRemainingFormsBotAgenda({
+      contactId,
+      conversationId: input.conversationId,
+      date: clock.date,
+      weekday: clock.weekday,
+      nowMinutes: clock.minutes,
+      excludeCycleId: cycle.cycle.id,
+    });
+    if (offer.text) {
+      draft = {
+        ...draft,
+        text: `${draft.text}\n\n${offer.text}`,
+        detail: `${draft.detail} · agenda Forms oferta`,
+        completed: false,
+      };
+    }
+  }
+
   const questionnaireDeferred =
     Boolean(draft && 'deferToFree' in draft && (draft as QuestionnaireDraft).deferToFree);
 
@@ -315,6 +424,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     });
   }
 
+  const pendingQuestion = await pendingQuestionTrace(cycle);
   if (!draft?.text) {
     await withTransaction(async () => {
       await insertEvent({
@@ -328,6 +438,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
           source: draft?.source || 'none',
           mode: cycle ? 'questionnaire' : 'free',
           cycleId: cycle?.cycle.id,
+          pendingQuestion,
         },
       });
     });
@@ -371,10 +482,33 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
           : resolution.ambiguous.length
             ? 'questionnaire-selection'
             : 'free',
+        cycleId: cycle?.cycle.id,
+        pendingQuestion,
       },
     });
   });
   return { sent: true, text: draft.text, detail: draft.detail, phone, channelId, source: draft.source };
+}
+
+/** Pergunta pendente antes/depois da resposta — diagnóstico de captura no evento. */
+async function pendingQuestionTrace(cycle: ActiveCycleContext | undefined) {
+  if (!cycle) return undefined;
+  return {
+    before: {
+      questionId: cycle.cycle.pending_question_id || '',
+      setBy: cycle.cycle.pending_question_set_by || '',
+    },
+    after: await readCyclePrompt(cycle.cycle.id),
+  };
+}
+
+async function isAwaitingQuestionnaireSelection(conversationId: string): Promise<boolean> {
+  if (!conversationId) return false;
+  const row = await one<{ awaiting_selection: number }>(
+    `SELECT awaiting_selection FROM conversation_questionnaire_context WHERE conversation_id = $1`,
+    [conversationId],
+  );
+  return Number(row?.awaiting_selection) === 1;
 }
 
 async function messageTime(messageId: string): Promise<string> {

@@ -49,7 +49,17 @@ test('normaliza preço, taxa, pagamento e datas', () => {
   assert.equal(cleanRfqAnswer('ICMS de R$ 3,00', 'taxes'), 'R$ 3,00');
   assert.equal(cleanRfqAnswer('paguei no pix', 'payment_terms'), 'PIX');
   assert.equal(cleanRfqAnswer('chegada em 14/10/2026', 'expected_arrival'), '14/10/2026');
-  assert.equal(cleanRfqAnswer('comprei ontem', 'order_deadline'), 'ontem');
+  // Referência relativa vira data do calendário (dd/mm/aaaa de ontem).
+  assert.match(cleanRfqAnswer('comprei ontem', 'order_deadline'), /^\d{2}\/\d{2}\/\d{4}$/);
+});
+
+test('perguntas internas do Forms Bot nunca viram campo RFQ', () => {
+  assert.equal(detectRfqFieldFromQuestion(q('Qtd de ABACATE - KG?', '__lines__')), '');
+  assert.equal(
+    detectRfqFieldFromQuestion(q('Mais produtos? (produto + qtd, ou “não”)', '__lines_more__')),
+    '',
+  );
+  assert.equal(detectRfqFieldFromQuestion(q('Fornecedor?', 'vendor')), 'vendor');
 });
 
 test('referencia e vendor não engolem quantidade', () => {

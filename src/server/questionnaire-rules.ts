@@ -1,3 +1,4 @@
+import { FORMS_BOT_LINES_MORE_FIELD, isUsableLinesMoreAnswer } from './forms-bot-fields.js';
 import type { MediaUnderstanding } from './media-understand.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
@@ -14,6 +15,20 @@ export function foldText(value: string): string {
 export function isNonAnswerText(text: string): boolean {
   const normalized = foldText(text);
   return !normalized || /^(\.+|-+)$/.test(normalized);
+}
+
+/** Saudação / confirmação curta — não é resposta de campo. */
+export function isGreetingOrAck(text: string): boolean {
+  const folded = foldText(text).replace(/[!?.,;:]+$/g, '').trim();
+  if (!folded) return true;
+  if (
+    /^(bom dia|boa tarde|boa noite|oi+|ola|hey|eai|e ai|tudo bem|td bem|beleza|blz|valeu|obrigad\w*|ok|certo|sim|nao|pode|claro|show|top|por nada|de nada|disponha|imagina|tranquilo|tmg|tmj|nades)$/.test(
+      folded,
+    )
+  ) {
+    return true;
+  }
+  return /^(bom dia|boa tarde|boa noite)(\s+[!?.]*)?$/.test(folded);
 }
 
 export function looksLikeQuestionnaireAnswer(
@@ -121,16 +136,52 @@ export function looksLikeAnswerPayload(media: MediaUnderstanding, inbound: strin
   return true;
 }
 
+/** Texto que não deve contar como resposta (pedido de lista, meta, etc.). */
+export function isUnusableQuestionnaireAnswer(text: string): boolean {
+  const raw = String(text || '').trim();
+  if (!raw) return true;
+  if (isGreetingOrAck(raw)) return true;
+  if (looksLikeQuestionnaireMeta(raw)) return true;
+  const folded = foldText(raw);
+  if (
+    /(fornecedor|fornecedores|cliente|clientes|produto|produtos)/.test(folded) &&
+    /(lista|quais|qual|disponiveis|opcoes|opcao|cadastrad)/.test(folded)
+  ) {
+    return true;
+  }
+  // “Já respondi o fornecedor” / “já confirmei” não é nome de parceiro.
+  if (
+    /(ja respondi|ja confirmei|eu ja|ja falei|ja disse)/.test(folded) &&
+    /(fornecedor|cliente|produto|questionario|isso|tudo)/.test(folded)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function isFullyAnswered(
   questions: QuestionnaireQuestion[],
   answers: CycleAnswer[],
 ): boolean {
   if (!questions.length) return false;
-  return questions.every((question) =>
-    answers.some(
-      (row) => row.question_id === question.id && String(row.answer_text || '').trim(),
-    ),
-  );
+  return questions.every((question) => {
+    const answer = answers.find((row) => row.question_id === question.id);
+    return isUsableAnswerForQuestion(question, String(answer?.answer_text || ''));
+  });
+}
+
+/** Resposta aproveitável para a pergunta (regra única para “faltantes” e “completo”). */
+export function isUsableAnswerForQuestion(
+  question: Pick<QuestionnaireQuestion, 'export_field'>,
+  text: string,
+): boolean {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  // “não” é resposta válida de “Mais produtos?” — avaliar antes da regra de saudação/ack.
+  if (String(question.export_field || '').trim() === FORMS_BOT_LINES_MORE_FIELD) {
+    return isUsableLinesMoreAnswer(raw);
+  }
+  return !isUnusableQuestionnaireAnswer(raw);
 }
 
 export function coversQuestions(reply: string, questions: QuestionnaireQuestion[]): boolean {

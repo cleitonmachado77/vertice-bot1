@@ -131,7 +131,7 @@ async function loadCycleRows(
      JOIN questionnaire_revision_questions qq ON qq.revision_id = rev.id
      LEFT JOIN questionnaire_answers ans
        ON ans.cycle_id = cyc.id AND ans.question_id = qq.question_id
-     WHERE cyc.questionnaire_id = $1
+     WHERE cyc.questionnaire_id = $1 AND cyc.superseded_at = ''
      ORDER BY cyc.occurrence_date, ct.name, qq.sort_order`,
     [questionnaireId],
   );

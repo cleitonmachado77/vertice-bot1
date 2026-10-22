@@ -247,6 +247,9 @@ export function detectRfqFieldFromQuestion(
   question: Pick<QuestionnaireQuestion, 'export_field' | 'body'>,
 ): RfqFieldKey | '' {
   const exportField = String(question.export_field || '').trim();
+  // Campos internos do Forms Bot (__lines__, __lines_more__) têm atalho próprio;
+  // nunca adivinhar “quantity”/“products” pelo texto da pergunta.
+  if (exportField.startsWith('__')) return '';
   if (exportField && isRfqFieldKey(exportField) && exportField in RULES) {
     return exportField as RfqFieldKey;
   }

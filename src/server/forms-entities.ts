@@ -3,6 +3,7 @@ import { many, one, run } from './db.js';
 import { getActiveCompanyId, sqlPartnerVisibleInCompany } from './forms-companies.js';
 import { emptyHeader } from './forms-fields.js';
 import { listCatalogProducts, type CatalogProduct } from './forms-catalog.js';
+import { partnerNameKey } from './forms-name-key.js';
 
 export type EntityPartner = {
   id: string;
@@ -25,10 +26,6 @@ export type EntityProduct = CatalogProduct & {
   track_inventory?: string;
   updated_at?: string;
 };
-
-function nameKey(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
-}
 
 function parseHeader(raw: string): Record<string, string> {
   try {
@@ -144,7 +141,7 @@ export async function saveEntityPartner(input: {
 }): Promise<EntityPartner> {
   const clean = input.name.trim();
   if (!clean) throw new Error('Nome obrigatório');
-  const key = nameKey(clean);
+  const key = partnerNameKey(clean);
   const isCustomer = input.is_customer ? 1 : 0;
   const isVendor = input.is_vendor ? 1 : 0;
   if (!isCustomer && !isVendor) throw new Error('Marque cliente e/ou fornecedor');

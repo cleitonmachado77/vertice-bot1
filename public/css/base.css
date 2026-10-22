@@ -335,6 +335,7 @@ pre {
   margin: 10px 0 0;
   font-size: 0.82rem;
 }
+.event-pending { margin: 8px 0 0; font-size: 0.88rem; line-height: 1.45; }
 .plan-message { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; background: var(--card); }
 .field-block {
   display: flex;

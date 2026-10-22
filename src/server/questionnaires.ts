@@ -19,6 +19,8 @@ export type QuestionnaireQuestion = {
   expected_type: string;
   export_field: string;
   sort_order: number;
+  /** Valor fixado pelo padrão Forms (ex.: produto de “Qtd de ABACATE?”). */
+  fixed_value?: string;
 };
 
 export type Questionnaire = {
@@ -54,7 +56,7 @@ export type QuestionnaireInput = {
   templateId?: string;
   active: boolean;
   defaultValues?: Record<string, string>;
-  questions: { id?: string; body: string; expectedType: string; exportField?: string }[];
+  questions: { id?: string; body: string; expectedType: string; exportField?: string; fixedValue?: string }[];
   contactIds: string[];
   sourcePresetId?: string;
   formKind?: string;
@@ -139,7 +141,8 @@ export async function listQuestionnaires(): Promise<Questionnaire[]> {
      FROM questionnaires WHERE deleted_at = '' ORDER BY name, created_at`,
   );
   const questions = await many<QuestionnaireQuestion>(
-    `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order
+    `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order,
+            fixed_value
      FROM questionnaire_questions ORDER BY sort_order, created_at`,
   );
   const assignments = await many<{ questionnaire_id: string; contact_id: string }>(
@@ -171,7 +174,8 @@ export async function getQuestionnaire(
   );
   if (!row) return undefined;
   const questions = await many<QuestionnaireQuestion>(
-    `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order
+    `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order,
+            fixed_value
      FROM questionnaire_questions WHERE questionnaire_id = $1
      ORDER BY sort_order, created_at`,
     [id],
@@ -229,6 +233,7 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
         body: item.body.trim(),
         expectedType: EXPECTED.has(item.expectedType) ? item.expectedType : 'any',
         exportField,
+        fixedValue: String(item.fixedValue || '').trim(),
       };
     })
     .filter((item) => item.body);
@@ -294,14 +299,17 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
 
   for (const [index, item] of questions.entries()) {
     await run(
-      `INSERT INTO questionnaire_questions(id, questionnaire_id, body, expected_type, export_field, sort_order, created_at)
-       VALUES($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO questionnaire_questions(
+         id, questionnaire_id, body, expected_type, export_field, sort_order, created_at, fixed_value
+       )
+       VALUES($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT(id) DO UPDATE SET
          body = excluded.body,
          expected_type = excluded.expected_type,
          export_field = excluded.export_field,
-         sort_order = excluded.sort_order`,
-      [item.id, id, item.body, item.expectedType, item.exportField, index, stamp],
+         sort_order = excluded.sort_order,
+         fixed_value = excluded.fixed_value`,
+      [item.id, id, item.body, item.expectedType, item.exportField, index, stamp, item.fixedValue],
     );
   }
 
@@ -377,7 +385,7 @@ export async function getQuestionnaireRevision(revisionId: string): Promise<Ques
   if (!row) return undefined;
   const questions = await many<QuestionnaireQuestion>(
     `SELECT question_id AS id, $2::text AS questionnaire_id, body, expected_type,
-            export_field, sort_order
+            export_field, sort_order, fixed_value
      FROM questionnaire_revision_questions
      WHERE revision_id = $1 ORDER BY sort_order`,
     [revisionId, row.questionnaire_id],
@@ -413,7 +421,7 @@ async function createRevision(input: {
   weekday: number;
   sendTime: string;
   templateId: string;
-  questions: { id: string; body: string; expectedType: string; exportField: string }[];
+  questions: { id: string; body: string; expectedType: string; exportField: string; fixedValue: string }[];
   stamp: string;
 }): Promise<void> {
   const revisionId = randomUUID();
@@ -437,8 +445,8 @@ async function createRevision(input: {
   for (const [sortOrder, question] of input.questions.entries()) {
     await run(
       `INSERT INTO questionnaire_revision_questions(
-         revision_id, question_id, body, expected_type, export_field, sort_order
-       ) VALUES($1,$2,$3,$4,$5,$6)`,
+         revision_id, question_id, body, expected_type, export_field, sort_order, fixed_value
+       ) VALUES($1,$2,$3,$4,$5,$6,$7)`,
       [
         revisionId,
         question.id,
@@ -446,6 +454,7 @@ async function createRevision(input: {
         question.expectedType,
         question.exportField,
         sortOrder,
+        question.fixedValue,
       ],
     );
   }

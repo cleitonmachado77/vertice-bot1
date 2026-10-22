@@ -1,11 +1,9 @@
 import { completeChat, type ChatMessage } from './agent.js';
-import { getSetting, withTransaction } from './db.js';
+import { getSetting } from './db.js';
 import { understandInbound, type MediaUnderstanding } from './media-understand.js';
 import {
-  markCycleCompleted,
-  markCycleInProgress,
   missingQuestions,
-  upsertAnswers,
+  rememberCyclePrompt,
   type ActiveCycleContext,
   type CycleAnswer,
 } from './questionnaire-cycles.js';
@@ -20,6 +18,7 @@ import {
 } from './questionnaire-dates.js';
 import {
   isFullyAnswered,
+  isGreetingOrAck,
   looksLikeAnswerPayload,
   looksLikeQuestionnaireEdit,
   looksLikeQuestionnaireMeta,
@@ -43,6 +42,7 @@ import {
 import {
   asksConfirmation,
   asksForMore,
+  claimsSavedAnswer,
   completionReply,
   defaultQuestionnaireReply,
   ensureMissingAsked,
@@ -53,14 +53,17 @@ import {
   pendingPreviousDaysNotice,
   type ConversationHints,
 } from './conversation-context.js';
-import { FORMS_BOT_LINES_FIELD } from './forms-bot-fields.js';
 import {
-  buildFormsCatalogBrief,
-  isFormsCatalogListAsk,
-  tryFormsCatalogListReply,
-} from './forms-bot-catalog-context.js';
-import { resolveCatalogValue } from './forms-bot-match.js';
-import { isFormKind } from './forms-fields.js';
+  catalogContextBrief,
+  formsAwareMissingReply,
+  isCatalogListAsk,
+  missingPromptFor,
+  promptQuestionId,
+  questionIdForCatalogList,
+  tryCatalogListReply,
+  tryFormsBotCapture,
+} from './forms-bot-capture.js';
+import { persistAcceptedAnswers } from './questionnaire-persist.js';
 
 export type QuestionnaireDraft = {
   text: string;
@@ -93,17 +96,100 @@ export async function draftQuestionnaireReply(input: {
   let alreadySaved = input.context.answers;
   const amending = input.context.cycle.status === 'completed';
 
-  // Catálogo Forms: responde sem depender do LLM / chave do agente.
-  const catalogListReply = await tryFormsCatalogListReply({
+  // Saudação / “por nada”: nunca grava como resposta de campo.
+  if (isGreetingOrAck(input.inbound)) {
+    if (amending) {
+      return {
+        text: /por nada|de nada|disponha/i.test(input.inbound) ? 'Por nada!' : 'Ok!',
+        source: 'fallback',
+        detail: 'ack pós-conclusão',
+        completed: true,
+      };
+    }
+    const missing = missingQuestions(questions, alreadySaved);
+    const toAsk = missing.length ? missing : questions;
+    const ask = await missingPromptFor(input.context.questionnaire, toAsk);
+    await rememberCyclePrompt(input.context.cycle.id, promptQuestionId(toAsk), 'agente: saudação');
+    const hello = /bom dia/i.test(input.inbound)
+      ? 'Bom dia!'
+      : /boa tarde/i.test(input.inbound)
+        ? 'Boa tarde!'
+        : /boa noite/i.test(input.inbound)
+          ? 'Boa noite!'
+          : 'Olá!';
+    return {
+      text: `${hello}\n${ask}`,
+      source: 'fallback',
+      detail: 'saudação',
+      completed: false,
+    };
+  }
+
+  const captured = await tryFormsBotCapture({
     inbound: input.inbound,
     questionnaire: input.context.questionnaire,
+    questions,
+    alreadySaved,
+    history: input.history,
+    pendingQuestionId: input.context.cycle.pending_question_id,
   });
-  if (catalogListReply) {
+  if (captured?.kind === 'list' || captured?.kind === 'reask') {
+    await rememberCyclePrompt(
+      input.context.cycle.id,
+      captured.pendingQuestionId,
+      `agente: atalho Forms (${captured.kind})`,
+    );
+    const notice = input.hints ? pendingPreviousDaysNotice(input.hints) : '';
     return {
-      text: catalogListReply,
+      text: [captured.text, notice].filter(Boolean).join('\n\n'),
       source: 'fallback',
-      detail: 'listagem de catálogo Forms',
+      detail: captured.kind === 'list' ? 'listagem de catálogo Forms' : 'catálogo Forms por número (reapresentar)',
       completed: amending,
+    };
+  }
+  if (captured?.kind === 'answers') {
+    const mediaStub = {
+      type: 'text',
+      summary: captured.summary || input.inbound,
+      transcript: '',
+      caption: '',
+      mediaUrl: '',
+      understood: true,
+    };
+    const persisted = await persistAcceptedAnswers({
+      cycleId: input.context.cycle.id,
+      questions,
+      alreadySaved,
+      accepted: captured.accepted,
+      media: mediaStub,
+      mediaUrl: '',
+      formKind: input.context.questionnaire.formKind,
+      companyOdooId: input.context.questionnaire.companyOdooId,
+    });
+    const notice = input.hints ? pendingPreviousDaysNotice(input.hints) : '';
+    if (persisted.complete) {
+      return {
+        text: [completionReply(input.contactName), notice].filter(Boolean).join('\n\n'),
+        source: 'fallback',
+        detail: `${captured.detail} (completo)`,
+        completed: true,
+      };
+    }
+    const nextPrompt = persisted.missing.length
+      ? await missingPromptFor(input.context.questionnaire, persisted.missing)
+      : '';
+    await rememberCyclePrompt(
+      input.context.cycle.id,
+      promptQuestionId(persisted.missing),
+      `agente: atalho Forms (${captured.detail})`,
+    );
+    return {
+      text: [captured.summary ? `Anotei: ${captured.summary}.` : 'Anotei.', nextPrompt, notice]
+        .filter(Boolean)
+        .join('\n\n'),
+      source: 'fallback',
+      detail: captured.detail,
+      completed: false,
     };
   }
 
@@ -234,6 +320,11 @@ export async function draftQuestionnaireReply(input: {
       });
       alreadySaved = persisted.answers;
       seededFromHeuristic = true;
+      await rememberCyclePrompt(
+        input.context.cycle.id,
+        promptQuestionId(persisted.missing),
+        'agente: heurística em ciclo concluído',
+      );
     }
   }
 
@@ -300,6 +391,11 @@ export async function draftQuestionnaireReply(input: {
       seededFromHeuristic = true;
       captureTargets =
         amending || input.forceCompletedEdit ? questions : missingQuestions(questions, alreadySaved);
+      await rememberCyclePrompt(
+        input.context.cycle.id,
+        promptQuestionId(captureTargets),
+        'agente: heurística parcial',
+      );
     }
   }
 
@@ -310,11 +406,11 @@ export async function draftQuestionnaireReply(input: {
     const fieldHint = field ? ` campo=${field};` : '';
     return `${index + 1}. [${item.id}]${fieldHint} ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`;
   });
-  const formsCatalogBrief = await buildFormsCatalogBrief(input.context.questionnaire);
+  const formsCatalogBrief = await catalogContextBrief(input.context.questionnaire);
 
   const system = [
     'Você é um atendente humano da Vértice acompanhando um questionário no WhatsApp.',
-    'Fale em português do Brasil, de forma natural, curta e personalizada.',
+    'Fale em português do Brasil, de forma natural, CURTA e objetiva (1–3 linhas).',
     '',
     'Prioridade absoluta: CONTEXTO e intenção da mensagem em relação às perguntas abaixo.',
     'NÃO dependa de palavras-chave, sinônimos pré-mapeados ou frases “oficiais”.',
@@ -410,12 +506,19 @@ export async function draftQuestionnaireReply(input: {
     const extracted = parseExtracted(raw, media);
 
     // Pedido de lista: nunca gravar como resposta (modelo às vezes “completa” o ciclo).
-    if (isFormsCatalogListAsk(input.inbound)) {
-      const listReply = await tryFormsCatalogListReply({
+    if (isCatalogListAsk(input.inbound)) {
+      const listReply = await tryCatalogListReply({
         inbound: input.inbound,
         questionnaire: input.context.questionnaire,
+        history: input.history,
       });
       if (listReply) {
+        await rememberCyclePrompt(
+          input.context.cycle.id,
+          questionIdForCatalogList(input.context.questionnaire, listReply) ||
+            promptQuestionId(pendingMissing),
+          'agente: lista de catálogo pós-modelo',
+        );
         return {
           text: listReply,
           source: 'fallback',
@@ -429,13 +532,18 @@ export async function draftQuestionnaireReply(input: {
       // Fallback leve: confirmação após convite → apresenta perguntas (modelo decide o resto).
       if (input.hints?.likelyQuestionnaireAck && !amending) {
         const notice = pendingPreviousDaysNotice(input.hints);
-        const base = defaultQuestionnaireReply(
+        const base = await formsAwareMissingReply({
+          questionnaire: input.context.questionnaire,
           questions,
-          alreadySaved,
-          pendingMissing,
-          false,
+          answers: alreadySaved,
+          missing: pendingMissing,
           media,
-          input.contactName,
+          contactName: input.contactName,
+        });
+        await rememberCyclePrompt(
+          input.context.cycle.id,
+          promptQuestionId(pendingMissing),
+          'agente: ack do convite',
         );
         return {
           text: [base, notice].filter(Boolean).join('\n\n').slice(0, 1500),
@@ -522,6 +630,9 @@ export async function draftQuestionnaireReply(input: {
       companyOdooId: input.context.questionnaire.companyOdooId,
     });
     const { answers, missing, complete } = persisted;
+    if (!complete) {
+      await rememberCyclePrompt(input.context.cycle.id, promptQuestionId(missing), 'agente: resposta do modelo');
+    }
 
     let reply =
       extracted.reply.trim() ||
@@ -532,15 +643,44 @@ export async function draftQuestionnaireReply(input: {
       // Já estava completo sem novo save — não inventar "anotei tudo" de novo.
       reply = asksForMore(reply) || asksConfirmation(reply) ? completionReply(input.contactName) : reply;
     } else {
-      // Incompleto: a IA conduz; só cai no template se reply vazia / confirmação / “anotei tudo”.
-      reply = ensureMissingAsked({
-        reply,
-        missing,
+      const nothingSaved = accepted.length === 0 && !seededFromHeuristic;
+      const fallbackReply = await formsAwareMissingReply({
+        questionnaire: input.context.questionnaire,
+        questions,
         answers,
+        missing,
         media,
         contactName: input.contactName,
-        questions,
       });
+      if (
+        nothingSaved &&
+        claimsSavedAnswer(reply) &&
+        looksLikeAnswerPayload(media, input.inbound) &&
+        !isGreetingOrAck(input.inbound) &&
+        !input.hints?.likelyQuestionnaireAck
+      ) {
+        // O modelo disse “anotei…” mas não devolveu answers: não fingir que gravou.
+        reply = [
+          'Não consegui registrar essa resposta. Pode repetir?',
+          await missingPromptFor(input.context.questionnaire, missing),
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+      } else {
+        // Incompleto: a IA conduz; só cai no template se reply vazia / confirmação / “anotei tudo”.
+        const ensured = ensureMissingAsked({
+          reply,
+          missing,
+          answers,
+          media,
+          contactName: input.contactName,
+          questions,
+        });
+        const usedTemplate =
+          ensured ===
+          defaultQuestionnaireReply(questions, answers, missing, false, media, input.contactName);
+        reply = usedTemplate ? fallbackReply : ensured;
+      }
       const notice = input.hints ? pendingPreviousDaysNotice(input.hints) : '';
       if (notice && !reply.includes(notice) && cycleDate === today) {
         reply = `${reply}\n\n${notice}`;
@@ -619,86 +759,4 @@ function mergeAnswersForCheck(
     });
   }
   return [...byId.values()];
-}
-
-async function expandFormsCatalogAnswers(input: {
-  questions: QuestionnaireQuestion[];
-  accepted: ExtractedAnswer[];
-  formKind?: string;
-  companyOdooId?: string;
-}): Promise<ExtractedAnswer[]> {
-  const kindRaw = String(input.formKind || '').trim();
-  if (!isFormKind(kindRaw) || !input.accepted.length) return input.accepted;
-  const companyOdooId = String(input.companyOdooId || '').trim() || '1';
-  const byId = new Map(input.questions.map((item) => [item.id, item]));
-  const out: ExtractedAnswer[] = [];
-  for (const item of input.accepted) {
-    const question = byId.get(item.questionId);
-    const field = String(question?.export_field || '').trim();
-    if (!field || field === FORMS_BOT_LINES_FIELD) {
-      out.push(item);
-      continue;
-    }
-    const resolved = await resolveCatalogValue({
-      kind: kindRaw,
-      fieldKey: field,
-      raw: item.text,
-      companyOdooId,
-    });
-    out.push({ ...item, text: resolved.value || item.text });
-  }
-  return out;
-}
-
-async function persistAcceptedAnswers(input: {
-  cycleId: string;
-  questions: QuestionnaireQuestion[];
-  alreadySaved: CycleAnswer[];
-  accepted: ExtractedAnswer[];
-  media: MediaUnderstanding;
-  mediaUrl: string;
-  formKind?: string;
-  companyOdooId?: string;
-}): Promise<{ answers: CycleAnswer[]; missing: QuestionnaireQuestion[]; complete: boolean }> {
-  return withTransaction(async () => {
-    const accepted = await expandFormsCatalogAnswers({
-      questions: input.questions,
-      accepted: input.accepted,
-      formKind: input.formKind,
-      companyOdooId: input.companyOdooId,
-    });
-    const answers = accepted.length
-      ? await upsertAnswers(
-          input.cycleId,
-          accepted.map((item) => ({
-            questionId: item.questionId,
-            text: item.text,
-            type: item.type,
-            mediaUrl: item.type === 'text' ? '' : input.media.mediaUrl || input.mediaUrl,
-          })),
-        )
-      : input.alreadySaved;
-    let missing = missingQuestions(input.questions, answers);
-    const complete = isFullyAnswered(input.questions, answers);
-    if (!complete && missing.length === 0) {
-      missing = input.questions.filter(
-        (question) =>
-          !answers.some((row) => row.question_id === question.id && row.answer_text.trim()),
-      );
-    }
-    await syncCycleProgress(
-      input.cycleId,
-      complete,
-      accepted.length > 0 || input.alreadySaved.length > 0,
-    );
-    return { answers, missing, complete };
-  });
-}
-
-async function syncCycleProgress(cycleId: string, complete: boolean, engaged: boolean): Promise<void> {
-  if (complete) {
-    await markCycleCompleted(cycleId);
-    return;
-  }
-  if (engaged) await markCycleInProgress(cycleId);
 }

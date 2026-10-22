@@ -7,6 +7,7 @@ import {
 } from './forms.js';
 import { documentTitle, shouldAutofillFormTitle } from './forms-fields.js';
 import { odooCreate, odooExecuteKw, odooSearchRead, odooWrite } from './odoo-client.js';
+import { toOdooNumber } from './odoo-number.js';
 import {
   findCategoryId,
   ensureIncomingPickingTypeId,
@@ -19,10 +20,7 @@ import {
 
 export { getOdooPullProgress, pullFromOdoo, pullOdooCatalog } from './odoo-pull.js';
 
-function num(value: string | undefined, fallback = 0): number {
-  const n = Number(String(value || '').replace(',', '.'));
-  return Number.isFinite(n) ? n : fallback;
-}
+const num = toOdooNumber;
 
 function docCompanyId(doc: FormDocument): number {
   const raw = doc.company_odoo_id || doc.header.company_odoo_id || DEFAULT_COMPANY_ODOO_ID;

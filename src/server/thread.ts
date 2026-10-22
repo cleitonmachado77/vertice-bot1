@@ -103,6 +103,28 @@ export async function attachLocalThread(realId: string, contactId: string): Prom
   await run('DELETE FROM conversations WHERE id = $1', [localId]);
 }
 
+/** Outbound com o mesmo texto nos últimos 30 min (webhook de envio × registro local). */
+async function findRecentOutboundTwin(
+  conversationId: string,
+  text: string,
+  origins: string[] = ['whatsapp'],
+): Promise<{ id: string } | undefined> {
+  const incoming = String(text || '').trim();
+  if (!conversationId || !incoming) return undefined;
+  const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const recent = await many<{ id: string; text: string }>(
+    `SELECT id, text FROM messages
+     WHERE conversation_id = $1 AND direction = 'OUTBOUND'
+       AND origin = ANY($2::text[]) AND created_at >= $3
+     ORDER BY created_at DESC`,
+    [conversationId, origins, since],
+  );
+  return recent.find((item) => {
+    const saved = item.text.trim();
+    return saved === incoming || incoming.startsWith(saved) || saved.startsWith(incoming);
+  });
+}
+
 export async function recordOutbound(input: {
   conversationId: string;
   text: string;
@@ -110,16 +132,27 @@ export async function recordOutbound(input: {
   raw?: unknown;
 }): Promise<void> {
   const timestamp = now();
-  await upsertMessage({
-    id: randomUUID(),
-    conversationId: input.conversationId,
-    direction: 'OUTBOUND',
-    type: 'text',
-    text: input.text,
-    createdAt: timestamp,
-    origin: input.origin,
-    raw: input.raw || { source: input.origin },
-  });
+  // O webhook de “mensagem enviada” pode chegar ANTES deste registro: se já existe
+  // a mesma outbound recém-sincronizada, só marca a origem (evita duplicar o histórico).
+  const twin = await findRecentOutboundTwin(input.conversationId, input.text);
+  if (twin) {
+    await run('UPDATE messages SET origin = $2, raw_json = $3 WHERE id = $1', [
+      twin.id,
+      input.origin,
+      JSON.stringify(input.raw || { source: input.origin }),
+    ]);
+  } else {
+    await upsertMessage({
+      id: randomUUID(),
+      conversationId: input.conversationId,
+      direction: 'OUTBOUND',
+      type: 'text',
+      text: input.text,
+      createdAt: timestamp,
+      origin: input.origin,
+      raw: input.raw || { source: input.origin },
+    });
+  }
   await run('UPDATE conversations SET preview = $1, last_message_at = $2, updated_at = $2 WHERE id = $3', [
     input.text.slice(0, 180),
     timestamp,
@@ -146,18 +179,11 @@ export async function saveSyncedMessage(input: {
 } | null> {
   const direction = input.direction.toUpperCase() === 'OUTBOUND' ? 'OUTBOUND' : 'INBOUND';
   if (direction === 'OUTBOUND' && input.text.trim()) {
-    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    const recent = await many<{ id: string; text: string }>(
-      `SELECT id, text FROM messages
-       WHERE conversation_id = $1 AND direction = 'OUTBOUND'
-         AND origin IN ('manual', 'agent', 'scheduled') AND created_at >= $2`,
-      [input.conversationId, since],
-    );
-    const incoming = input.text.trim();
-    const twin = recent.find((item) => {
-      const saved = item.text.trim();
-      return saved === incoming || incoming.startsWith(saved) || saved.startsWith(incoming);
-    });
+    const twin = await findRecentOutboundTwin(input.conversationId, input.text, [
+      'manual',
+      'agent',
+      'scheduled',
+    ]);
     if (twin) {
       await run('UPDATE messages SET raw_json = $2 WHERE id = $1', [twin.id, JSON.stringify(input.raw)]);
       return null;

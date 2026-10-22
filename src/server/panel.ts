@@ -24,6 +24,7 @@ import {
   setHumanUnread,
 } from './store.js';
 import { hideConversation } from './conversation-visibility.js';
+import { pendingQuestionViews } from './event-trace.js';
 import {
   listApprovedTemplates,
   resolveFirstContactTemplate,
@@ -421,12 +422,14 @@ export function registerPanelRoutes(): void {
 
   route('GET', '/api/events', async (ctx) => {
     if (!(await requireUser(ctx))) return;
+    const items = (await listEvents()).map((event) => ({
+      ...event,
+      payload: JSON.parse(event.payload_json) as unknown,
+      result: JSON.parse(event.result_json) as unknown,
+    }));
+    const pending = await pendingQuestionViews(items.map((item) => item.result));
     json(ctx.res, 200, {
-      items: (await listEvents()).map((event) => ({
-        ...event,
-        payload: JSON.parse(event.payload_json) as unknown,
-        result: JSON.parse(event.result_json) as unknown,
-      })),
+      items: items.map((item, index) => ({ ...item, pendingQuestion: pending[index] })),
     });
   });
 }

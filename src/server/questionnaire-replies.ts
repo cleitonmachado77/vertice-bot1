@@ -125,6 +125,18 @@ export function mentionsUnderstoodAnswers(reply: string): boolean {
   );
 }
 
+/** Reply afirma ter gravado algo (“anotei que…”, “registrei…”) — usado quando nada foi salvo. */
+export function claimsSavedAnswer(reply: string): boolean {
+  const text = foldText(reply);
+  return (
+    /\banot(ei|ado|amos)\b/.test(text) ||
+    /\bregistr(ei|amos|ado)\b/.test(text) ||
+    /\bsalv(ei|o|amos)\b/.test(text) ||
+    /\bentendi que\b/.test(text) ||
+    /\bagora temos\b/.test(text)
+  );
+}
+
 export function pretendsToHaveSaved(reply: string): boolean {
   const text = foldText(reply);
   return (

@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { odooLabelPt } from '../odoo-pt.js';
-import { escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
+import { createPoll, escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import { entityFromSlug, renderEntitiesBody } from './forms-entities.js';
 import {
@@ -31,9 +31,49 @@ let catalogCache = { products: [], partners: [], refs: {}, at: 0 };
 let listFilters = { q: '', partner: '', date: '', kind: '' };
 /** Itens da lista atual — soft refresh atualiza sem remontar o shell (evita piscar). */
 let listSession = { kind: '', items: [], schema: null, catalog: null, token: null };
+/** Poll da lista enquanto a aba Forms (compras/vendas/inventário) está aberta. */
+let stopListPoll = null;
 
 function rememberListSession(kind, schema, catalog, items, token) {
   listSession = { kind, schema, catalog, items: items || [], token };
+}
+
+function stopFormsListPoll() {
+  if (stopListPoll) {
+    stopListPoll();
+    stopListPoll = null;
+  }
+}
+
+function listFingerprint(items) {
+  return (items || [])
+    .map((item) => {
+      const lines = Array.isArray(item.lines)
+        ? item.lines
+            .map((line) => `${line.values?.product || ''}:${line.values?.quantity || ''}`)
+            .join(';')
+        : '';
+      return `${item.id}|${item.updated_at || ''}|${item.status || ''}|${lines}`;
+    })
+    .join('\n');
+}
+
+function startFormsListPoll(root, kind, schema, token) {
+  stopFormsListPoll();
+  if (kind === 'cadastros') return;
+  stopListPoll = createPoll(async () => {
+    if (!isNavActive(token) || !root.querySelector('#forms-list')) {
+      stopFormsListPoll();
+      return;
+    }
+    const sess = listSession;
+    const activeSchema = sess.schema || schema;
+    const activeKind = sess.kind || kind;
+    if (!activeSchema || activeKind === 'cadastros') return;
+    await refreshListQuiet(root, activeKind, activeSchema, sess.token || token, {
+      keepEditor: true,
+    });
+  }, 4000);
 }
 
 export function tabFromSlug(slug) {
@@ -137,6 +177,8 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
     return;
   }
 
+  stopFormsListPoll();
+
   const soft = Boolean(options.soft && root.querySelector('.forms-pane'));
   if (!soft && !root.querySelector('.forms-pane')) {
     root.innerHTML = viewLoading('Abrindo Vertice Forms…');
@@ -159,7 +201,7 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
     const [schema, catalog, data, presets] = await Promise.all([
       loadSchema(),
       loadCatalog(false),
-      api(`/api/forms?kind=${encodeURIComponent(kind)}`),
+      api(`/api/forms?kind=${encodeURIComponent(kind)}&lines=1`),
       loadPresets(kind).catch(() => []),
     ]);
     if (!isNavActive(token)) return;
@@ -169,6 +211,7 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
     bindShellActions(root, kind, schema, catalog, data.items || [], token, presets);
     bindFilters(root, kind, schema, catalog, data.items || [], token);
     bindList(root, kind, schema, catalog, data.items || [], token);
+    startFormsListPoll(root, kind, schema, token);
   } finally {
     body.classList.remove('is-switching');
   }
@@ -991,6 +1034,29 @@ async function pollSyncStatus(root, kind, schema, docId, token, attempts = 6) {
   }
 }
 
+function shortProductLabel(name) {
+  return String(name || '')
+    .replace(/\s*[-–]\s*KG\s*$/i, '')
+    .replace(/\s+KG\s*$/i, '')
+    .trim();
+}
+
+/** Resumo compacto produto + qtd para o card da lista (o que couber). */
+function listLinesPreview(item, kind) {
+  if (kind === 'product') return '';
+  const lines = Array.isArray(item.lines) ? item.lines : [];
+  const parts = [];
+  for (const line of lines) {
+    const values = line?.values && typeof line.values === 'object' ? line.values : {};
+    const product = shortProductLabel(values.product);
+    const qty = String(values.quantity || '').trim();
+    if (!product && !qty) continue;
+    if (product && qty) parts.push(`${qty} ${product}`);
+    else parts.push(product || qty);
+  }
+  return parts.join(' · ');
+}
+
 function listRow(item, activeId, schema, kind) {
   const when = item.updated_at ? new Date(item.updated_at).toLocaleString('pt-BR') : '';
   const ref = String(item.header?.order_reference || '').trim();
@@ -1013,12 +1079,15 @@ function listRow(item, activeId, schema, kind) {
   } else if (item.header?.odoo_id && !ref) odoo = ` · Odoo #${item.header.odoo_id}`;
   const locked = isOrderLocked(item, kind) ? ' · bloqueado' : '';
   const botTag = String(item.header?.source || '') === 'bot' ? ' · Bot' : '';
-  const statusText =
-    kind === 'product' ? '' : `${escapeHtml(statusLabel(schema, kind, item.status))} · `;
+  const linesPreview = listLinesPreview(item, kind);
+  const fallbackMeta = `${kind === 'product' ? '' : `${statusLabel(schema, kind, item.status)} · `}${when}${odoo}${locked}${botTag}`;
+  const subtitle = linesPreview
+    ? `${linesPreview}${botTag}`
+    : fallbackMeta;
   return `
     <button class="forms-list-item${item.id === activeId ? ' active' : ''}" type="button" data-open="${escapeHtml(item.id)}">
       <strong>${escapeHtml(headline)}</strong>
-      <span>${statusText}${escapeHtml(when)}${escapeHtml(odoo)}${escapeHtml(locked)}${escapeHtml(botTag)}</span>
+      <span class="forms-list-item-sub">${escapeHtml(subtitle)}</span>
     </button>`;
 }
 
@@ -1959,38 +2028,60 @@ function collectPayload(form, fields) {
 
 /**
  * Atualiza só as linhas da lista (sem remontar toolbar/modal).
- * Usado após salvar/excluir para não piscar a tela enquanto o Odoo sincroniza.
+ * Usado após salvar/excluir e no poll automático enquanto a aba Forms está aberta.
  */
-async function refreshListQuiet(root, kind, schema, token) {
+async function refreshListQuiet(root, kind, schema, token, options = {}) {
+  const keepEditor = Boolean(options.keepEditor);
   const [catalog, data] = await Promise.all([
     loadCatalog(false),
-    api(`/api/forms?kind=${encodeURIComponent(kind)}`),
+    api(`/api/forms?kind=${encodeURIComponent(kind)}&lines=1`),
   ]);
   if (!isNavActive(token)) return;
   const items = data.items || [];
   const list = root.querySelector('#forms-list');
   const count = root.querySelector('#forms-list-count');
   if (!list) {
-    await refresh(root, kind, schema, null, token);
+    if (!keepEditor) await refresh(root, kind, schema, null, token);
     return;
   }
+  if (keepEditor && listFingerprint(items) === listFingerprint(listSession.items)) {
+    rememberListSession(kind, schema, catalog, items, token);
+    return;
+  }
+  const activeId =
+    root.querySelector('.forms-list-item.active')?.getAttribute('data-open') ||
+    (keepEditor
+      ? getFormsEditor(root)?.querySelector('#forms-form')?.getAttribute('data-id') || ''
+      : '');
   rememberListSession(kind, schema, catalog, items, token);
   const filtered = filterItems(items, schema, kind, listFilters);
-  list.innerHTML = listRowsHtml(filtered, null, schema, kind, items.length);
+  list.innerHTML = listRowsHtml(filtered, activeId || null, schema, kind, items.length);
   if (count) {
     count.textContent =
       filtered.length === items.length
         ? `${items.length} item(ns)`
         : `${filtered.length} de ${items.length} item(ns)`;
   }
+  const partnerSelect = root.querySelector('#forms-filter-partner');
+  if (partnerSelect) {
+    const selected = listFilters.partner || partnerSelect.value || '';
+    const opts = partnerFilterOptions(items, kind);
+    partnerSelect.innerHTML = [
+      `<option value="">${escapeHtml(listFilterConfig(kind).selectAll || 'Todos')}</option>`,
+      ...opts.map(
+        (name) =>
+          `<option value="${escapeHtml(name)}"${selected === name ? ' selected' : ''}>${escapeHtml(name)}</option>`,
+      ),
+    ].join('');
+  }
   bindList(root, kind, schema, catalog, items, token);
-  closeEditorModal(root);
+  if (!keepEditor) closeEditorModal(root);
 }
 
 async function refresh(root, kind, schema, openId, token) {
   const [catalog, data, presets] = await Promise.all([
     loadCatalog(false),
-    api(`/api/forms?kind=${encodeURIComponent(kind)}`),
+    api(`/api/forms?kind=${encodeURIComponent(kind)}&lines=1`),
     loadPresets(kind).catch(() => []),
   ]);
   if (!isNavActive(token)) return;

@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import pg from 'pg';
 import { databaseConnectionString } from './database-url.js';
 import { env } from './env.js';
+import { partnerNameKey } from './forms-name-key.js';
 
 const cache = new Map<string, string>();
 const transactionStorage = new AsyncLocalStorage<pg.PoolClient>();
@@ -107,6 +108,11 @@ function getPool(): pg.Pool {
     ssl: { rejectUnauthorized: false },
     max: 5,
     connectionTimeoutMillis: 12000,
+    idleTimeoutMillis: 30_000,
+  });
+  // Evita derrubar o processo em ECONNRESET idle do Postgres.
+  pool.on('error', (error) => {
+    console.error('pg pool:', error instanceof Error ? error.message : error);
   });
   return pool;
 }
@@ -232,6 +238,8 @@ const SCHEMA = `
     template_sent_at TEXT NOT NULL DEFAULT '',
     completed_at TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
+    superseded_at TEXT NOT NULL DEFAULT '',
+    pending_question_id TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -369,8 +377,6 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
   CREATE INDEX IF NOT EXISTS idx_questionnaire_questions ON questionnaire_questions(questionnaire_id, sort_order);
   CREATE INDEX IF NOT EXISTS idx_questionnaire_assignments_contact ON questionnaire_assignments(contact_id);
-  CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_cycles_day
-    ON questionnaire_cycles(questionnaire_id, contact_id, occurrence_date);
   CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_answers_question
     ON questionnaire_answers(cycle_id, question_id);
   CREATE INDEX IF NOT EXISTS idx_inbound_jobs_due ON inbound_jobs(status, available_at);
@@ -568,6 +574,8 @@ async function migrate(): Promise<void> {
       template_sent_at TEXT NOT NULL DEFAULT '',
       completed_at TEXT NOT NULL DEFAULT '',
       error TEXT NOT NULL DEFAULT '',
+      superseded_at TEXT NOT NULL DEFAULT '',
+      pending_question_id TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`,
@@ -585,9 +593,15 @@ async function migrate(): Promise<void> {
     )`,
   );
   await run(`CREATE INDEX IF NOT EXISTS idx_questionnaire_assignments_contact ON questionnaire_assignments(contact_id)`);
+  // Um ciclo "vivo" por dia; ciclos substituídos (reenvio manual) ficam no histórico com superseded_at.
+  await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS superseded_at TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS pending_question_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaire_cycles ADD COLUMN IF NOT EXISTS pending_question_set_by TEXT NOT NULL DEFAULT ''`);
+  await run(`DROP INDEX IF EXISTS ux_questionnaire_cycles_day`);
   await run(
-    `CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_cycles_day
-     ON questionnaire_cycles(questionnaire_id, contact_id, occurrence_date)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_cycles_active_day
+     ON questionnaire_cycles(questionnaire_id, contact_id, occurrence_date)
+     WHERE superseded_at = ''`,
   );
   await run(
     `CREATE UNIQUE INDEX IF NOT EXISTS ux_questionnaire_answers_question
@@ -596,6 +610,7 @@ async function migrate(): Promise<void> {
   await run(
     `ALTER TABLE questionnaire_questions ADD COLUMN IF NOT EXISTS export_field TEXT NOT NULL DEFAULT ''`,
   );
+  await migrateQuestionFixedValue();
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS template_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`);
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS deleted_at TEXT NOT NULL DEFAULT ''`);
@@ -612,6 +627,68 @@ async function migrate(): Promise<void> {
   );
   await backfillQuestionnaireRevisions();
   await ensureQuestionnaireConstraints();
+  await rekeyFormsPartners();
+}
+
+/**
+ * Valor fixado pelo padrão Forms numa pergunta (ex.: produto de “Qtd de ABACATE?”).
+ * Perguntas antigas só tinham isso no texto: preenche uma vez a partir do corpo.
+ */
+async function migrateQuestionFixedValue(): Promise<void> {
+  for (const table of ['questionnaire_questions', 'questionnaire_revision_questions']) {
+    await run(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS fixed_value TEXT NOT NULL DEFAULT ''`);
+    await run(
+      `UPDATE ${table}
+       SET fixed_value = trim(substring(body from '^Qtd de (.+)\\?$'))
+       WHERE export_field = '__lines__' AND fixed_value = '' AND body ~ '^Qtd de .+\\?$'`,
+    );
+    await run(
+      `UPDATE ${table}
+       SET fixed_value = trim(substring(body from '\\(padrão: (.+)\\)\\s*$'))
+       WHERE export_field = '__lines__' AND fixed_value = ''
+         AND body ~ '\\(padrão: .+\\)\\s*$'
+         AND position('produto' in lower(split_part(body, '(padrão:', 1))) = 0`,
+    );
+  }
+}
+
+const PARTNER_KEY_VERSION_SETTING = 'forms_partners_name_key_version';
+const PARTNER_KEY_VERSION = '2';
+
+/** Recalcula name_key (sem acento / U+FFFD) uma vez; mantém a chave antiga se colidir. */
+async function rekeyFormsPartners(): Promise<void> {
+  const current = await one<{ value: string }>('SELECT value FROM settings WHERE key = $1', [
+    PARTNER_KEY_VERSION_SETTING,
+  ]);
+  if (current?.value === PARTNER_KEY_VERSION) return;
+  const rows = await many<{ id: string; name: string; name_key: string; company_odoo_id: string }>(
+    'SELECT id, name, name_key, company_odoo_id FROM forms_partners',
+  );
+  let updated = 0;
+  let conflicts = 0;
+  for (const row of rows) {
+    const key = partnerNameKey(row.name);
+    if (!key || key === row.name_key) continue;
+    const clash = await one<{ id: string }>(
+      `SELECT id FROM forms_partners WHERE company_odoo_id = $1 AND name_key = $2 AND id <> $3 LIMIT 1`,
+      [row.company_odoo_id, key, row.id],
+    );
+    if (clash) {
+      conflicts += 1;
+      console.warn(`forms_partners: "${row.name}" colide com ${clash.id} após normalização — mantido`);
+      continue;
+    }
+    await run('UPDATE forms_partners SET name_key = $2 WHERE id = $1', [row.id, key]);
+    updated += 1;
+  }
+  if (updated || conflicts) {
+    console.log(`forms_partners: name_key normalizado (${updated} atualizados, ${conflicts} conflitos)`);
+  }
+  await run(
+    `INSERT INTO settings(key, value) VALUES($1, $2)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [PARTNER_KEY_VERSION_SETTING, PARTNER_KEY_VERSION],
+  );
 }
 
 async function backfillQuestionnaireRevisions(): Promise<void> {

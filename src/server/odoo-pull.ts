@@ -7,6 +7,8 @@ import {
   syncCompaniesFromOdoo,
 } from './forms-companies.js';
 import { documentTitle, emptyHeader, emptyLine } from './forms-fields.js';
+import { partnerNameKey } from './forms-name-key.js';
+import { fromOdooNumber } from './odoo-number.js';
 import { odooConfigured, odooSearchRead } from './odoo-client.js';
 import { pullOdooRefs } from './forms-odoo-refs.js';
 import { odooLabelPt } from './odoo-pt.js';
@@ -120,7 +122,7 @@ async function upsertPartnerRow(input: {
 }): Promise<void> {
   const clean = input.name.trim();
   if (!clean) return;
-  const key = nameKey(clean);
+  const key = partnerNameKey(clean);
   const companyId = input.companyOdooId || DEFAULT_COMPANY_ODOO_ID;
   const email = String(input.email || '').trim();
   const phone = String(input.phone || '').trim();
@@ -143,71 +145,132 @@ async function upsertPartnerRow(input: {
       [companyId, key],
     ));
   if (existing) {
-    if (input.withDetails) {
-      // Pull completo: espelha ranks do Odoo (não GREATEST — senão nunca remove fornecedor).
+    try {
+      if (input.withDetails) {
+        // Pull completo: espelha ranks do Odoo (não GREATEST — senão nunca remove fornecedor).
+        await run(
+          `UPDATE forms_partners
+           SET name = $2, name_key = $3, is_customer = $4, is_vendor = $5,
+               odoo_id = $6, company_odoo_id = $7,
+               email = $8, phone = $9, vat = $10, street = $11, city = $12, is_company = $13,
+               updated_at = NOW()
+           WHERE id = $1`,
+          [
+            existing.id,
+            clean,
+            key,
+            input.isCustomer ? 1 : 0,
+            input.isVendor ? 1 : 0,
+            String(input.odooId),
+            companyId,
+            email,
+            phone,
+            vat,
+            street,
+            city,
+            isCompany,
+          ],
+        );
+      } else {
+        await run(
+          `UPDATE forms_partners
+           SET name = $2, name_key = $3, is_customer = GREATEST(is_customer, $4),
+               is_vendor = GREATEST(is_vendor, $5), odoo_id = $6, company_odoo_id = $7, updated_at = NOW()
+           WHERE id = $1`,
+          [
+            existing.id,
+            clean,
+            key,
+            input.isCustomer ? 1 : 0,
+            input.isVendor ? 1 : 0,
+            String(input.odooId),
+            companyId,
+          ],
+        );
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!/ux_forms_partners_company_name|duplicate key/i.test(msg)) throw error;
       await run(
         `UPDATE forms_partners
-         SET name = $2, name_key = $3, is_customer = $4, is_vendor = $5,
-             odoo_id = $6, company_odoo_id = $7,
-             email = $8, phone = $9, vat = $10, street = $11, city = $12, is_company = $13,
+         SET is_customer = GREATEST(is_customer, $3), is_vendor = GREATEST(is_vendor, $4),
+             odoo_id = CASE WHEN $5 <> '' AND $5 <> '0' THEN $5 ELSE odoo_id END,
              updated_at = NOW()
-         WHERE id = $1`,
-        [
-          existing.id,
-          clean,
-          key,
-          input.isCustomer ? 1 : 0,
-          input.isVendor ? 1 : 0,
-          String(input.odooId),
-          companyId,
-          email,
-          phone,
-          vat,
-          street,
-          city,
-          isCompany,
-        ],
-      );
-    } else {
-      await run(
-        `UPDATE forms_partners
-         SET name = $2, name_key = $3, is_customer = GREATEST(is_customer, $4),
-             is_vendor = GREATEST(is_vendor, $5), odoo_id = $6, company_odoo_id = $7, updated_at = NOW()
-         WHERE id = $1`,
-        [
-          existing.id,
-          clean,
-          key,
-          input.isCustomer ? 1 : 0,
-          input.isVendor ? 1 : 0,
-          String(input.odooId),
-          companyId,
-        ],
+         WHERE company_odoo_id = $1 AND name_key = $2`,
+        [companyId, key, input.isCustomer ? 1 : 0, input.isVendor ? 1 : 0, String(input.odooId)],
       );
     }
     return;
   }
-  await run(
-    `INSERT INTO forms_partners(
-       id, name, name_key, is_customer, is_vendor, odoo_id, company_odoo_id,
-       email, phone, vat, street, city, is_company, created_at, updated_at
-     ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
-    [
-      randomUUID(),
-      clean,
-      key,
-      input.isCustomer ? 1 : 0,
-      input.isVendor ? 1 : 0,
-      String(input.odooId),
-      companyId,
-      email,
-      phone,
-      vat,
-      street,
-      city,
-      isCompany,
-    ],
-  );
+  try {
+    await run(
+      `INSERT INTO forms_partners(
+         id, name, name_key, is_customer, is_vendor, odoo_id, company_odoo_id,
+         email, phone, vat, street, city, is_company, created_at, updated_at
+       ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+       ON CONFLICT (company_odoo_id, name_key) DO UPDATE SET
+         name = EXCLUDED.name,
+         is_customer = GREATEST(forms_partners.is_customer, EXCLUDED.is_customer),
+         is_vendor = GREATEST(forms_partners.is_vendor, EXCLUDED.is_vendor),
+         odoo_id = CASE
+           WHEN EXCLUDED.odoo_id <> '' AND EXCLUDED.odoo_id <> '0' THEN EXCLUDED.odoo_id
+           ELSE forms_partners.odoo_id
+         END,
+         email = CASE WHEN EXCLUDED.email <> '' THEN EXCLUDED.email ELSE forms_partners.email END,
+         phone = CASE WHEN EXCLUDED.phone <> '' THEN EXCLUDED.phone ELSE forms_partners.phone END,
+         vat = CASE WHEN EXCLUDED.vat <> '' THEN EXCLUDED.vat ELSE forms_partners.vat END,
+         street = CASE WHEN EXCLUDED.street <> '' THEN EXCLUDED.street ELSE forms_partners.street END,
+         city = CASE WHEN EXCLUDED.city <> '' THEN EXCLUDED.city ELSE forms_partners.city END,
+         is_company = GREATEST(forms_partners.is_company, EXCLUDED.is_company),
+         updated_at = NOW()`,
+      [
+        randomUUID(),
+        clean,
+        key,
+        input.isCustomer ? 1 : 0,
+        input.isVendor ? 1 : 0,
+        String(input.odooId),
+        companyId,
+        email,
+        phone,
+        vat,
+        street,
+        city,
+        isCompany,
+      ],
+    );
+  } catch (error) {
+    // Colisão rara (odoo_id vs name_key): atualiza pelo par empresa+nome.
+    const msg = error instanceof Error ? error.message : String(error);
+    if (!/ux_forms_partners_company_name|duplicate key/i.test(msg)) throw error;
+    await run(
+      `UPDATE forms_partners
+       SET name = $3, is_customer = GREATEST(is_customer, $4), is_vendor = GREATEST(is_vendor, $5),
+           odoo_id = CASE WHEN $6 <> '' AND $6 <> '0' THEN $6 ELSE odoo_id END,
+           email = CASE WHEN $7 <> '' THEN $7 ELSE email END,
+           phone = CASE WHEN $8 <> '' THEN $8 ELSE phone END,
+           vat = CASE WHEN $9 <> '' THEN $9 ELSE vat END,
+           street = CASE WHEN $10 <> '' THEN $10 ELSE street END,
+           city = CASE WHEN $11 <> '' THEN $11 ELSE city END,
+           is_company = GREATEST(is_company, $12),
+           updated_at = NOW()
+       WHERE company_odoo_id = $1 AND name_key = $2`,
+      [
+        companyId,
+        key,
+        clean,
+        input.isCustomer ? 1 : 0,
+        input.isVendor ? 1 : 0,
+        String(input.odooId),
+        email,
+        phone,
+        vat,
+        street,
+        city,
+        isCompany,
+      ],
+    );
+  }
 }
 
 async function upsertDoc(input: {
@@ -403,8 +466,8 @@ async function pullProducts(
     const qty = stockMap.get(stockKey);
     const header = emptyHeader('product');
     header.name = name;
-    header.sales_price = String(row.list_price ?? '');
-    header.cost = String(row.standard_price ?? '');
+    header.sales_price = fromOdooNumber(row.list_price);
+    header.cost = fromOdooNumber(row.standard_price);
     header.internal_ref = String(row.default_code || '');
     header.category = odooLabelPt(m2oName(row.categ_id));
     header.uom = odooLabelPt(m2oName(row.uom_id));
@@ -413,7 +476,7 @@ async function pullProducts(
     header.odoo_synced_at = new Date().toISOString();
     header.company_odoo_id = companyId;
     if (qty != null) {
-      header.qty_on_hand = String(qty);
+      header.qty_on_hand = fromOdooNumber(qty);
       stockUpdated += 1;
     }
     await upsertDoc({
@@ -619,8 +682,8 @@ async function pullSales(sinceIso?: string | null): Promise<number> {
     const lines = (linesByOrder.get(order.id) || []).map((line) => {
       const values = emptyLine('sale');
       values.product = m2oName(line.product_id) || String(line.name || '');
-      values.quantity = String(line.product_uom_qty ?? '');
-      values.unit_price = String(line.price_unit ?? '');
+      values.quantity = fromOdooNumber(line.product_uom_qty);
+      values.unit_price = fromOdooNumber(line.price_unit);
       values.taxes = joinNames(m2mIds(line.tax_ids), taxNames);
       return values;
     });
@@ -745,8 +808,8 @@ async function pullPurchases(sinceIso?: string | null): Promise<number> {
     const lines = (linesByOrder.get(order.id) || []).map((line) => {
       const values = emptyLine('purchase');
       values.product = m2oName(line.product_id) || String(line.name || '');
-      values.quantity = String(line.product_qty ?? '');
-      values.unit_price = String(line.price_unit ?? '');
+      values.quantity = fromOdooNumber(line.product_qty);
+      values.unit_price = fromOdooNumber(line.price_unit);
       values.taxes = joinNames(m2mIds(line.taxes_id || line.tax_ids), taxNames);
       return values;
     });
@@ -818,8 +881,8 @@ async function applyStockQtyToExistingDocs(stockMap: Map<string, number>): Promi
     );
     if (!row) continue;
     const header = parseHeader(row.header_json);
-    if (String(header.qty_on_hand || '') === String(qty)) continue;
-    header.qty_on_hand = String(qty);
+    if (String(header.qty_on_hand || '') === fromOdooNumber(qty)) continue;
+    header.qty_on_hand = fromOdooNumber(qty);
     await run(`UPDATE forms_documents SET header_json = $2 WHERE id = $1`, [
       row.id,
       JSON.stringify(header),

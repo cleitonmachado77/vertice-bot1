@@ -2,8 +2,10 @@ import { many } from './db.js';
 import { sqlPartnerVisibleInCompany } from './forms-companies.js';
 import type { FormCatalogRef, FormField, FormKind } from './forms-fields.js';
 import { headerFieldsFor, lineFieldsFor } from './forms-fields.js';
+import { repairCorruptedName } from './forms-name-key.js';
 import { listOdooRefsGrouped } from './forms-odoo-refs.js';
 import { odooLabelPt } from './odoo-pt.js';
+import { isUnusableQuestionnaireAnswer } from './questionnaire-rules.js';
 
 export type MatchCandidate = { value: string; label: string; score: number };
 
@@ -16,14 +18,24 @@ function normalize(value: string): string {
     .trim();
 }
 
-function scoreMatch(query: string, candidate: string): number {
+/** Palavras que sozinhas nunca identificam um parceiro/produto. */
+const GENERIC_QUERY_RE =
+  /^(fornecedor|fornecedores|cliente|clientes|produto|produtos|parceiro|empresa|teste|item|nome|o|a|de)$/;
+
+export function scoreMatch(query: string, candidate: string): number {
   const q = normalize(query);
   const c = normalize(candidate);
   if (!q || !c) return 0;
   if (q === c) return 100;
-  if (c.startsWith(q) || q.startsWith(c)) return 90;
-  if (c.includes(q) || q.includes(c)) return 75;
-  const qTokens = q.split(/\s+/).filter(Boolean);
+  // “fornecedor” sozinho não pode virar “Fornecedor Teste Vertice”.
+  if (GENERIC_QUERY_RE.test(q)) return 0;
+  // Prefixo/substring só com consulta razoavelmente longa (evita “cam” → “MUNICIPIO DE CAMBE”).
+  if (q.length >= 6) {
+    if (c.startsWith(q) || q.startsWith(c)) return 90;
+    if (c.includes(q) || q.includes(c)) return 75;
+  }
+  const qTokens = q.split(/\s+/).filter(Boolean).filter((token) => !GENERIC_QUERY_RE.test(token));
+  if (!qTokens.length) return 0;
   const cTokens = new Set(c.split(/\s+/).filter(Boolean));
   const hit = qTokens.filter((token) => cTokens.has(token)).length;
   if (!hit) return 0;
@@ -75,9 +87,20 @@ async function catalogOptions(
        ORDER BY name ASC`,
       [companyId],
     );
-    return rows
-      .filter((item) => (wantVendor ? Number(item.is_vendor) === 1 : Number(item.is_customer) === 1))
-      .map((item) => ({ value: item.name, label: item.name, score: 0 }));
+    const allNames = rows.map((item) => String(item.name || '').trim());
+    const seen = new Set<string>();
+    const out: MatchCandidate[] = [];
+    for (const item of rows) {
+      if (!(wantVendor ? Number(item.is_vendor) === 1 : Number(item.is_customer) === 1)) continue;
+      // Nome com encoding quebrado (“Associa��o”) → usa o gêmeo íntegro, se existir.
+      const name = repairCorruptedName(String(item.name || '').trim(), allNames);
+      if (name.length < 3 || isUnusableQuestionnaireAnswer(name)) continue;
+      const key = normalize(name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ value: name, label: name, score: 0 });
+    }
+    return out;
   }
   if (field.key === 'product') {
     const rows = await many<{ header_json: string }>(

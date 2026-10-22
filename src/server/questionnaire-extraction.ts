@@ -1,7 +1,12 @@
 import { completeChat } from './agent.js';
 import { normalizeMediaType, type MediaUnderstanding } from './media-understand.js';
 import { isFormsCatalogListAsk } from './forms-bot-catalog-context.js';
-import { foldText, isNonAnswerText } from './questionnaire-rules.js';
+import {
+  foldText,
+  isGreetingOrAck,
+  isNonAnswerText,
+  isUnusableQuestionnaireAnswer,
+} from './questionnaire-rules.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
 import {
   cleanRfqAnswer,
@@ -90,6 +95,7 @@ export function normalizeExtractedAnswers(
     const raw = answer.text.trim();
     const text = question ? cleanAnswerForQuestion(raw, question) : raw;
     if (!text || !validIds.has(answer.questionId) || used.has(answer.questionId)) return [];
+    if (isUnusableQuestionnaireAnswer(text) || isFormsCatalogListAsk(text)) return [];
     used.add(answer.questionId);
     return [{ ...answer, text }];
   });
@@ -184,11 +190,13 @@ export function heuristicExtractAnswers(
 ): ExtractedAnswer[] {
   const text = String(message || '').trim();
   if (!text || isNonAnswerText(text) || !missing.length) return [];
-  // Pedido de lista/opções nunca é resposta de preenchimento.
-  if (isFormsCatalogListAsk(text)) return [];
+  // Pedido de lista/opções / saudação nunca é resposta de preenchimento.
+  if (isFormsCatalogListAsk(text) || isGreetingOrAck(text)) return [];
 
   if (missing.length === 1) {
     const only = missing[0];
+    // Linhas do Forms Bot (__lines__/__lines_more__) só via tryFormsLinesCapture / LLM.
+    if (isFormsBotInternalField(only)) return [];
     const field = detectRfqFieldFromQuestion(only);
     if (!fieldAllowsHeuristicText(field, text)) return [];
     return [
@@ -203,6 +211,7 @@ export function heuristicExtractAnswers(
   const results: ExtractedAnswer[] = [];
   const usedFields = new Set<RfqFieldKey>();
   for (const question of missing) {
+    if (isFormsBotInternalField(question)) continue;
     const field = detectRfqFieldFromQuestion(question);
     if (!field || usedFields.has(field)) continue;
     if (!messageLooksLikeField(text, field)) continue;
@@ -228,6 +237,10 @@ export function heuristicExtractAnswers(
     results.push({ questionId: question.id, text: cleaned, type: 'text' });
   }
   return results;
+}
+
+function isFormsBotInternalField(question: Pick<QuestionnaireQuestion, 'export_field'>): boolean {
+  return String(question.export_field || '').trim().startsWith('__');
 }
 
 function fieldAllowsHeuristicText(field: RfqFieldKey | '', text: string): boolean {

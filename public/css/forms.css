@@ -516,9 +516,17 @@ body > .forms-combo-menu {
   font-size: 0.92rem;
 }
 
-.forms-list-item span {
+.forms-list-item span,
+.forms-list-item-sub {
   color: var(--muted);
   font-size: 0.78rem;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  width: 100%;
+  line-height: 1.25;
+  word-break: break-word;
 }
 
 .forms-editor-head {
