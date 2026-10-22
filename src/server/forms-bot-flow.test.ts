@@ -133,6 +133,41 @@ test('só a quantidade para o produto fixo do padrão', async () => {
   assert.deepEqual(plan.extra, [{ product: 'mandioca', quantity: '12' }]);
 });
 
+test('número do fornecedor e linhas na mesma mensagem', async () => {
+  const answers = await runConversation([
+    { inbound: '3, 100 kg de manga e 20 de mandioca', pendingQuestionId: 'v' },
+    { inbound: 'nao', pendingQuestionId: 'm' },
+  ]);
+  assert.equal(answerFor(answers, 'v'), 'Marcio Luiz Pietsrzak');
+  assert.ok(isFullyAnswered(questions, answers));
+
+  const plan = planBotLines({
+    kind: 'purchase',
+    presetLines,
+    visibleLineKeys: ['quantity'],
+    linesAnswer: answerFor(answers, 'l'),
+    moreAnswer: answerFor(answers, 'm'),
+  });
+  // Nenhum item é o abacate fixo: ninguém herda o preço de 15.5.
+  assert.deepEqual(plan.primary, [
+    { taxes: '17% ICMS I', product: 'manga', quantity: '100' },
+    { taxes: '17% ICMS I', product: 'mandioca', quantity: '20' },
+  ]);
+});
+
+test('“4,5 kg de manga” é quantidade decimal, não fornecedor 4', async () => {
+  const captured = await tryFormsBotCapture({
+    inbound: '4,5 kg de manga',
+    questionnaire,
+    questions,
+    alreadySaved: [],
+    history: [{ direction: 'OUTBOUND', text: invite }],
+    pendingQuestionId: 'v',
+  });
+  assert.equal(captured?.kind, 'answers');
+  assert.ok(captured?.kind === 'answers' && captured.accepted.every((item) => item.questionId !== 'v'));
+});
+
 test('pergunta de linhas com produto fixo não mostra o catálogo de produtos', async () => {
   const prompt = await buildFormsBotGuidedPrompt({ questionnaire, questions: questions.slice(1) });
   assert.equal(prompt, 'Qtd de ABACATE - KG?\n\nDepois: Mais produtos? (produto + qtd, ou “não”).');

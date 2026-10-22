@@ -192,6 +192,8 @@ export async function tryFormsBotCapture(input: {
       detail: 'catálogo Forms por número',
     };
   }
+  const combined = await tryLeadingIndexWithLines({ ...input, pendingQuestionId });
+  if (combined) return combined;
   if (forceCatalogIndex) {
     const again = await buildFormsBotGuidedPrompt({
       questionnaire: input.questionnaire,
@@ -224,6 +226,55 @@ export async function tryFormsBotCapture(input: {
     accepted: linesCapture,
     summary,
     detail: 'linhas Forms (atalho)',
+  };
+}
+
+// “4, 100 kg de manga…” / “4 - 100 kg…”. Vírgula só com espaço depois, para não pegar “4,5 kg”.
+const LEADING_INDEX_RE = /^\s*(\d{1,3})\s*(?:[;\-–—]|,(?=\s))\s*(\S[\s\S]*)$/u;
+
+/** Número da lista + linhas na mesma mensagem: grava a opção do catálogo e as linhas. */
+async function tryLeadingIndexWithLines(input: {
+  inbound: string;
+  questionnaire: Questionnaire;
+  questions: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+  history: { direction: string; text: string }[];
+  pendingQuestionId: string;
+}): Promise<FormsBotCapture | null> {
+  const lead = LEADING_INDEX_RE.exec(input.inbound);
+  if (!lead) return null;
+  const rest = lead[2];
+  if (!parseQtyProductChunks(rest).length) return null;
+  const catalogIndex = await tryResolveCatalogIndexAnswer({
+    inbound: lead[1],
+    questionnaire: input.questionnaire,
+    history: input.history,
+    alreadySaved: input.alreadySaved,
+    pendingQuestionId: input.pendingQuestionId,
+  });
+  if (!catalogIndex) return null;
+  const withIndex: CycleAnswer[] = [
+    ...input.alreadySaved,
+    {
+      id: catalogIndex.questionId,
+      cycle_id: '',
+      question_id: catalogIndex.questionId,
+      answer_text: catalogIndex.value,
+      answer_type: 'text',
+      media_url: '',
+    },
+  ];
+  // O número já respondeu a pergunta pendente; o restante é avaliado como linhas.
+  const lines = tryFormsLinesCapture({ inbound: rest, questions: input.questions, alreadySaved: withIndex });
+  if (!lines?.length) return null;
+  return {
+    kind: 'answers',
+    accepted: [{ questionId: catalogIndex.questionId, text: catalogIndex.value, type: 'text' }, ...lines],
+    summary: [
+      catalogIndex.value,
+      ...lines.filter((item) => !isLinesMoreDoneAnswer(item.text)).map((item) => describeLinesAnswer(item.text)),
+    ].join('; '),
+    detail: 'catálogo Forms por número + linhas',
   };
 }
 

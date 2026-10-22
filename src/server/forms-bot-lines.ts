@@ -45,8 +45,11 @@ export function planBotLines(input: {
           : withoutProductSpecific(baseLines[baseLines.length - 1]?.values || {});
       // “50 kg de abacate” para o produto fixo “ABACATE - KG”: mantém o produto do padrão
       // (senão o catálogo pode escolher outro abacate).
-      if (productFixed && base.product && row.product && sameProduct(row.product, base.product)) {
-        return { ...base, ...row, product: base.product };
+      if (productFixed && base.product && row.product) {
+        // Outro produto no lugar do fixo (“manga” para “Qtd de ABACATE?”): não herda o preço do abacate.
+        return sameProduct(row.product, base.product)
+          ? { ...base, ...row, product: base.product }
+          : { ...withoutProductSpecific(base), ...row };
       }
       return { ...base, ...row };
     });
