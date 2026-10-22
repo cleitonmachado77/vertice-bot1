@@ -19,7 +19,7 @@ const botRoutes = {
   overview: { title: 'Visão geral', render: renderOverview },
   inbox: { title: 'Inbox', render: renderInbox },
   contacts: { title: 'Contatos', render: renderContacts },
-  questionnaires: { title: 'Questionários', render: renderQuestionnaires },
+  questionnaires: { title: 'Análise', render: renderQuestionnaires },
   settings: { title: 'Configurações', render: renderSettings },
 };
 

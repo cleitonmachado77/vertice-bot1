@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { env } from './env.js';
 import { many, one, run } from './db.js';
+import { normalizeWhatsappPhone } from './phone.js';
 
 export type UserRole = 'adm' | 'user';
 
@@ -10,6 +11,7 @@ export type PanelUser = {
   name: string;
   role: UserRole;
   company_odoo_id: string;
+  whatsapp_phone: string;
   active: number;
   created_at: string;
   updated_at: string;
@@ -21,6 +23,7 @@ export type PublicUser = {
   name: string;
   role: UserRole;
   companyOdooId: string;
+  whatsappPhone: string;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -32,6 +35,7 @@ export type CreateUserInput = {
   password: string;
   role: UserRole;
   companyOdooId?: string;
+  whatsappPhone?: string;
 };
 
 export type UpdateUserInput = {
@@ -40,6 +44,7 @@ export type UpdateUserInput = {
   password?: string;
   role?: UserRole;
   companyOdooId?: string;
+  whatsappPhone?: string;
   active?: boolean;
 };
 
@@ -75,10 +80,17 @@ export function toPublicUser(row: PanelUser): PublicUser {
     name: row.name,
     role: normalizeRole(row.role),
     companyOdooId: row.company_odoo_id || '',
+    whatsappPhone: row.whatsapp_phone || '',
     active: Number(row.active) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function normalizeUserPhone(raw: string | undefined): string {
+  const value = String(raw ?? '').trim();
+  if (!value) return '';
+  return normalizeWhatsappPhone(value);
 }
 
 export function isAdm(user: Pick<PublicUser, 'role'> | null | undefined): boolean {
@@ -97,7 +109,8 @@ export async function countUsers(): Promise<number> {
 
 export async function listUsers(): Promise<PublicUser[]> {
   const rows = await many<PanelUser>(
-    `SELECT id, email, name, role, company_odoo_id, active, created_at, updated_at
+    `SELECT id, email, name, role, company_odoo_id, COALESCE(whatsapp_phone, '') AS whatsapp_phone,
+            active, created_at, updated_at
      FROM panel_users
      ORDER BY role ASC, name ASC, email ASC`,
   );
@@ -106,7 +119,8 @@ export async function listUsers(): Promise<PublicUser[]> {
 
 export async function getUserById(id: string): Promise<PanelUser | undefined> {
   return one<PanelUser>(
-    `SELECT id, email, name, role, company_odoo_id, active, created_at, updated_at
+    `SELECT id, email, name, role, company_odoo_id, COALESCE(whatsapp_phone, '') AS whatsapp_phone,
+            active, created_at, updated_at
      FROM panel_users WHERE id = $1`,
     [id],
   );
@@ -114,7 +128,8 @@ export async function getUserById(id: string): Promise<PanelUser | undefined> {
 
 export async function getUserByEmail(email: string): Promise<(PanelUser & { password_hash: string }) | undefined> {
   return one<PanelUser & { password_hash: string }>(
-    `SELECT id, email, name, role, company_odoo_id, active, created_at, updated_at, password_hash
+    `SELECT id, email, name, role, company_odoo_id, COALESCE(whatsapp_phone, '') AS whatsapp_phone,
+            active, created_at, updated_at, password_hash
      FROM panel_users WHERE email = $1`,
     [normalizeEmail(email)],
   );
@@ -153,10 +168,11 @@ export async function createUser(input: CreateUserInput): Promise<PublicUser> {
   if (existing) throw new Error('Já existe um usuário com este e-mail');
   const now = new Date().toISOString();
   const id = randomUUID();
+  const whatsappPhone = normalizeUserPhone(input.whatsappPhone);
   await run(
-    `INSERT INTO panel_users(id, email, name, password_hash, role, company_odoo_id, active, created_at, updated_at)
-     VALUES($1, $2, $3, $4, $5, $6, 1, $7, $7)`,
-    [id, shape.email, shape.name, hashPassword(input.password), shape.role, shape.companyOdooId, now],
+    `INSERT INTO panel_users(id, email, name, password_hash, role, company_odoo_id, whatsapp_phone, active, created_at, updated_at)
+     VALUES($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)`,
+    [id, shape.email, shape.name, hashPassword(input.password), shape.role, shape.companyOdooId, whatsappPhone, now],
   );
   const row = await getUserById(id);
   if (!row) throw new Error('Falha ao criar usuário');
@@ -191,12 +207,27 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Pu
   }
 
   const passwordHash = input.password ? hashPassword(input.password) : await getPasswordHash(id);
+  const whatsappPhone =
+    input.whatsappPhone !== undefined
+      ? normalizeUserPhone(input.whatsappPhone)
+      : current.whatsapp_phone || '';
   const now = new Date().toISOString();
   await run(
     `UPDATE panel_users
-     SET email = $2, name = $3, password_hash = $4, role = $5, company_odoo_id = $6, active = $7, updated_at = $8
+     SET email = $2, name = $3, password_hash = $4, role = $5, company_odoo_id = $6,
+         whatsapp_phone = $7, active = $8, updated_at = $9
      WHERE id = $1`,
-    [id, shape.email, shape.name, passwordHash, shape.role, shape.companyOdooId, active ? 1 : 0, now],
+    [
+      id,
+      shape.email,
+      shape.name,
+      passwordHash,
+      shape.role,
+      shape.companyOdooId,
+      whatsappPhone,
+      active ? 1 : 0,
+      now,
+    ],
   );
   const row = await getUserById(id);
   if (!row) throw new Error('Usuário não encontrado');

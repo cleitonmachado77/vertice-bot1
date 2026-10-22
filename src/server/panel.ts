@@ -37,6 +37,7 @@ import {
   ensureBootstrapAdmin,
   getUserByEmail,
   listUsers,
+  toPublicUser,
   updateUser,
   type UserRole,
 } from './users.js';
@@ -89,18 +90,7 @@ export function registerPanelRoutes(): void {
     if (!user && !email && passwordOk(password)) {
       const adminEmail = text(env('PANEL_ADMIN_EMAIL', 'admin@vertice.local')).toLowerCase();
       const existing = await getUserByEmail(adminEmail);
-      user = existing
-        ? {
-            id: existing.id,
-            email: existing.email,
-            name: existing.name,
-            role: existing.role === 'user' ? 'user' : 'adm',
-            companyOdooId: existing.company_odoo_id || '',
-            active: Number(existing.active) === 1,
-            createdAt: existing.created_at,
-            updatedAt: existing.updated_at,
-          }
-        : null;
+      user = existing ? toPublicUser(existing) : null;
     }
 
     if (!user) {
@@ -131,6 +121,32 @@ export function registerPanelRoutes(): void {
     json(ctx.res, 200, mePayload(user));
   });
 
+  route('PUT', '/api/me', async (ctx) => {
+    const user = await requireAuth(ctx);
+    if (!user) return;
+    if (user.id === 'legacy') {
+      json(ctx.res, 400, { error: 'Faça login com um usuário para salvar o WhatsApp' });
+      return;
+    }
+    try {
+      const input = body(ctx);
+      const patch: Parameters<typeof updateUser>[1] = {};
+      if (typeof input.whatsappPhone === 'string' || typeof input.phone === 'string') {
+        patch.whatsappPhone = text(input.whatsappPhone || input.phone);
+      }
+      if (typeof input.name === 'string' && input.name.trim()) patch.name = input.name;
+      if (!Object.keys(patch).length) {
+        json(ctx.res, 400, { error: 'Nada para atualizar' });
+        return;
+      }
+      const updated = await updateUser(user.id, patch);
+      json(ctx.res, 200, { ok: true, ...mePayload(updated) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao atualizar perfil';
+      json(ctx.res, 400, { error: message });
+    }
+  });
+
   route('GET', '/api/users', async (ctx) => {
     if (!(await requireAdm(ctx))) return;
     const [items, companies] = await Promise.all([listUsers(), listCompanies()]);
@@ -148,6 +164,7 @@ export function registerPanelRoutes(): void {
         password: text(input.password),
         role,
         companyOdooId: text(input.companyOdooId || input.companyId),
+        whatsappPhone: text(input.whatsappPhone || input.phone),
       });
       json(ctx.res, 200, { item: user });
     } catch (error) {
@@ -167,6 +184,9 @@ export function registerPanelRoutes(): void {
       if (typeof input.role === 'string') patch.role = input.role === 'adm' ? 'adm' : 'user';
       if (typeof input.companyOdooId === 'string' || typeof input.companyId === 'string') {
         patch.companyOdooId = text(input.companyOdooId || input.companyId);
+      }
+      if (typeof input.whatsappPhone === 'string' || typeof input.phone === 'string') {
+        patch.whatsappPhone = text(input.whatsappPhone || input.phone);
       }
       if (typeof input.active === 'boolean') patch.active = input.active;
       const user = await updateUser(ctx.params.id, patch);

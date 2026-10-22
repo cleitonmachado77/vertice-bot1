@@ -527,6 +527,12 @@ export function registerFormsRoutes(): void {
                 })
               : undefined,
             visible: asPresetVisible(raw.visible),
+            bot_enabled: raw.bot_enabled != null ? Boolean(raw.bot_enabled) : undefined,
+            bot_frequency: raw.bot_frequency != null ? text(raw.bot_frequency) : undefined,
+            bot_weekday: raw.bot_weekday != null ? Number(raw.bot_weekday) : undefined,
+            bot_send_time: raw.bot_send_time != null ? text(raw.bot_send_time) : undefined,
+            bot_template_id: raw.bot_template_id != null ? text(raw.bot_template_id) : undefined,
+            bot_contact_id: raw.bot_contact_id != null ? text(raw.bot_contact_id) : undefined,
             sort_order: raw.sort_order != null ? Number(raw.sort_order) : undefined,
           }),
         },
@@ -556,10 +562,39 @@ export function registerFormsRoutes(): void {
                 })
               : undefined,
             visible: raw.visible !== undefined ? asPresetVisible(raw.visible) : undefined,
+            bot_enabled: raw.bot_enabled != null ? Boolean(raw.bot_enabled) : undefined,
+            bot_frequency: raw.bot_frequency != null ? text(raw.bot_frequency) : undefined,
+            bot_weekday: raw.bot_weekday != null ? Number(raw.bot_weekday) : undefined,
+            bot_send_time: raw.bot_send_time != null ? text(raw.bot_send_time) : undefined,
+            bot_template_id: raw.bot_template_id != null ? text(raw.bot_template_id) : undefined,
+            bot_contact_id: raw.bot_contact_id != null ? text(raw.bot_contact_id) : undefined,
             sort_order: raw.sort_order != null ? Number(raw.sort_order) : undefined,
           }),
         },
       );
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('GET', '/api/forms/presets/:id/bot-activity', async (ctx) => {
+    if (!(await requireUser(ctx))) return;
+    try {
+      const { listFormsBotPresetActivity } = await import('./forms-bot.js');
+      json(ctx.res, 200, await listFormsBotPresetActivity(ctx.params.id));
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('POST', '/api/forms/presets/:id/bot-send', async (ctx) => {
+    if (!(await requireUser(ctx))) return;
+    try {
+      const { sendFormsBotPresetNow } = await import('./forms-bot.js');
+      const result = await sendFormsBotPresetNow({
+        presetId: ctx.params.id,
+      });
+      json(ctx.res, 200, { ok: true, ...result });
     } catch (error) {
       fail(ctx, error);
     }

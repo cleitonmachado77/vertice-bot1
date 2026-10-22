@@ -58,6 +58,11 @@ export function renderUsersSection(pack) {
             ${companyOptionsHtml(companies)}
           </select>
         </div>
+        <div>
+          <label>WhatsApp (Vertice Bot)</label>
+          <input name="whatsappPhone" id="user-whatsapp" type="tel" placeholder="ex.: 11999998888" />
+          <p class="muted" style="margin:6px 0 0">Número que recebe as perguntas dos Padrões Forms com Bot ativo.</p>
+        </div>
         <div class="row" id="user-form-actions">
           <button class="btn" type="submit" id="user-submit">Criar usuário</button>
           <button class="btn-ghost" type="button" id="user-cancel" hidden>Cancelar</button>
@@ -72,6 +77,7 @@ export function renderUsersSection(pack) {
               <th>E-mail</th>
               <th>Perfil</th>
               <th>Empresa</th>
+              <th>WhatsApp</th>
               <th>Status</th>
               <th></th>
             </tr>
@@ -90,6 +96,7 @@ export function renderUsersSection(pack) {
                 <td>${escapeHtml(item.email)}</td>
                 <td><span class="role-pill role-pill--${escapeHtml(item.role)}">${roleLabel(item.role)}</span></td>
                 <td>${escapeHtml(company)}</td>
+                <td>${escapeHtml(item.whatsappPhone || '—')}</td>
                 <td>${item.active ? 'Ativo' : 'Inativo'}</td>
                 <td class="users-actions">
                   <button class="btn-ghost" type="button" data-edit-user>Editar</button>
@@ -99,7 +106,7 @@ export function renderUsersSection(pack) {
               </tr>`;
                     })
                     .join('')
-                : '<tr><td colspan="6" class="muted">Nenhum usuário cadastrado.</td></tr>'
+                : '<tr><td colspan="7" class="muted">Nenhum usuário cadastrado.</td></tr>'
             }
           </tbody>
         </table>
@@ -128,6 +135,8 @@ function setCreateMode(root, companies) {
   root.querySelector('#user-cancel').hidden = true;
   root.querySelector('#user-company').innerHTML =
     `<option value="">Selecione a empresa</option>${companyOptionsHtml(companies)}`;
+  const phone = root.querySelector('#user-whatsapp');
+  if (phone) phone.value = '';
   syncCompanyVisibility(root);
 }
 
@@ -146,6 +155,8 @@ function setEditMode(root, user, companies) {
   root.querySelector('#user-cancel').hidden = false;
   root.querySelector('#user-company').innerHTML =
     `<option value="">Selecione a empresa</option>${companyOptionsHtml(companies, user.companyOdooId || '')}`;
+  const phone = root.querySelector('#user-whatsapp');
+  if (phone) phone.value = user.whatsappPhone || '';
   syncCompanyVisibility(root);
   root.querySelector('#user-form')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -170,6 +181,7 @@ export function bindUsersSection(root, reload, pack = null) {
       email: String(form.get('email') || ''),
       role,
       companyOdooId: role === 'adm' ? '' : String(form.get('companyOdooId') || ''),
+      whatsappPhone: String(form.get('whatsappPhone') || ''),
     };
     if (password) body.password = password;
 

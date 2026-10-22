@@ -82,10 +82,167 @@
   justify-content: flex-end;
 }
 
+.forms-badge--bot {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #1f6b4a;
+  background: rgba(31, 107, 74, 0.12);
+}
+
+.forms-preset-bot {
+  margin: 0;
+  font-weight: 600;
+}
+
+.forms-bot-panel {
+  --wa-green: #25d366;
+  --wa-teal: #128c7e;
+  --wa-mist: rgba(37, 211, 102, 0.08);
+  --wa-line: rgba(18, 140, 126, 0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--wa-line);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, var(--wa-mist), transparent 55%),
+    linear-gradient(180deg, rgba(18, 140, 126, 0.04), transparent 70%),
+    var(--card, #fff);
+  box-shadow: inset 3px 0 0 0 var(--wa-green);
+}
+
+.forms-bot-panel .forms-preset-bot {
+  color: var(--wa-teal);
+}
+
+.forms-bot-panel .forms-bot-activity {
+  border-top-color: var(--wa-line);
+}
+
+.forms-bot-panel .forms-bot-activity-list li {
+  border-color: var(--wa-line);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.forms-bot-schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.forms-bot-schedule .grid-2 {
+  gap: 10px;
+}
+
+.forms-bot-schedule label {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.forms-bot-template-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  max-height: 72px;
+  overflow: auto;
+}
+
+.forms-bot-contact-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.forms-bot-new-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--wa-line, rgba(18, 140, 126, 0.28));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.forms-bot-new-contact .btn {
+  align-self: flex-start;
+}
+
+.forms-bot-send-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.forms-bot-send-row .muted {
+  flex: 1 1 200px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.forms-bot-send-row .btn {
+  flex: 0 0 auto;
+}
+
+.forms-bot-activity {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border, #e5e7eb);
+}
+
+.forms-bot-activity-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.forms-bot-activity-title {
+  display: block;
+  font-size: 0.82rem;
+  margin-bottom: 6px;
+}
+
+.forms-bot-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.forms-bot-activity-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--card, #fff);
+  font-size: 0.82rem;
+}
+
+.forms-bot-activity-meta {
+  color: var(--muted, #6b7280);
+  font-size: 0.75rem;
+}
+
+@media (max-width: 720px) {
+  .forms-bot-activity-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
 .forms-preset-btn {
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

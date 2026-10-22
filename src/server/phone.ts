@@ -51,3 +51,14 @@ export function looksLikePhoneName(value: string): boolean {
   const digits = phoneDigits(trimmed);
   return digits.length >= 8 && digits.length >= trimmed.replace(/\s/g, '').length * 0.7;
 }
+
+/** Normaliza WhatsApp BR para dígitos com DDI 55 (ex.: 5511999998888). */
+export function normalizeWhatsappPhone(value: string): string {
+  const digits = phoneDigits(value);
+  if (!digits) return '';
+  if (digits.length < 10) throw new Error('Informe um WhatsApp válido com DDD');
+  if (digits.startsWith('55') && digits.length >= 12) return digits;
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  if (digits.length >= 12) return digits;
+  throw new Error('Informe um WhatsApp válido com DDD');
+}

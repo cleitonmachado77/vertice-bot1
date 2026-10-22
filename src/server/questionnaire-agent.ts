@@ -53,6 +53,14 @@ import {
   pendingPreviousDaysNotice,
   type ConversationHints,
 } from './conversation-context.js';
+import { FORMS_BOT_LINES_FIELD } from './forms-bot-fields.js';
+import {
+  buildFormsCatalogBrief,
+  isFormsCatalogListAsk,
+  tryFormsCatalogListReply,
+} from './forms-bot-catalog-context.js';
+import { resolveCatalogValue } from './forms-bot-match.js';
+import { isFormKind } from './forms-fields.js';
 
 export type QuestionnaireDraft = {
   text: string;
@@ -81,6 +89,24 @@ export async function draftQuestionnaireReply(input: {
   hints?: ConversationHints;
 }): Promise<QuestionnaireDraft> {
   const fallback = getSetting('agent_fallback');
+  const questions = input.context.questionnaire.questions;
+  let alreadySaved = input.context.answers;
+  const amending = input.context.cycle.status === 'completed';
+
+  // Catálogo Forms: responde sem depender do LLM / chave do agente.
+  const catalogListReply = await tryFormsCatalogListReply({
+    inbound: input.inbound,
+    questionnaire: input.context.questionnaire,
+  });
+  if (catalogListReply) {
+    return {
+      text: catalogListReply,
+      source: 'fallback',
+      detail: 'listagem de catálogo Forms',
+      completed: amending,
+    };
+  }
+
   if (getSetting('agent_active') !== '1') {
     throw new QuestionnaireTemporarilyUnavailableError('Agente de questionário desligado');
   }
@@ -93,10 +119,7 @@ export async function draftQuestionnaireReply(input: {
     text: input.inbound,
     mediaUrl: input.mediaUrl,
   });
-  const questions = input.context.questionnaire.questions;
-  let alreadySaved = input.context.answers;
 
-  const amending = input.context.cycle.status === 'completed';
   const sendTime = input.context.questionnaire.send_time || '';
   const today = input.today || input.context.cycle.occurrence_date;
   const cycleDate = input.context.cycle.occurrence_date;
@@ -135,7 +158,6 @@ export async function draftQuestionnaireReply(input: {
 
   let seededFromHeuristic = false;
 
-  // Atalhos rápidos (não substituem o julgamento por contexto no LLM).
   if (input.listQuestionsOnly || looksLikeQuestionnaireMeta(input.inbound)) {
     const lines = questions.map((item, index) => `${index + 1}) ${item.body}`);
     const savedList = formatAnswers(questions, alreadySaved);
@@ -189,6 +211,8 @@ export async function draftQuestionnaireReply(input: {
         accepted: capture.accepted,
         media,
         mediaUrl: input.mediaUrl,
+        formKind: input.context.questionnaire.formKind,
+        companyOdooId: input.context.questionnaire.companyOdooId,
       });
       return {
         text: capture.reply.slice(0, 1500),
@@ -205,6 +229,8 @@ export async function draftQuestionnaireReply(input: {
         accepted: capture.accepted,
         media,
         mediaUrl: input.mediaUrl,
+        formKind: input.context.questionnaire.formKind,
+        companyOdooId: input.context.questionnaire.companyOdooId,
       });
       alreadySaved = persisted.answers;
       seededFromHeuristic = true;
@@ -248,6 +274,8 @@ export async function draftQuestionnaireReply(input: {
         accepted: capture.accepted,
         media,
         mediaUrl: input.mediaUrl,
+        formKind: input.context.questionnaire.formKind,
+        companyOdooId: input.context.questionnaire.companyOdooId,
       });
       return {
         text: capture.reply.slice(0, 1500),
@@ -265,6 +293,8 @@ export async function draftQuestionnaireReply(input: {
         accepted: capture.accepted,
         media,
         mediaUrl: input.mediaUrl,
+        formKind: input.context.questionnaire.formKind,
+        companyOdooId: input.context.questionnaire.companyOdooId,
       });
       alreadySaved = persisted.answers;
       seededFromHeuristic = true;
@@ -280,6 +310,7 @@ export async function draftQuestionnaireReply(input: {
     const fieldHint = field ? ` campo=${field};` : '';
     return `${index + 1}. [${item.id}]${fieldHint} ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`;
   });
+  const formsCatalogBrief = await buildFormsCatalogBrief(input.context.questionnaire);
 
   const system = [
     'Você é um atendente humano da Vértice acompanhando um questionário no WhatsApp.',
@@ -315,6 +346,7 @@ export async function draftQuestionnaireReply(input: {
     '',
     'Exemplos de cenários (decida caso a caso pelo contexto):',
     '- Pedir para lembrar/listar as perguntas → related:true e liste na reply (numeradas).',
+    '- Pedir lista/opções de fornecedor, cliente, produto ou catálogo Forms → related:true, answers:[], complete:false, e liste na reply os itens do bloco Catálogo Forms (numerados). Nunca diga que não tem acesso. Nunca trate pedido de lista como resposta preenchida.',
     '- Conteúdo que responde às perguntas (direto ou por paráfrase) → related:true e preencha answers com o questionId certo.',
     '- Confirmar que quer continuar (ok, sim, pode, certo após convite) → related:true e apresente o questionário completo, numerado. NÃO use related:false só porque a mensagem é curta.',
     '- Pedir só uma pergunta (“qual é a terceira?”) → responda só essa, com o texto da pergunta.',
@@ -339,6 +371,7 @@ export async function draftQuestionnaireReply(input: {
     '- Não invente respostas. Não mencione que você é um modelo.',
     '',
     input.contextBrief ? `Contexto da conversa (histórico + ciclos):\n${input.contextBrief}` : '',
+    formsCatalogBrief,
     '',
     `Questionário: ${input.context.questionnaire.name}`,
     `Contato: ${input.contactName || 'não informado'}`,
@@ -375,6 +408,22 @@ export async function draftQuestionnaireReply(input: {
       maxTokens: 220,
     });
     const extracted = parseExtracted(raw, media);
+
+    // Pedido de lista: nunca gravar como resposta (modelo às vezes “completa” o ciclo).
+    if (isFormsCatalogListAsk(input.inbound)) {
+      const listReply = await tryFormsCatalogListReply({
+        inbound: input.inbound,
+        questionnaire: input.context.questionnaire,
+      });
+      if (listReply) {
+        return {
+          text: listReply,
+          source: 'fallback',
+          detail: 'listagem de catálogo Forms (pós-modelo)',
+          completed: amending,
+        };
+      }
+    }
 
     if (!extracted.related && extracted.answers.length === 0 && !seededFromHeuristic) {
       // Fallback leve: confirmação após convite → apresenta perguntas (modelo decide o resto).
@@ -469,6 +518,8 @@ export async function draftQuestionnaireReply(input: {
       accepted,
       media,
       mediaUrl: input.mediaUrl,
+      formKind: input.context.questionnaire.formKind,
+      companyOdooId: input.context.questionnaire.companyOdooId,
     });
     const { answers, missing, complete } = persisted;
 
@@ -570,6 +621,35 @@ function mergeAnswersForCheck(
   return [...byId.values()];
 }
 
+async function expandFormsCatalogAnswers(input: {
+  questions: QuestionnaireQuestion[];
+  accepted: ExtractedAnswer[];
+  formKind?: string;
+  companyOdooId?: string;
+}): Promise<ExtractedAnswer[]> {
+  const kindRaw = String(input.formKind || '').trim();
+  if (!isFormKind(kindRaw) || !input.accepted.length) return input.accepted;
+  const companyOdooId = String(input.companyOdooId || '').trim() || '1';
+  const byId = new Map(input.questions.map((item) => [item.id, item]));
+  const out: ExtractedAnswer[] = [];
+  for (const item of input.accepted) {
+    const question = byId.get(item.questionId);
+    const field = String(question?.export_field || '').trim();
+    if (!field || field === FORMS_BOT_LINES_FIELD) {
+      out.push(item);
+      continue;
+    }
+    const resolved = await resolveCatalogValue({
+      kind: kindRaw,
+      fieldKey: field,
+      raw: item.text,
+      companyOdooId,
+    });
+    out.push({ ...item, text: resolved.value || item.text });
+  }
+  return out;
+}
+
 async function persistAcceptedAnswers(input: {
   cycleId: string;
   questions: QuestionnaireQuestion[];
@@ -577,12 +657,20 @@ async function persistAcceptedAnswers(input: {
   accepted: ExtractedAnswer[];
   media: MediaUnderstanding;
   mediaUrl: string;
+  formKind?: string;
+  companyOdooId?: string;
 }): Promise<{ answers: CycleAnswer[]; missing: QuestionnaireQuestion[]; complete: boolean }> {
   return withTransaction(async () => {
-    const answers = input.accepted.length
+    const accepted = await expandFormsCatalogAnswers({
+      questions: input.questions,
+      accepted: input.accepted,
+      formKind: input.formKind,
+      companyOdooId: input.companyOdooId,
+    });
+    const answers = accepted.length
       ? await upsertAnswers(
           input.cycleId,
-          input.accepted.map((item) => ({
+          accepted.map((item) => ({
             questionId: item.questionId,
             text: item.text,
             type: item.type,
@@ -601,7 +689,7 @@ async function persistAcceptedAnswers(input: {
     await syncCycleProgress(
       input.cycleId,
       complete,
-      input.accepted.length > 0 || input.alreadySaved.length > 0,
+      accepted.length > 0 || input.alreadySaved.length > 0,
     );
     return { answers, missing, complete };
   });

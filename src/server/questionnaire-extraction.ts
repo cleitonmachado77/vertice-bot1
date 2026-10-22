@@ -1,5 +1,6 @@
 import { completeChat } from './agent.js';
 import { normalizeMediaType, type MediaUnderstanding } from './media-understand.js';
+import { isFormsCatalogListAsk } from './forms-bot-catalog-context.js';
 import { foldText, isNonAnswerText } from './questionnaire-rules.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
 import {
@@ -183,6 +184,8 @@ export function heuristicExtractAnswers(
 ): ExtractedAnswer[] {
   const text = String(message || '').trim();
   if (!text || isNonAnswerText(text) || !missing.length) return [];
+  // Pedido de lista/opções nunca é resposta de preenchimento.
+  if (isFormsCatalogListAsk(text)) return [];
 
   if (missing.length === 1) {
     const only = missing[0];
@@ -257,7 +260,12 @@ function fieldAllowsHeuristicText(field: RfqFieldKey | '', text: string): boolea
     if (messageLooksLikeField(text, 'quantity') || messageLooksLikeField(text, 'unit_price')) {
       return false;
     }
-    return !/\?\s*$/.test(text.trim()) && /\p{L}{2,}/u.test(text);
+    if (isFormsCatalogListAsk(text)) return false;
+    // Pergunta (“quais…?”, “qual fornecedor…”) não é nome de fornecedor.
+    if (/\b(quais?|lista|opcoes?)\b/i.test(foldText(text)) || /\?\s*$/.test(text.trim())) {
+      return false;
+    }
+    return /\p{L}{2,}/u.test(text);
   }
   return false;
 }

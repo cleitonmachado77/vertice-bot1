@@ -27,6 +27,15 @@ export type FormPreset = {
   header: Record<string, string>;
   lines: Array<{ values: Record<string, string> }>;
   visible: FormPresetVisible;
+  /** Quando true, o Vertice Bot dispara perguntas deste padrão via WhatsApp. */
+  bot_enabled: boolean;
+  bot_frequency: 'daily' | 'weekdays' | 'weekly';
+  bot_weekday: number;
+  bot_send_time: string;
+  /** Template Meta usado quando a janela de 24h do WhatsApp está fechada. */
+  bot_template_id: string;
+  /** Contato WhatsApp que recebe o questionário deste padrão. */
+  bot_contact_id: string;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -40,6 +49,12 @@ export type FormPresetInput = {
   header?: Record<string, string>;
   lines?: Array<{ values?: Record<string, string> }>;
   visible?: Partial<FormPresetVisible> | null;
+  bot_enabled?: boolean;
+  bot_frequency?: string;
+  bot_weekday?: number;
+  bot_send_time?: string;
+  bot_template_id?: string;
+  bot_contact_id?: string;
   sort_order?: number;
 };
 
@@ -53,10 +68,44 @@ type PresetRow = {
   header_json: string;
   lines_json: string;
   visible_json?: string;
+  bot_enabled?: number;
+  bot_frequency?: string;
+  bot_weekday?: number;
+  bot_send_time?: string;
+  bot_template_id?: string;
+  bot_contact_id?: string;
   sort_order: number;
   created_at: string;
   updated_at: string;
 };
+
+const BOT_FREQUENCIES = new Set(['daily', 'weekdays', 'weekly']);
+
+function sanitizeBotFrequency(raw: unknown): 'daily' | 'weekdays' | 'weekly' {
+  const value = String(raw || 'daily').trim();
+  return BOT_FREQUENCIES.has(value) ? (value as 'daily' | 'weekdays' | 'weekly') : 'daily';
+}
+
+function sanitizeBotWeekday(raw: unknown): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 6) return 1;
+  return Math.trunc(value);
+}
+
+function sanitizeBotSendTime(raw: unknown): string {
+  const value = String(raw || '08:00').trim();
+  if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(value)) return '08:00';
+  const [h, m] = value.split(':');
+  return `${String(h).padStart(2, '0')}:${m}`;
+}
+
+function sanitizeBotTemplateId(raw: unknown): string {
+  return String(raw || '').trim().slice(0, 120);
+}
+
+function sanitizeBotContactId(raw: unknown): string {
+  return String(raw || '').trim().slice(0, 120);
+}
 
 function allHeaderKeys(kind: FormKind): string[] {
   return headerFieldsFor(kind).map((field) => field.key);
@@ -171,6 +220,12 @@ function mapPreset(row: PresetRow): FormPreset {
     header: parseHeader(row.header_json, kind),
     lines: parseLines(row.lines_json, kind),
     visible: parseVisible(row.visible_json, kind),
+    bot_enabled: Number(row.bot_enabled) === 1,
+    bot_frequency: sanitizeBotFrequency(row.bot_frequency),
+    bot_weekday: sanitizeBotWeekday(row.bot_weekday),
+    bot_send_time: sanitizeBotSendTime(row.bot_send_time),
+    bot_template_id: sanitizeBotTemplateId(row.bot_template_id),
+    bot_contact_id: sanitizeBotContactId(row.bot_contact_id),
     sort_order: Number(row.sort_order) || 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -244,6 +299,12 @@ export async function getFormPreset(id: string): Promise<FormPreset | null> {
   return row ? mapPreset(row) : null;
 }
 
+/** Busca padrão sem filtrar pela empresa ativa (uso interno do Bot). */
+export async function getFormPresetById(id: string): Promise<FormPreset | null> {
+  const row = await one<PresetRow>(`SELECT * FROM forms_presets WHERE id = $1`, [id]);
+  return row ? mapPreset(row) : null;
+}
+
 export async function createFormPreset(input: FormPresetInput): Promise<FormPreset> {
   const kind = String(input.kind || '');
   if (!isFormKind(kind)) throw new Error('Tipo inválido');
@@ -257,6 +318,44 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
   const header = sanitizeHeader(kind, input.header);
   const lines = sanitizeLines(kind, input.lines);
   const visible = sanitizeVisible(kind, input.visible);
+  const botEnabled = Boolean(input.bot_enabled);
+  const botFrequency = sanitizeBotFrequency(input.bot_frequency);
+  const botWeekday = sanitizeBotWeekday(input.bot_weekday);
+  const botSendTime = sanitizeBotSendTime(input.bot_send_time);
+  const botTemplateId = sanitizeBotTemplateId(input.bot_template_id);
+  const botContactId = sanitizeBotContactId(input.bot_contact_id);
+  if (botEnabled) {
+    if (!botContactId) {
+      throw new Error('Para o Bot: selecione ou cadastre o contato que receberá o WhatsApp');
+    }
+    const { buildFormsBotQuestions } = await import('./forms-bot.js');
+    const draft: FormPreset = {
+      id: '',
+      company_odoo_id: companyId,
+      kind,
+      name,
+      title,
+      status,
+      header,
+      lines,
+      visible,
+      bot_enabled: true,
+      bot_frequency: botFrequency,
+      bot_weekday: botWeekday,
+      bot_send_time: botSendTime,
+      bot_template_id: botTemplateId,
+      bot_contact_id: botContactId,
+      sort_order: 0,
+      created_at: '',
+      updated_at: '',
+    };
+    const built = buildFormsBotQuestions(draft);
+    if (!built.questions.length) {
+      throw new Error(
+        'Para o Bot: marque “Mostrar” em campos sem valor padrão (são as perguntas do WhatsApp)',
+      );
+    }
+  }
   const sortOrder =
     Number.isFinite(Number(input.sort_order)) && input.sort_order != null
       ? Number(input.sort_order)
@@ -271,8 +370,9 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
   const id = randomUUID();
   await run(
     `INSERT INTO forms_presets
-      (id, company_odoo_id, kind, name, title, status, header_json, lines_json, visible_json, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      (id, company_odoo_id, kind, name, title, status, header_json, lines_json, visible_json,
+       bot_enabled, bot_frequency, bot_weekday, bot_send_time, bot_template_id, bot_contact_id, sort_order)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
     [
       id,
       companyId,
@@ -283,11 +383,21 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
       JSON.stringify(header),
       JSON.stringify(lines),
       JSON.stringify(visible),
+      botEnabled ? 1 : 0,
+      botFrequency,
+      botWeekday,
+      botSendTime,
+      botTemplateId,
+      botContactId,
       sortOrder,
     ],
   );
   const created = await getFormPreset(id);
   if (!created) throw new Error('Falha ao criar padrão');
+  if (created.bot_enabled) {
+    const { syncFormsBotQuestionnaire } = await import('./forms-bot.js');
+    await syncFormsBotQuestionnaire(created);
+  }
   return created;
 }
 
@@ -310,6 +420,29 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
   const lines = input.lines != null ? sanitizeLines(current.kind, input.lines) : current.lines;
   const visible =
     input.visible != null ? sanitizeVisible(current.kind, input.visible) : current.visible;
+  const botEnabled =
+    input.bot_enabled != null ? Boolean(input.bot_enabled) : current.bot_enabled;
+  const botFrequency =
+    input.bot_frequency != null
+      ? sanitizeBotFrequency(input.bot_frequency)
+      : current.bot_frequency;
+  const botWeekday =
+    input.bot_weekday != null ? sanitizeBotWeekday(input.bot_weekday) : current.bot_weekday;
+  const botSendTime =
+    input.bot_send_time != null
+      ? sanitizeBotSendTime(input.bot_send_time)
+      : current.bot_send_time;
+  const botTemplateId =
+    input.bot_template_id != null
+      ? sanitizeBotTemplateId(input.bot_template_id)
+      : current.bot_template_id;
+  const botContactId =
+    input.bot_contact_id != null
+      ? sanitizeBotContactId(input.bot_contact_id)
+      : current.bot_contact_id;
+  if (botEnabled && !botContactId) {
+    throw new Error('Para o Bot: selecione ou cadastre o contato que receberá o WhatsApp');
+  }
   const sortOrder =
     input.sort_order != null && Number.isFinite(Number(input.sort_order))
       ? Number(input.sort_order)
@@ -318,8 +451,9 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
   await run(
     `UPDATE forms_presets
      SET name = $2, title = $3, status = $4, header_json = $5, lines_json = $6, visible_json = $7,
-         sort_order = $8, updated_at = NOW()
-     WHERE id = $1 AND company_odoo_id = $9`,
+         bot_enabled = $8, bot_frequency = $9, bot_weekday = $10, bot_send_time = $11,
+         bot_template_id = $12, bot_contact_id = $13, sort_order = $14, updated_at = NOW()
+     WHERE id = $1 AND company_odoo_id = $15`,
     [
       id,
       name,
@@ -328,18 +462,28 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
       JSON.stringify(header),
       JSON.stringify(lines),
       JSON.stringify(visible),
+      botEnabled ? 1 : 0,
+      botFrequency,
+      botWeekday,
+      botSendTime,
+      botTemplateId,
+      botContactId,
       sortOrder,
       current.company_odoo_id,
     ],
   );
   const updated = await getFormPreset(id);
   if (!updated) throw new Error('Padrão não encontrado');
+  const { syncFormsBotQuestionnaire } = await import('./forms-bot.js');
+  await syncFormsBotQuestionnaire(updated);
   return updated;
 }
 
 export async function deleteFormPreset(id: string): Promise<void> {
   const current = await getFormPreset(id);
   if (!current) throw new Error('Padrão não encontrado');
+  const { syncFormsBotQuestionnaire } = await import('./forms-bot.js');
+  await syncFormsBotQuestionnaire({ ...current, bot_enabled: false });
   await run(`DELETE FROM forms_presets WHERE id = $1 AND company_odoo_id = $2`, [
     id,
     current.company_odoo_id,

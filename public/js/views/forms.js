@@ -626,9 +626,15 @@ function openPresetEditor(root, kind, schema, catalog, items, token, preset, onS
     presetId: preset?.id || '',
     presetName: preset?.name || '',
     presetShow,
+    botEnabled: Boolean(preset?.bot_enabled),
+    botFrequency: preset?.bot_frequency || 'daily',
+    botWeekday: preset?.bot_weekday ?? 1,
+    botSendTime: preset?.bot_send_time || '08:00',
+    botTemplateId: preset?.bot_template_id || '',
+    botContactId: preset?.bot_contact_id || '',
     title: preset ? `Editar padrão · ${preset.name}` : 'Novo padrão',
     subtitle:
-      'Marque “Mostrar” nos campos que devem aparecer ao criar. Desmarque (ex.: Número) para ocultar mesmo vazios. Valores preenchidos são aplicados automaticamente.',
+      'Marque “Mostrar” nos campos que o formulário (e o Bot) devem usar. Valores preenchidos viram padrão e não são perguntados no WhatsApp.',
   });
   openEditorModal(root);
   bindPresetEditor(root, kind, schema, catalog, items, token, preset, onSaved);
@@ -668,6 +674,13 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
     else closeEditorModal(root);
   });
 
+  bindPresetBotControls(form);
+  loadPresetBotTemplates(form, preset?.bot_template_id || '');
+  loadPresetBotContacts(form, preset?.bot_contact_id || '');
+  if (preset?.id) loadPresetBotActivity(form, preset.id);
+  bindPresetBotSendNow(form, preset);
+  bindPresetBotNewContact(form);
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const name = String(new FormData(form).get('preset_name') || '').trim();
@@ -676,6 +689,7 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
       return;
     }
     try {
+      const data = new FormData(form);
       const payload = collectPayload(form, fields);
       const body = {
         kind,
@@ -685,7 +699,17 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
         header: payload.header,
         lines: payload.lines || [],
         visible: collectPresetVisible(form, fields),
+        bot_enabled: data.get('bot_enabled') === '1',
+        bot_frequency: String(data.get('bot_frequency') || 'daily'),
+        bot_weekday: Number(data.get('bot_weekday') || 1),
+        bot_send_time: String(data.get('bot_send_time') || '08:00'),
+        bot_template_id: String(data.get('bot_template_id') || ''),
+        bot_contact_id: String(data.get('bot_contact_id') || ''),
       };
+      if (body.bot_enabled && !body.bot_contact_id) {
+        toast('Selecione ou cadastre o contato que receberá o WhatsApp');
+        return;
+      }
       if (preset?.id) {
         await api(`/api/forms/presets/${encodeURIComponent(preset.id)}`, {
           method: 'PUT',
@@ -701,6 +725,237 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
       toast(error.message || 'Falha ao salvar padrão');
     }
   });
+}
+
+function bindPresetBotSendNow(form, preset) {
+  const button = form.querySelector('[data-bot-send-now]');
+  if (!button) return;
+  button.addEventListener('click', async () => {
+    if (!preset?.id) {
+      toast('Salve o padrão antes de enviar');
+      return;
+    }
+    if (!form.querySelector('[name=bot_enabled]')?.checked) {
+      toast('Ative “Enviar pelo Vertice Bot” para disparar');
+      return;
+    }
+    button.disabled = true;
+    try {
+      // Persiste agenda/template atuais sem fechar o editor — o horário marcado segue intacto.
+      const data = new FormData(form);
+      const contactId = String(data.get('bot_contact_id') || '');
+      if (!contactId) {
+        toast('Selecione o contato destinatário');
+        return;
+      }
+      await api(`/api/forms/presets/${encodeURIComponent(preset.id)}`, {
+        method: 'PUT',
+        body: {
+          bot_enabled: true,
+          bot_frequency: String(data.get('bot_frequency') || 'daily'),
+          bot_weekday: Number(data.get('bot_weekday') || 1),
+          bot_send_time: String(data.get('bot_send_time') || '08:00'),
+          bot_template_id: String(data.get('bot_template_id') || ''),
+          bot_contact_id: contactId,
+        },
+      });
+      const result = await api(`/api/forms/presets/${encodeURIComponent(preset.id)}/bot-send`, {
+        method: 'POST',
+        body: {},
+      });
+      toast(`Enviado agora para ${result.phone || 'WhatsApp'}. A agenda continua ativa.`);
+      await loadPresetBotActivity(form, preset.id);
+    } catch (error) {
+      toast(error.message || 'Falha ao enviar agora');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+function bindPresetBotControls(form) {
+  const enabled = form.querySelector('[name=bot_enabled]');
+  const panel = form.querySelector('[data-bot-schedule]');
+  const weekdayWrap = form.querySelector('[data-bot-weekday]');
+  const frequency = form.querySelector('[name=bot_frequency]');
+  const templateSelect = form.querySelector('[name=bot_template_id]');
+  const templatePreview = form.querySelector('[data-bot-template-preview]');
+  const sendNow = form.querySelector('[data-bot-send-now]');
+  const sync = () => {
+    const on = Boolean(enabled?.checked);
+    if (panel) panel.hidden = !on;
+    if (weekdayWrap) weekdayWrap.hidden = !on || frequency?.value !== 'weekly';
+    if (sendNow && form.getAttribute('data-preset-id')) sendNow.disabled = !on;
+  };
+  const syncPreview = () => {
+    if (!templatePreview || !templateSelect) return;
+    const option = templateSelect.selectedOptions?.[0];
+    const body = option?.dataset?.body || '';
+    templatePreview.textContent = body
+      ? body
+      : 'Automático: usa o template padrão do sistema se a janela de 24h estiver fechada.';
+  };
+  enabled?.addEventListener('change', sync);
+  frequency?.addEventListener('change', sync);
+  templateSelect?.addEventListener('change', syncPreview);
+  sync();
+  syncPreview();
+}
+
+async function loadPresetBotTemplates(form, selectedId = '') {
+  const select = form.querySelector('[name=bot_template_id]');
+  if (!select) return;
+  try {
+    const data = await api('/api/questionnaires/templates');
+    const items = Array.isArray(data.items) ? data.items : [];
+    const fallback = selectedId || data.selectedId || '';
+    const options = [
+      `<option value="" data-body="">Automático (template padrão)</option>`,
+      ...items.map((item) => {
+        const pending = item.status === 'PENDING_APPROVAL' ? ' (pendente)' : '';
+        const selected = item.id === fallback ? ' selected' : '';
+        return `<option value="${escapeHtml(item.id)}" data-body="${escapeHtml(item.body || '')}"${selected}>${escapeHtml(item.name)}${pending}</option>`;
+      }),
+    ];
+    select.innerHTML = options.join('');
+    select.dispatchEvent(new Event('change'));
+  } catch (error) {
+    select.innerHTML = `<option value="">Falha ao carregar templates</option>`;
+    const preview = form.querySelector('[data-bot-template-preview]');
+    if (preview) preview.textContent = error.message || 'Não foi possível listar templates Meta.';
+  }
+}
+
+async function loadPresetBotContacts(form, selectedId = '') {
+  const select = form.querySelector('[data-bot-contact-select]');
+  if (!select) return;
+  try {
+    const data = await api('/api/contacts');
+    const items = Array.isArray(data.items) ? data.items : [];
+    const options = [
+      `<option value="">Selecione o contato…</option>`,
+      ...items.map((item) => {
+        const selected = item.id === selectedId ? ' selected' : '';
+        const label = `${item.name || 'Sem nome'} · ${item.phone || 'sem número'}`;
+        return `<option value="${escapeHtml(item.id)}"${selected}>${escapeHtml(label)}</option>`;
+      }),
+    ];
+    select.innerHTML = options.join('');
+    if (selectedId && !items.some((item) => item.id === selectedId)) {
+      select.insertAdjacentHTML(
+        'beforeend',
+        `<option value="${escapeHtml(selectedId)}" selected>Contato salvo (não listado)</option>`,
+      );
+    }
+  } catch (error) {
+    select.innerHTML = `<option value="">Falha ao carregar contatos</option>`;
+    toast(error.message || 'Não foi possível listar contatos');
+  }
+}
+
+function bindPresetBotNewContact(form) {
+  const toggle = form.querySelector('[data-bot-toggle-new-contact]');
+  const box = form.querySelector('[data-bot-new-contact]');
+  const createBtn = form.querySelector('[data-bot-create-contact]');
+  const select = form.querySelector('[data-bot-contact-select]');
+  toggle?.addEventListener('click', () => {
+    if (!box) return;
+    box.hidden = !box.hidden;
+  });
+  createBtn?.addEventListener('click', async () => {
+    const name = String(form.querySelector('[name=bot_new_contact_name]')?.value || '').trim();
+    const phone = String(form.querySelector('[name=bot_new_contact_phone]')?.value || '').trim();
+    if (!phone) {
+      toast('Informe o WhatsApp do contato');
+      return;
+    }
+    createBtn.disabled = true;
+    try {
+      const result = await api('/api/contacts', {
+        method: 'POST',
+        body: { name: name || phone, phone, email: '' },
+      });
+      const contact = result.contact || result;
+      await loadPresetBotContacts(form, contact.id);
+      if (select) select.value = contact.id;
+      if (box) box.hidden = true;
+      const nameInput = form.querySelector('[name=bot_new_contact_name]');
+      const phoneInput = form.querySelector('[name=bot_new_contact_phone]');
+      if (nameInput) nameInput.value = '';
+      if (phoneInput) phoneInput.value = '';
+      toast('Contato cadastrado e selecionado');
+    } catch (error) {
+      toast(error.message || 'Falha ao cadastrar contato');
+    } finally {
+      createBtn.disabled = false;
+    }
+  });
+}
+
+async function loadPresetBotActivity(form, presetId) {
+  const box = form.querySelector('[data-bot-activity]');
+  if (!box || !presetId) return;
+  box.hidden = false;
+  box.innerHTML = `<p class="muted" style="margin:0">Carregando envios e respostas…</p>`;
+  try {
+    const data = await api(`/api/forms/presets/${encodeURIComponent(presetId)}/bot-activity`);
+    const sends = Array.isArray(data.sends) ? data.sends : [];
+    const answers = Array.isArray(data.answers) ? data.answers : [];
+    box.innerHTML = `
+      <div class="forms-bot-activity-cols">
+        <div>
+          <strong class="forms-bot-activity-title">Últimos envios</strong>
+          ${
+            sends.length
+              ? `<ul class="forms-bot-activity-list">${sends
+                  .map(
+                    (item) => `<li>
+                      <span class="forms-bot-activity-meta">${escapeHtml(formatBotWhen(item.at))} · ${escapeHtml(item.contact_name || item.phone || '—')} · ${escapeHtml(item.status)}</span>
+                      <span>${escapeHtml(item.preview || item.kind || 'mensagem')}</span>
+                      ${item.error ? `<span class="muted">${escapeHtml(item.error)}</span>` : ''}
+                    </li>`,
+                  )
+                  .join('')}</ul>`
+              : '<p class="muted" style="margin:6px 0 0">Nenhum envio ainda.</p>'
+          }
+        </div>
+        <div>
+          <strong class="forms-bot-activity-title">Últimas respostas</strong>
+          ${
+            answers.length
+              ? `<ul class="forms-bot-activity-list">${answers
+                  .map(
+                    (item) => `<li>
+                      <span class="forms-bot-activity-meta">${escapeHtml(formatBotWhen(item.at || item.occurrence_date))} · ${escapeHtml(item.contact_name || item.contact_phone || '—')} · ${escapeHtml(item.cycle_status || '')}</span>
+                      <span>${escapeHtml(item.question || 'Pergunta')}</span>
+                      <span>${escapeHtml(item.answer || '—')}</span>
+                    </li>`,
+                  )
+                  .join('')}</ul>`
+              : '<p class="muted" style="margin:6px 0 0">Nenhuma resposta ainda.</p>'
+          }
+        </div>
+      </div>`;
+  } catch (error) {
+    box.innerHTML = `<p class="muted" style="margin:0">${escapeHtml(error.message || 'Falha ao carregar atividade')}</p>`;
+  }
+}
+
+function formatBotWhen(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function sourceBadgeHtml(doc) {
+  if (String(doc?.header?.source || '') !== 'bot') return '';
+  return `<span class="forms-badge forms-badge--bot" title="Criado pelo Vertice Bot">Bot</span>`;
 }
 
 /** Só aviso de erro — sucesso/pendente ficam silenciosos (sync em background). */
@@ -757,12 +1012,13 @@ function listRow(item, activeId, schema, kind) {
     odoo = ` · ${formatSyncError(item.header.odoo_sync_error, 72)}`;
   } else if (item.header?.odoo_id && !ref) odoo = ` · Odoo #${item.header.odoo_id}`;
   const locked = isOrderLocked(item, kind) ? ' · bloqueado' : '';
+  const botTag = String(item.header?.source || '') === 'bot' ? ' · Bot' : '';
   const statusText =
     kind === 'product' ? '' : `${escapeHtml(statusLabel(schema, kind, item.status))} · `;
   return `
     <button class="forms-list-item${item.id === activeId ? ' active' : ''}" type="button" data-open="${escapeHtml(item.id)}">
       <strong>${escapeHtml(headline)}</strong>
-      <span>${statusText}${escapeHtml(when)}${escapeHtml(odoo)}${escapeHtml(locked)}</span>
+      <span>${statusText}${escapeHtml(when)}${escapeHtml(odoo)}${escapeHtml(locked)}${escapeHtml(botTag)}</span>
     </button>`;
 }
 
@@ -864,10 +1120,76 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
         )
         .join('');
 
+  const botFrequency = options.botFrequency || 'daily';
+  const botWeekday = Number(options.botWeekday ?? 1);
+  const botSendTime = options.botSendTime || '08:00';
+  const dayOptions = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+    .map(
+      (label, index) =>
+        `<option value="${index}"${botWeekday === index ? ' selected' : ''}>${label}</option>`,
+    )
+    .join('');
   const titleBlock = isPreset
     ? `<label>Nome do padrão (botão)
         <input name="preset_name" value="${escapeHtml(options.presetName || '')}" placeholder="ex.: Plastico" required maxlength="60" />
       </label>
+      <div class="forms-bot-panel">
+        <label class="forms-preset-show forms-preset-bot">
+          <input type="checkbox" name="bot_enabled" value="1"${options.botEnabled ? ' checked' : ''} />
+          <span>Enviar pelo Vertice Bot (WhatsApp)</span>
+        </label>
+        <div class="forms-bot-schedule" data-bot-schedule${options.botEnabled ? '' : ' hidden'}>
+          <label>Contato destinatário
+            <select name="bot_contact_id" data-bot-contact-select>
+              <option value="">Carregando contatos…</option>
+            </select>
+          </label>
+          <div class="forms-bot-contact-actions">
+            <button class="btn-ghost" type="button" data-bot-toggle-new-contact>Novo contato</button>
+          </div>
+          <div class="forms-bot-new-contact" data-bot-new-contact hidden>
+            <div class="grid-2">
+              <label>Nome
+                <input type="text" name="bot_new_contact_name" placeholder="Nome" autocomplete="off" />
+              </label>
+              <label>WhatsApp
+                <input type="tel" name="bot_new_contact_phone" placeholder="ex.: 11999998888" autocomplete="off" />
+              </label>
+            </div>
+            <button class="btn" type="button" data-bot-create-contact>Cadastrar e selecionar</button>
+          </div>
+          <div class="grid-2">
+            <label>Frequência
+              <select name="bot_frequency">
+                <option value="daily"${botFrequency === 'daily' ? ' selected' : ''}>Todos os dias</option>
+                <option value="weekdays"${botFrequency === 'weekdays' ? ' selected' : ''}>Dias úteis</option>
+                <option value="weekly"${botFrequency === 'weekly' ? ' selected' : ''}>Um dia da semana</option>
+              </select>
+            </label>
+            <label>Horário
+              <input name="bot_send_time" type="time" value="${escapeHtml(botSendTime)}" required />
+            </label>
+          </div>
+          <label data-bot-weekday${botFrequency === 'weekly' ? '' : ' hidden'}>Dia da semana
+            <select name="bot_weekday">${dayOptions}</select>
+          </label>
+          <label>Template Meta (janela 24h)
+            <select name="bot_template_id">
+              <option value="">Carregando templates…</option>
+            </select>
+          </label>
+          <p class="muted forms-bot-template-hint" data-bot-template-preview>Se a janela de 24h estiver fechada, o Bot envia este template antes das perguntas.</p>
+          <div class="forms-bot-send-row">
+            <button class="btn" type="button" data-bot-send-now ${options.presetId ? '' : 'disabled'} title="${
+              options.presetId
+                ? 'Envia o questionário agora sem alterar a agenda'
+                : 'Salve o padrão antes de enviar'
+            }">Enviar agora</button>
+            <span class="muted">Disparo imediato. Frequência e horário seguem valendo para os próximos envios.</span>
+          </div>
+        </div>
+        <div class="forms-bot-activity" data-bot-activity hidden></div>
+      </div>
       ${wrapPresetField(
         `<label>Título (no novo registro)
           <input name="title" value="${escapeHtml(doc.title || '')}" placeholder="Opcional" />
@@ -911,7 +1233,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
           ${actions}
         </div>
       </div>
-      ${isPreset ? '' : syncBadgeHtml(doc)}
+      ${isPreset ? '' : `${sourceBadgeHtml(doc)}${syncBadgeHtml(doc)}`}
       ${titleBlock}
       ${statusControl}
       ${hiddenHeaderHtml}

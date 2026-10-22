@@ -239,11 +239,22 @@ async function loadCycleContexts(cycles: QuestionnaireCycle[]): Promise<ActiveCy
 export async function getQuestionnaireForCycle(
   cycle: QuestionnaireCycle,
 ): Promise<Questionnaire | undefined> {
+  const live = await getQuestionnaire(cycle.questionnaire_id, true);
   if (cycle.revision_id) {
     const revision = await getQuestionnaireRevision(cycle.revision_id);
+    if (revision && live) {
+      return {
+        ...revision,
+        sourcePresetId: live.sourcePresetId,
+        formKind: live.formKind,
+        companyOdooId: live.companyOdooId,
+        defaultValues: live.defaultValues,
+        contactIds: live.contactIds,
+      };
+    }
     if (revision) return revision;
   }
-  return getQuestionnaire(cycle.questionnaire_id);
+  return live;
 }
 
 function recentOccurrenceDates(today: string, days: number): string[] {
@@ -419,6 +430,8 @@ export async function markCycleCompleted(cycleId: string): Promise<void> {
      WHERE id = $2`,
     [stamp, cycleId],
   );
+  const { onQuestionnaireCycleCompleted } = await import('./forms-bot.js');
+  await onQuestionnaireCycleCompleted(cycleId);
 }
 
 export async function markCycleInProgress(cycleId: string): Promise<void> {

@@ -5,6 +5,7 @@ import {
   buildConversationContextPack,
   type ConversationContextPack,
 } from './conversation-context.js';
+import { tryFormsCatalogListReply } from './forms-bot-catalog-context.js';
 import {
   draftQuestionnaireReply,
   type QuestionnaireDraft,
@@ -255,18 +256,32 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
             completed: false,
           }
         : cycle
-          ? await draftQuestionnaireReply({
-              context: cycle,
-              contactName,
-              inbound: inboundText,
-              inboundType,
-              mediaUrl,
-              history: historyRows,
-              forceCompletedEdit: resolution.completedEditContext,
-              today: clock.date,
-              contextBrief: contextPack.contextBrief,
-              hints: contextPack.hints,
-            })
+          ? await (async () => {
+              const catalogList = await tryFormsCatalogListReply({
+                inbound: inboundText,
+                questionnaire: cycle.questionnaire,
+              });
+              if (catalogList) {
+                return {
+                  text: catalogList,
+                  source: 'fallback' as const,
+                  detail: 'listagem de catálogo Forms',
+                  completed: cycle.cycle.status === 'completed',
+                };
+              }
+              return draftQuestionnaireReply({
+                context: cycle,
+                contactName,
+                inbound: inboundText,
+                inboundType,
+                mediaUrl,
+                history: historyRows,
+                forceCompletedEdit: resolution.completedEditContext,
+                today: clock.date,
+                contextBrief: contextPack.contextBrief,
+                hints: contextPack.hints,
+              });
+            })()
           : null;
   }
 

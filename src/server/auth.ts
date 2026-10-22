@@ -117,6 +117,7 @@ export async function getSessionUser(cookieHeader: string | undefined): Promise<
       name: env('PANEL_ADMIN_NAME', 'Administrador'),
       role: 'adm',
       companyOdooId: '',
+      whatsappPhone: '',
       active: true,
       createdAt: '',
       updatedAt: '',

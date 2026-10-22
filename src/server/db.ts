@@ -360,6 +360,7 @@ const SCHEMA = `
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     company_odoo_id TEXT NOT NULL DEFAULT '',
+    whatsapp_phone TEXT NOT NULL DEFAULT '',
     active INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -387,6 +388,12 @@ const SCHEMA = `
     header_json TEXT NOT NULL DEFAULT '{}',
     lines_json TEXT NOT NULL DEFAULT '[]',
     visible_json TEXT NOT NULL DEFAULT '{}',
+    bot_enabled INTEGER NOT NULL DEFAULT 0,
+    bot_frequency TEXT NOT NULL DEFAULT 'daily',
+    bot_weekday INTEGER NOT NULL DEFAULT 1,
+    bot_send_time TEXT NOT NULL DEFAULT '08:00',
+    bot_template_id TEXT NOT NULL DEFAULT '',
+    bot_contact_id TEXT NOT NULL DEFAULT '',
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -482,6 +489,20 @@ async function migrate(): Promise<void> {
   `);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS visible_json TEXT NOT NULL DEFAULT '{}'`);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_enabled INTEGER NOT NULL DEFAULT 0`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_frequency TEXT NOT NULL DEFAULT 'daily'`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_weekday INTEGER NOT NULL DEFAULT 1`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_send_time TEXT NOT NULL DEFAULT '08:00'`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_template_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_contact_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE panel_users ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS source_preset_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS form_kind TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS company_odoo_id TEXT NOT NULL DEFAULT ''`);
+  await run(
+    `CREATE INDEX IF NOT EXISTS idx_questionnaires_source_preset
+     ON questionnaires(source_preset_id) WHERE source_preset_id <> ''`,
+  );
   await run(
     `CREATE INDEX IF NOT EXISTS idx_forms_presets_company_kind
      ON forms_presets(company_odoo_id, kind, sort_order, name)`,

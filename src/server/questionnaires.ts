@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { many, one, run, withTransaction } from './db.js';
+import { isFormsBotExportField } from './forms-bot-fields.js';
+import { isFormKind, type FormKind } from './forms-fields.js';
 import { isRfqFieldKey } from './rfq-fields.js';
 
 const now = () => new Date().toISOString();
@@ -32,8 +34,12 @@ export type Questionnaire = {
   active: number;
   created_at: string;
   updated_at: string;
-  /** Valores fixos da planilha RFQ (sem pergunta). Resposta do contato sobrescreve. */
+  /** Valores fixos (RFQ legado ou Forms). Resposta do contato sobrescreve. */
   defaultValues: Record<string, string>;
+  /** Quando preenchido, respostas materializam em forms_documents. */
+  sourcePresetId: string;
+  formKind: string;
+  companyOdooId: string;
   questions: QuestionnaireQuestion[];
   contactIds: string[];
 };
@@ -50,13 +56,30 @@ export type QuestionnaireInput = {
   defaultValues?: Record<string, string>;
   questions: { id?: string; body: string; expectedType: string; exportField?: string }[];
   contactIds: string[];
+  sourcePresetId?: string;
+  formKind?: string;
+  companyOdooId?: string;
+  /**
+   * Uso interno via {@link upsertQuestionnaire}. Não expor nas rotas HTTP da UI:
+   * PUT/POST devem falhar se o id não existir.
+   */
+  createIfMissing?: boolean;
 };
 
-type QuestionnaireRow = Omit<Questionnaire, 'questions' | 'contactIds' | 'defaultValues'> & {
+type QuestionnaireRow = Omit<
+  Questionnaire,
+  'questions' | 'contactIds' | 'defaultValues' | 'sourcePresetId' | 'formKind' | 'companyOdooId'
+> & {
   default_values_json?: string;
+  source_preset_id?: string;
+  form_kind?: string;
+  company_odoo_id?: string;
 };
 
-export function normalizeDefaultValues(raw: unknown): Record<string, string> {
+export function normalizeDefaultValues(
+  raw: unknown,
+  formKind: string = '',
+): Record<string, string> {
   if (!raw) return {};
   let source: unknown = raw;
   if (typeof raw === 'string') {
@@ -68,9 +91,15 @@ export function normalizeDefaultValues(raw: unknown): Record<string, string> {
   }
   if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
   const out: Record<string, string> = {};
+  const kind = isFormKind(formKind) ? formKind : '';
   for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
     const field = String(key || '').trim();
-    if (!field || !isRfqFieldKey(field)) continue;
+    if (!field) continue;
+    if (kind) {
+      if (!isFormsBotExportField(kind, field)) continue;
+    } else if (!isRfqFieldKey(field)) {
+      continue;
+    }
     const text = String(value ?? '').trim();
     if (text) out[field] = text;
   }
@@ -82,10 +111,19 @@ function hydrateQuestionnaire(
   questions: QuestionnaireQuestion[],
   contactIds: string[],
 ): Questionnaire {
-  const { default_values_json: rawDefaults, ...rest } = row;
+  const {
+    default_values_json: rawDefaults,
+    source_preset_id: sourcePresetId = '',
+    form_kind: formKind = '',
+    company_odoo_id: companyOdooId = '',
+    ...rest
+  } = row;
   return {
     ...rest,
-    defaultValues: normalizeDefaultValues(rawDefaults),
+    sourcePresetId: sourcePresetId || '',
+    formKind: formKind || '',
+    companyOdooId: companyOdooId || '',
+    defaultValues: normalizeDefaultValues(rawDefaults, formKind || ''),
     questions,
     contactIds,
   };
@@ -94,7 +132,10 @@ function hydrateQuestionnaire(
 export async function listQuestionnaires(): Promise<Questionnaire[]> {
   const rows = await many<QuestionnaireRow>(
     `SELECT id, name, greeting, frequency, weekday, send_time, template_id, version,
-            active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json
+            active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json,
+            COALESCE(source_preset_id, '') AS source_preset_id,
+            COALESCE(form_kind, '') AS form_kind,
+            COALESCE(company_odoo_id, '') AS company_odoo_id
      FROM questionnaires WHERE deleted_at = '' ORDER BY name, created_at`,
   );
   const questions = await many<QuestionnaireQuestion>(
@@ -121,7 +162,10 @@ export async function getQuestionnaire(
 ): Promise<Questionnaire | undefined> {
   const row = await one<QuestionnaireRow>(
     `SELECT id, name, greeting, frequency, weekday, send_time, template_id, version,
-            active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json
+            active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json,
+            COALESCE(source_preset_id, '') AS source_preset_id,
+            COALESCE(form_kind, '') AS form_kind,
+            COALESCE(company_odoo_id, '') AS company_odoo_id
      FROM questionnaires WHERE id = $1 AND ($2::boolean OR deleted_at = '')`,
     [id, includeDeleted],
   );
@@ -145,6 +189,19 @@ export async function saveQuestionnaire(input: QuestionnaireInput): Promise<Ques
   return withTransaction(() => saveQuestionnaireTransaction(input));
 }
 
+/**
+ * Upsert com id determinístico para geradores internos (Forms Bot, futuros syncs).
+ * Reutilize esta função em vez de novos caminhos de INSERT/upsert.
+ * Rotas da UI devem continuar chamando {@link saveQuestionnaire} sem createIfMissing.
+ */
+export async function upsertQuestionnaire(
+  input: Omit<QuestionnaireInput, 'createIfMissing' | 'id'> & { id: string },
+): Promise<Questionnaire> {
+  const id = String(input.id || '').trim();
+  if (!id) throw new Error('Id do questionário é obrigatório para upsert');
+  return saveQuestionnaire({ ...input, id, createIfMissing: true });
+}
+
 async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<Questionnaire> {
   const name = input.name.trim();
   if (!name) throw new Error('Dê um nome ao questionário');
@@ -152,10 +209,19 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
   if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(input.sendTime)) throw new Error('Horário inválido. Use HH:MM');
   if (input.weekday < 0 || input.weekday > 6) throw new Error('Dia da semana inválido');
 
+  const formKindRaw = String(input.formKind || '').trim();
+  const formKind: FormKind | '' = isFormKind(formKindRaw) ? formKindRaw : '';
+  const sourcePresetId = String(input.sourcePresetId || '').trim();
+  const companyOdooId = String(input.companyOdooId || '').trim();
+
   const questions = input.questions
     .map((item) => {
       const exportField = String(item.exportField || '').trim();
-      if (!isRfqFieldKey(exportField)) {
+      if (formKind) {
+        if (!isFormsBotExportField(formKind, exportField)) {
+          throw new Error(`Campo Forms inválido: ${exportField}`);
+        }
+      } else if (!isRfqFieldKey(exportField)) {
         throw new Error(`Campo de exportação inválido: ${exportField}`);
       }
       return {
@@ -169,20 +235,23 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
   if (!questions.length) throw new Error('Inclua ao menos uma pergunta');
 
   const contactIds = [...new Set(input.contactIds.map((id) => id.trim()).filter(Boolean))];
-  const defaultValues = normalizeDefaultValues(input.defaultValues);
+  const defaultValues = normalizeDefaultValues(input.defaultValues, formKind);
   const id = input.id || randomUUID();
   const stamp = now();
-  const existing = input.id ? await getQuestionnaire(input.id) : undefined;
-  if (input.id && !existing) throw new Error('Questionário não encontrado');
+  const existing = input.id ? await getQuestionnaire(input.id, true) : undefined;
+  if (input.id && !existing && !input.createIfMissing) {
+    throw new Error('Questionário não encontrado');
+  }
   const version = existing ? existing.version + 1 : 1;
   const templateId = String(input.templateId ?? existing?.template_id ?? '').trim();
 
   await run(
     `INSERT INTO questionnaires(
        id, name, greeting, frequency, weekday, send_time, template_id, version,
-       active, deleted_at, created_at, updated_at, default_values_json
+       active, deleted_at, created_at, updated_at, default_values_json,
+       source_preset_id, form_kind, company_odoo_id
      )
-     VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10, $11, $12)
+     VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10, $11, $12, $13, $14, $15)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name,
        greeting = excluded.greeting,
@@ -194,7 +263,10 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
        active = excluded.active,
        deleted_at = '',
        updated_at = excluded.updated_at,
-       default_values_json = excluded.default_values_json`,
+       default_values_json = excluded.default_values_json,
+       source_preset_id = excluded.source_preset_id,
+       form_kind = excluded.form_kind,
+       company_odoo_id = excluded.company_odoo_id`,
     [
       id,
       name,
@@ -208,6 +280,9 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
       existing?.created_at || stamp,
       stamp,
       JSON.stringify(defaultValues),
+      sourcePresetId || existing?.sourcePresetId || '',
+      formKind || existing?.formKind || '',
+      companyOdooId || existing?.companyOdooId || '',
     ],
   );
 
@@ -321,6 +396,9 @@ export async function getQuestionnaireRevision(revisionId: string): Promise<Ques
     created_at: row.created_at,
     updated_at: row.created_at,
     defaultValues: {},
+    sourcePresetId: '',
+    formKind: '',
+    companyOdooId: '',
     questions,
     contactIds: [],
   };

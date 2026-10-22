@@ -130,13 +130,16 @@ export async function getFormByPublicToken(token: string): Promise<FormDocument 
   return mapDoc(row, lines);
 }
 
-export async function createFormDocument(kind: FormKind): Promise<FormDocument> {
+export async function createFormDocument(
+  kind: FormKind,
+  options: { companyOdooId?: string } = {},
+): Promise<FormDocument> {
   if (!isFormKind(kind)) throw new Error('Tipo de formulário inválido');
   const id = randomUUID();
   const header = emptyHeader(kind);
   const title = documentTitle(kind, header);
   const now = new Date().toISOString();
-  const companyId = getActiveCompanyId();
+  const companyId = String(options.companyOdooId || '').trim() || getActiveCompanyId();
   await run(
     `INSERT INTO forms_documents(id, kind, title, status, header_json, company_odoo_id, created_at, updated_at)
      VALUES($1, $2, $3, 'draft', $4, $5, $6, $6)`,

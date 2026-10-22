@@ -231,7 +231,7 @@ function buildSessionKickoffText(
   return [intro, '', ...lines, '', 'Pode responder por texto, áudio, imagem ou vídeo.'].join('\n').trim();
 }
 
-async function resolveFirstContactTemplate(
+export async function resolveFirstContactTemplate(
   channelId: string,
   questionnaireTemplateId = '',
 ): Promise<FirstContactTemplate | undefined> {
@@ -262,7 +262,7 @@ function scoreTemplate(template: { name: string; body: string }): number {
   return 10;
 }
 
-function variablesFor(body: string, name: string): string[] {
+export function variablesFor(body: string, name: string): string[] {
   const marks = body.match(/\{\{\s*\d+\s*\}\}/g) || [];
   const count = new Set(marks.map((mark) => mark.replace(/\D/g, ''))).size;
   return Array.from({ length: count }, () => name);

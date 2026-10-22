@@ -16,7 +16,7 @@ export function presetsToolbarHtml(presets) {
   const buttons = (presets || [])
     .map(
       (preset) =>
-        `<button class="btn forms-preset-btn" type="button" data-preset-new="${escapeHtml(preset.id)}" title="Novo com padrão ${escapeHtml(preset.name)}">${escapeHtml(preset.name)}</button>`,
+        `<button class="btn forms-preset-btn" type="button" data-preset-new="${escapeHtml(preset.id)}" title="Novo com padrão ${escapeHtml(preset.name)}${preset.bot_enabled ? ' · Bot ativo' : ''}">${escapeHtml(preset.name)}${preset.bot_enabled ? ' · Bot' : ''}</button>`,
     )
     .join('');
   return `${buttons}<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
@@ -110,7 +110,7 @@ export function openPresetsManager(root, kind, presets, hooks) {
       <div class="card-head forms-editor-head">
         <div>
           <h2 id="forms-editor-title">Padrões</h2>
-          <p class="muted">Marque “Mostrar” nos campos que devem aparecer ao criar pelo padrão. O restante fica oculto.</p>
+          <p class="muted">Campos “Mostrar” definem o formulário e, se Bot estiver ativo, as perguntas no WhatsApp.</p>
         </div>
         <div class="row">
           <button class="btn" type="button" data-preset-create>Novo padrão</button>
@@ -126,9 +126,14 @@ export function openPresetsManager(root, kind, presets, hooks) {
           <div class="forms-presets-row" data-preset-id="${escapeHtml(preset.id)}">
             <div>
               <strong>${escapeHtml(preset.name)}</strong>
-              <span class="muted">${escapeHtml(preset.status || 'draft')}</span>
+              <span class="muted">${escapeHtml(preset.status || 'draft')}${preset.bot_enabled ? ' · Bot ativo' : ''}</span>
             </div>
             <div class="row">
+              ${
+                preset.bot_enabled
+                  ? `<button class="btn" type="button" data-preset-bot-send="${escapeHtml(preset.id)}">Enviar agora</button>`
+                  : ''
+              }
               <button class="btn-ghost" type="button" data-preset-edit="${escapeHtml(preset.id)}">Editar</button>
               <button class="btn-danger" type="button" data-preset-delete="${escapeHtml(preset.id)}">Excluir</button>
             </div>
@@ -156,6 +161,24 @@ export function openPresetsManager(root, kind, presets, hooks) {
           hooks.openPresetEditor(preset);
         } catch (error) {
           toast(error.message || 'Falha ao abrir padrão');
+        }
+      });
+    });
+    editor.querySelectorAll('[data-preset-bot-send]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-preset-bot-send');
+        if (!id) return;
+        btn.disabled = true;
+        try {
+          const result = await api(`/api/forms/presets/${encodeURIComponent(id)}/bot-send`, {
+            method: 'POST',
+            body: {},
+          });
+          toast(`Perguntas enviadas para ${result.phone || 'WhatsApp'}`);
+        } catch (error) {
+          toast(error.message || 'Falha ao enviar pelo Bot');
+        } finally {
+          btn.disabled = false;
         }
       });
     });
