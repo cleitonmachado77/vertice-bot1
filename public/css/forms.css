@@ -191,6 +191,27 @@
   flex: 0 0 auto;
 }
 
+.forms-bot-rules {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.forms-bot-rules legend {
+  padding: 0 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.forms-bot-rules .muted {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .forms-bot-activity {
   margin-top: 4px;
   padding-top: 10px;

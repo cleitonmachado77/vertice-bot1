@@ -19,6 +19,7 @@ function preset(partial: Partial<FormPreset> & Pick<FormPreset, 'kind'>): FormPr
     bot_send_time: '08:00',
     bot_template_id: '',
     bot_contact_id: '',
+    bot_rules: { idle_reminder_minutes: null, idle_close_minutes: null, confirm_before_close: false },
     sort_order: 0,
     created_at: '',
     updated_at: '',
@@ -86,6 +87,21 @@ test('buildFormsBotQuestions pergunta linhas quando quantidade visível está va
   assert.match(built.questions[1].body, /Qtd de ABACATE/i);
   assert.equal(built.questions[1].fixedValue, 'ABACATE - KG');
   assert.match(built.questions[2].body, /Mais produtos/i);
+});
+
+test('padrão com confirmação termina com “Confirma o registro?”', () => {
+  const built = buildFormsBotQuestions(
+    preset({
+      kind: 'purchase',
+      lines: [{ values: { product: 'ABACATE - KG', quantity: '' } }],
+      visible: { title: false, status: false, header: ['vendor'], lines: ['quantity'] },
+      bot_rules: { idle_reminder_minutes: null, idle_close_minutes: null, confirm_before_close: true },
+    }),
+  );
+  assert.deepEqual(
+    built.questions.map((item) => item.exportField),
+    ['vendor', FORMS_BOT_LINES_FIELD, '__lines_more__', '__confirm__'],
+  );
 });
 
 test('produto visível no padrão não fica fixo na pergunta de linhas', () => {

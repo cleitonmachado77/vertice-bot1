@@ -675,6 +675,7 @@ function openPresetEditor(root, kind, schema, catalog, items, token, preset, onS
     botSendTime: preset?.bot_send_time || '08:00',
     botTemplateId: preset?.bot_template_id || '',
     botContactId: preset?.bot_contact_id || '',
+    botRules: preset?.bot_rules || {},
     title: preset ? `Editar padrão · ${preset.name}` : 'Novo padrão',
     subtitle:
       'Marque “Mostrar” nos campos que o formulário (e o Bot) devem usar. Valores preenchidos viram padrão e não são perguntados no WhatsApp.',
@@ -748,6 +749,7 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
         bot_send_time: String(data.get('bot_send_time') || '08:00'),
         bot_template_id: String(data.get('bot_template_id') || ''),
         bot_contact_id: String(data.get('bot_contact_id') || ''),
+        bot_rules: collectBotRules(data),
       };
       if (body.bot_enabled && !body.bot_contact_id) {
         toast('Selecione ou cadastre o contato que receberá o WhatsApp');
@@ -768,6 +770,40 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
       toast(error.message || 'Falha ao salvar padrão');
     }
   });
+}
+
+/** Encerramento do Bot: vazio = padrão global (lembrete 15 min, encerra em 30 min). */
+function botRulesHtml(rules = {}) {
+  const minutes = (value) => (value == null ? '' : escapeHtml(String(value)));
+  return `
+          <fieldset class="forms-bot-rules">
+            <legend>Encerramento da conversa</legend>
+            <div class="grid-2">
+              <label>Lembrete após (min parado)
+                <input name="bot_idle_reminder_minutes" type="number" min="0" max="10080" step="1" placeholder="15 (padrão)" value="${minutes(rules.idle_reminder_minutes)}" />
+              </label>
+              <label>Encerrar após (min parado)
+                <input name="bot_idle_close_minutes" type="number" min="0" max="10080" step="1" placeholder="30 (padrão)" value="${minutes(rules.idle_close_minutes)}" />
+              </label>
+            </div>
+            <p class="muted">Se o contato enviar os dados e não responder “Mais produtos?”, o Bot lembra e depois registra sozinho. 0 desliga. Não envia no horário de silêncio (padrão 22h–7h).</p>
+            <label class="forms-preset-show">
+              <input type="checkbox" name="bot_confirm_before_close" value="1"${rules.confirm_before_close ? ' checked' : ''} />
+              <span>Pedir confirmação antes de registrar (resumo + “sim / corrigir”)</span>
+            </label>
+          </fieldset>`;
+}
+
+function collectBotRules(data) {
+  const minutes = (key) => {
+    const raw = String(data.get(key) ?? '').trim();
+    return raw === '' ? null : Number(raw);
+  };
+  return {
+    idle_reminder_minutes: minutes('bot_idle_reminder_minutes'),
+    idle_close_minutes: minutes('bot_idle_close_minutes'),
+    confirm_before_close: data.get('bot_confirm_before_close') === '1',
+  };
 }
 
 function bindPresetBotSendNow(form, preset) {
@@ -800,6 +836,7 @@ function bindPresetBotSendNow(form, preset) {
           bot_send_time: String(data.get('bot_send_time') || '08:00'),
           bot_template_id: String(data.get('bot_template_id') || ''),
           bot_contact_id: contactId,
+          bot_rules: collectBotRules(data),
         },
       });
       const result = await api(`/api/forms/presets/${encodeURIComponent(preset.id)}/bot-send`, {
@@ -1248,6 +1285,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
             </select>
           </label>
           <p class="muted forms-bot-template-hint" data-bot-template-preview>Se a janela de 24h estiver fechada, o Bot envia este template antes das perguntas.</p>
+          ${botRulesHtml(options.botRules)}
           <div class="forms-bot-send-row">
             <button class="btn" type="button" data-bot-send-now ${options.presetId ? '' : 'disabled'} title="${
               options.presetId

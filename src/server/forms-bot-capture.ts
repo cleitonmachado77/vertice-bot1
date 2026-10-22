@@ -18,12 +18,21 @@ import {
   mentionsNoMoreLines,
   parseQtyProductChunks,
 } from './forms-bot-fields.js';
+import {
+  CONFIRM_CORRECTION_REPLY,
+  confirmPromptText,
+  describeLinesAnswer,
+  isConfirmQuestion,
+  tryConfirmCapture,
+  tryLateLinesCapture,
+} from './forms-bot-closing.js';
 import type { MediaUnderstanding } from './media-understand.js';
 import { missingQuestions, type CycleAnswer } from './questionnaire-cycles.js';
 import type { ExtractedAnswer } from './questionnaire-extraction.js';
 import { defaultQuestionnaireReply } from './questionnaire-replies.js';
 import type { Questionnaire, QuestionnaireQuestion } from './questionnaires.js';
 
+export { describeLinesAnswer };
 export { buildFormsCatalogBrief as catalogContextBrief };
 export { isFormsCatalogListAsk as isCatalogListAsk };
 export { tryFormsCatalogListReply as tryCatalogListReply };
@@ -112,9 +121,11 @@ export function tryFormsLinesCapture(input: {
 export async function missingPromptFor(
   questionnaire: Questionnaire,
   missing: QuestionnaireQuestion[],
+  answers: CycleAnswer[] = [],
 ): Promise<string> {
   if (!missing.length) return '';
   if (isFormsBotQuestionnaire(questionnaire)) {
+    if (isConfirmQuestion(missing[0])) return confirmPromptText(questionnaire.questions, answers);
     const guided = await buildFormsBotGuidedPrompt({ questionnaire, questions: missing });
     if (guided.trim()) return guided;
   }
@@ -139,7 +150,7 @@ export async function formsAwareMissingReply(input: {
     input.contactName,
   );
   if (!isFormsBotQuestionnaire(input.questionnaire) || !input.missing.length) return base;
-  const prompt = await missingPromptFor(input.questionnaire, input.missing);
+  const prompt = await missingPromptFor(input.questionnaire, input.missing, input.answers);
   const intro = base.split('\n')[0] || 'Recebi.';
   return [intro, prompt].filter(Boolean).join('\n');
 }
@@ -171,6 +182,19 @@ export async function tryFormsBotCapture(input: {
   }
 
   const pendingQuestionId = String(input.pendingQuestionId || '').trim();
+
+  const confirm = tryConfirmCapture({ ...input, pendingQuestionId });
+  if (confirm?.kind === 'yes') {
+    return { kind: 'answers', accepted: confirm.accepted, summary: '', detail: 'confirmação Forms' };
+  }
+  if (confirm?.kind === 'correct') {
+    return { kind: 'reask', text: CONFIRM_CORRECTION_REPLY, pendingQuestionId: confirm.questionId };
+  }
+  const late = tryLateLinesCapture(input);
+  if (late) {
+    return { kind: 'answers', accepted: late.accepted, summary: late.summary, detail: 'linhas após encerramento' };
+  }
+
   const forceCatalogIndex = shouldForceCatalogIndexCapture(
     input.inbound,
     input.questionnaire,
@@ -276,19 +300,6 @@ async function tryLeadingIndexWithLines(input: {
     ].join('; '),
     detail: 'catálogo Forms por número + linhas',
   };
-}
-
-/** JSON de linhas → “50 kg de abacate; 20 kg de mandioca”; texto livre fica como está. */
-export function describeLinesAnswer(text: string): string {
-  try {
-    const rows = JSON.parse(text) as Array<{ product?: string; quantity?: string }>;
-    if (Array.isArray(rows)) {
-      return rows.map((row) => `${row.quantity || ''} de ${row.product || ''}`.trim()).join('; ');
-    }
-  } catch {
-    /* texto livre */
-  }
-  return text;
 }
 
 /**

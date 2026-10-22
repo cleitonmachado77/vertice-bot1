@@ -9,6 +9,8 @@ import { resolveCatalogValue } from './forms-bot-match.js';
 import {
   FORMS_BOT_LINES_FIELD,
   FORMS_BOT_LINES_MORE_FIELD,
+  CONFIRM_QUESTION_BODY,
+  FORMS_BOT_CONFIRM_FIELD,
   formsBotQuestionnaireId,
   quantityOnlyLinesQuestion,
 } from './forms-bot-fields.js';
@@ -138,6 +140,10 @@ export function buildFormsBotQuestions(preset: FormPreset): {
         exportField: FORMS_BOT_LINES_MORE_FIELD,
       });
     }
+  }
+
+  if (questions.length && preset.bot_rules?.confirm_before_close) {
+    questions.push({ body: CONFIRM_QUESTION_BODY, expectedType: 'any', exportField: FORMS_BOT_CONFIRM_FIELD });
   }
 
   return { questions, defaultValues };

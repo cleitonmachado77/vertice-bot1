@@ -30,7 +30,9 @@ export function startScheduler(): void {
             (q
               ? ` | questionários enviados=${q.sent} falhas=${q.failed} aguardando=${q.waiting} ignorados=${q.skipped}`
               : '') +
-            (result.idleClosed ? ` | encerrados por inatividade=${result.idleClosed}` : ''),
+            (result.idle && result.idle.closed + result.idle.reminded + result.idle.alerted
+              ? ` | forms parados: encerrados=${result.idle.closed} lembretes=${result.idle.reminded} alertas=${result.idle.alerted}`
+              : ''),
         );
         for (const item of result.items.slice(0, 20)) {
           if (

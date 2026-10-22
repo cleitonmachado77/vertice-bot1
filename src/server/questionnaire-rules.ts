@@ -1,4 +1,9 @@
-import { FORMS_BOT_LINES_MORE_FIELD, isUsableLinesMoreAnswer } from './forms-bot-fields.js';
+import {
+  FORMS_BOT_CONFIRM_FIELD,
+  FORMS_BOT_LINES_MORE_FIELD,
+  isConfirmYesAnswer,
+  isUsableLinesMoreAnswer,
+} from './forms-bot-fields.js';
 import type { MediaUnderstanding } from './media-understand.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
@@ -180,6 +185,10 @@ export function isUsableAnswerForQuestion(
   // “não” é resposta válida de “Mais produtos?” — avaliar antes da regra de saudação/ack.
   if (String(question.export_field || '').trim() === FORMS_BOT_LINES_MORE_FIELD) {
     return isUsableLinesMoreAnswer(raw);
+  }
+  // “sim” confirma o registro — também é ack, por isso vem antes da regra geral.
+  if (String(question.export_field || '').trim() === FORMS_BOT_CONFIRM_FIELD) {
+    return isConfirmYesAnswer(raw);
   }
   return !isUnusableQuestionnaireAnswer(raw);
 }

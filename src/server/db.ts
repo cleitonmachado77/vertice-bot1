@@ -501,6 +501,7 @@ async function migrate(): Promise<void> {
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_send_time TEXT NOT NULL DEFAULT '08:00'`);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_template_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_contact_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_rules_json TEXT NOT NULL DEFAULT '{}'`);
   await run(`ALTER TABLE panel_users ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS source_preset_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS form_kind TEXT NOT NULL DEFAULT ''`);

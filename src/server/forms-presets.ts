@@ -8,6 +8,7 @@ import {
   normalizeFormStatus,
   type FormKind,
 } from './forms-fields.js';
+import { parseFormsBotRules, sanitizeFormsBotRules, type FormsBotRules } from './forms-bot-rules.js';
 
 export type FormPresetVisible = {
   title: boolean;
@@ -36,6 +37,8 @@ export type FormPreset = {
   bot_template_id: string;
   /** Contato WhatsApp que recebe o questionário deste padrão. */
   bot_contact_id: string;
+  /** Lembrete/encerramento por inatividade e confirmação antes de registrar. */
+  bot_rules: FormsBotRules;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -55,6 +58,7 @@ export type FormPresetInput = {
   bot_send_time?: string;
   bot_template_id?: string;
   bot_contact_id?: string;
+  bot_rules?: unknown;
   sort_order?: number;
 };
 
@@ -74,6 +78,7 @@ type PresetRow = {
   bot_send_time?: string;
   bot_template_id?: string;
   bot_contact_id?: string;
+  bot_rules_json?: string;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -226,6 +231,7 @@ function mapPreset(row: PresetRow): FormPreset {
     bot_send_time: sanitizeBotSendTime(row.bot_send_time),
     bot_template_id: sanitizeBotTemplateId(row.bot_template_id),
     bot_contact_id: sanitizeBotContactId(row.bot_contact_id),
+    bot_rules: parseFormsBotRules(row.bot_rules_json),
     sort_order: Number(row.sort_order) || 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -324,6 +330,7 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
   const botSendTime = sanitizeBotSendTime(input.bot_send_time);
   const botTemplateId = sanitizeBotTemplateId(input.bot_template_id);
   const botContactId = sanitizeBotContactId(input.bot_contact_id);
+  const botRules = sanitizeFormsBotRules(input.bot_rules);
   if (botEnabled) {
     if (!botContactId) {
       throw new Error('Para o Bot: selecione ou cadastre o contato que receberá o WhatsApp');
@@ -345,6 +352,7 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
       bot_send_time: botSendTime,
       bot_template_id: botTemplateId,
       bot_contact_id: botContactId,
+      bot_rules: botRules,
       sort_order: 0,
       created_at: '',
       updated_at: '',
@@ -371,8 +379,9 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
   await run(
     `INSERT INTO forms_presets
       (id, company_odoo_id, kind, name, title, status, header_json, lines_json, visible_json,
-       bot_enabled, bot_frequency, bot_weekday, bot_send_time, bot_template_id, bot_contact_id, sort_order)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+       bot_enabled, bot_frequency, bot_weekday, bot_send_time, bot_template_id, bot_contact_id, sort_order,
+       bot_rules_json)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       id,
       companyId,
@@ -390,6 +399,7 @@ export async function createFormPreset(input: FormPresetInput): Promise<FormPres
       botTemplateId,
       botContactId,
       sortOrder,
+      JSON.stringify(botRules),
     ],
   );
   const created = await getFormPreset(id);
@@ -443,6 +453,8 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
   if (botEnabled && !botContactId) {
     throw new Error('Para o Bot: selecione ou cadastre o contato que receberá o WhatsApp');
   }
+  const botRules =
+    input.bot_rules != null ? sanitizeFormsBotRules(input.bot_rules) : current.bot_rules;
   const sortOrder =
     input.sort_order != null && Number.isFinite(Number(input.sort_order))
       ? Number(input.sort_order)
@@ -452,7 +464,8 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
     `UPDATE forms_presets
      SET name = $2, title = $3, status = $4, header_json = $5, lines_json = $6, visible_json = $7,
          bot_enabled = $8, bot_frequency = $9, bot_weekday = $10, bot_send_time = $11,
-         bot_template_id = $12, bot_contact_id = $13, sort_order = $14, updated_at = NOW()
+         bot_template_id = $12, bot_contact_id = $13, sort_order = $14, bot_rules_json = $16,
+         updated_at = NOW()
      WHERE id = $1 AND company_odoo_id = $15`,
     [
       id,
@@ -470,6 +483,7 @@ export async function updateFormPreset(id: string, input: FormPresetInput): Prom
       botContactId,
       sortOrder,
       current.company_odoo_id,
+      JSON.stringify(botRules),
     ],
   );
   const updated = await getFormPreset(id);

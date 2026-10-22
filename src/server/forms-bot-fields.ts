@@ -3,6 +3,24 @@ import { headerFieldsFor, lineFieldsFor, type FormKind } from './forms-fields.js
 export const FORMS_BOT_LINES_FIELD = '__lines__';
 /** Confirmação: mais itens ou encerrar linhas do Forms Bot. */
 export const FORMS_BOT_LINES_MORE_FIELD = '__lines_more__';
+/** Confirmação final (“sim / corrigir”) quando o padrão pede revisão antes de registrar. */
+export const FORMS_BOT_CONFIRM_FIELD = '__confirm__';
+export const CONFIRM_QUESTION_BODY = 'Confirma o registro? (sim / corrigir)';
+
+/** “sim”, “confirmo”, “pode registrar”… (também “sim (encerrado por inatividade)”). */
+export function isConfirmYesAnswer(text: string): boolean {
+  const folded = fold(text);
+  if (!folded || isConfirmCorrectionAnswer(text)) return false;
+  return /^(sim|s|confirmo|confirma|confirmado|ok|okay|pode|pode registrar|isso|certo|correto|ta certo|esta certo|perfeito|beleza|blz)\b/.test(
+    folded,
+  );
+}
+
+/** “corrigir”, “não”, “está errado”… → o contato quer ajustar antes de registrar. */
+export function isConfirmCorrectionAnswer(text: string): boolean {
+  const folded = fold(text);
+  return /^(nao|n|corrigir|corrige|corrija|ajustar|ajusta|errado|esta errado|ta errado|mudar|alterar)\b/.test(folded);
+}
 
 export function formsBotQuestionnaireId(presetId: string): string {
   return `forms-preset:${presetId}`;
@@ -25,6 +43,7 @@ export function isFormsBotExportField(kind: FormKind, exportField: string): bool
   if (key === FORMS_BOT_LINES_FIELD || key === FORMS_BOT_LINES_MORE_FIELD) {
     return lineFieldsFor(kind).length > 0;
   }
+  if (key === FORMS_BOT_CONFIRM_FIELD) return true;
   return (
     headerFieldsFor(kind).some((field) => field.key === key) ||
     lineFieldsFor(kind).some((field) => field.key === key)

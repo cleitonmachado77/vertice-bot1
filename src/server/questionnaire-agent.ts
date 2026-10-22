@@ -123,7 +123,7 @@ export async function draftQuestionnaireReply(input: {
     }
     const missing = missingQuestions(questions, alreadySaved);
     const toAsk = missing.length ? missing : questions;
-    const ask = await missingPromptFor(input.context.questionnaire, toAsk);
+    const ask = await missingPromptFor(input.context.questionnaire, toAsk, alreadySaved);
     await rememberCyclePrompt(input.context.cycle.id, promptQuestionId(toAsk), 'agente: saudação');
     const hello = /bom dia/i.test(input.inbound)
       ? 'Bom dia!'
@@ -175,15 +175,19 @@ export async function draftQuestionnaireReply(input: {
     });
     const notice = input.hints ? pendingPreviousDaysNotice(input.hints) : '';
     if (persisted.complete) {
+      // Itens depois do encerramento: o documento já existe e é atualizado (markCycleCompleted).
+      const done = amending && captured.summary
+        ? `Anotei: ${captured.summary}. Atualizei o registro.`
+        : completionReply(input.contactName);
       return {
-        text: [completionReply(input.contactName), notice].filter(Boolean).join('\n\n'),
+        text: [done, notice].filter(Boolean).join('\n\n'),
         source: 'fallback',
         detail: `${captured.detail} (completo)`,
         completed: true,
       };
     }
     const nextPrompt = persisted.missing.length
-      ? await missingPromptFor(input.context.questionnaire, persisted.missing)
+      ? await missingPromptFor(input.context.questionnaire, persisted.missing, persisted.answers)
       : '';
     await rememberCyclePrompt(
       input.context.cycle.id,
@@ -669,7 +673,7 @@ export async function draftQuestionnaireReply(input: {
         // O modelo disse “anotei…” mas não devolveu answers: não fingir que gravou.
         reply = [
           'Não consegui registrar essa resposta. Pode repetir?',
-          await missingPromptFor(input.context.questionnaire, missing),
+          await missingPromptFor(input.context.questionnaire, missing, answers),
         ]
           .filter(Boolean)
           .join('\n\n');
