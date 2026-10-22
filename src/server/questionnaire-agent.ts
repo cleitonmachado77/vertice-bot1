@@ -95,9 +95,24 @@ export async function draftQuestionnaireReply(input: {
   const questions = input.context.questionnaire.questions;
   let alreadySaved = input.context.answers;
   const amending = input.context.cycle.status === 'completed';
+  const greetingOrAck = isGreetingOrAck(input.inbound);
+
+  // “não” / “sim” / “3” podem ser a resposta da pergunta pendente (ex.: “Mais produtos?”):
+  // o atalho Forms decide antes de tratar como saudação.
+  const captured =
+    amending && greetingOrAck
+      ? null
+      : await tryFormsBotCapture({
+          inbound: input.inbound,
+          questionnaire: input.context.questionnaire,
+          questions,
+          alreadySaved,
+          history: input.history,
+          pendingQuestionId: input.context.cycle.pending_question_id,
+        });
 
   // Saudação / “por nada”: nunca grava como resposta de campo.
-  if (isGreetingOrAck(input.inbound)) {
+  if (greetingOrAck && !captured) {
     if (amending) {
       return {
         text: /por nada|de nada|disponha/i.test(input.inbound) ? 'Por nada!' : 'Ok!',
@@ -125,14 +140,6 @@ export async function draftQuestionnaireReply(input: {
     };
   }
 
-  const captured = await tryFormsBotCapture({
-    inbound: input.inbound,
-    questionnaire: input.context.questionnaire,
-    questions,
-    alreadySaved,
-    history: input.history,
-    pendingQuestionId: input.context.cycle.pending_question_id,
-  });
   if (captured?.kind === 'list' || captured?.kind === 'reask') {
     await rememberCyclePrompt(
       input.context.cycle.id,
