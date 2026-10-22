@@ -29,7 +29,8 @@ export function startScheduler(): void {
           `agendamentos: ${clock.date} ${hh}:${mm} enviadas=${result.sent} falhas=${result.failed} aguardando=${result.waiting} ignoradas=${result.skipped}` +
             (q
               ? ` | questionários enviados=${q.sent} falhas=${q.failed} aguardando=${q.waiting} ignorados=${q.skipped}`
-              : ''),
+              : '') +
+            (result.idleClosed ? ` | encerrados por inatividade=${result.idleClosed}` : ''),
         );
         for (const item of result.items.slice(0, 20)) {
           if (

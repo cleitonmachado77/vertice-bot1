@@ -2,6 +2,7 @@ import { getSetting, withDispatchLock } from './db.js';
 import { minutesFromClock, zonedNow } from './clock.js';
 import { NevoaError, sendWhatsappText } from './nevoa.js';
 import { dispatchStatus, listDueMessages, markDispatch, runsOnWeekday } from './plans.js';
+import { closeIdleFormsCycles } from './forms-bot-idle-close.js';
 import { runQuestionnaireDispatches } from './questionnaire-dispatch.js';
 import { ensureConversation, recordOutbound } from './thread.js';
 
@@ -19,6 +20,8 @@ export type DispatchRun = {
     waiting: number;
     skipped: number;
   };
+  /** Ciclos Forms encerrados por inatividade nesta rodada. */
+  idleClosed?: number;
 };
 
 export async function runDueDispatches(): Promise<DispatchRun> {
@@ -101,6 +104,12 @@ async function runDispatchBody(): Promise<DispatchRun> {
     waiting: questionnaires.waiting,
     skipped: questionnaires.skipped,
   };
+
+  const idle = await closeIdleFormsCycles();
+  result.idleClosed = idle.closed;
+  result.items.push(
+    ...idle.items.map((item) => ({ phone: item.phone, status: 'sent', detail: `encerrado por inatividade: ${item.detail}` })),
+  );
 
   return result;
 }

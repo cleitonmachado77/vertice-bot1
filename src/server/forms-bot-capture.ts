@@ -279,7 +279,7 @@ async function tryLeadingIndexWithLines(input: {
 }
 
 /** JSON de linhas → “50 kg de abacate; 20 kg de mandioca”; texto livre fica como está. */
-function describeLinesAnswer(text: string): string {
+export function describeLinesAnswer(text: string): string {
   try {
     const rows = JSON.parse(text) as Array<{ product?: string; quantity?: string }>;
     if (Array.isArray(rows)) {
