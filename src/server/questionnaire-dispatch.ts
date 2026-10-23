@@ -13,6 +13,7 @@ import {
   missingQuestions,
   recoverStuckSendingCycles,
   rememberCyclePrompt,
+  type CycleAnswer,
 } from './questionnaire-cycles.js';
 import {
   QUESTIONNAIRE_FIRST_CONTACT_PHRASE,
@@ -129,10 +130,10 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
       const preferSessionText = windowOpen || alreadyStarted;
 
       if (preferSessionText) {
-        const text = buildSessionKickoffText(
+        const text = await sessionKickoffText(
           questionnaire,
           item.name || item.phone,
-          alreadyStarted ? missing : undefined,
+          alreadyStarted ? { missing, answers: savedAnswers } : undefined,
         );
         await enqueueOutbound({
           dedupeKey: `questionnaire:${cycle.id}:kickoff`,
@@ -219,15 +220,39 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
   return result;
 }
 
+/** Forms Bot: convite guiado (lista numerada do catálogo), igual ao “Enviar agora”. */
+async function sessionKickoffText(
+  questionnaire: Questionnaire,
+  name: string,
+  remaining?: { missing: QuestionnaireQuestion[]; answers: CycleAnswer[] },
+): Promise<string> {
+  const { isFormsBotQuestionnaire } = await import('./forms-bot-agenda.js');
+  if (!isFormsBotQuestionnaire(questionnaire)) {
+    return buildSessionKickoffText(questionnaire, name, remaining?.missing);
+  }
+  if (remaining?.missing.length) {
+    const { missingPromptFor } = await import('./forms-bot-capture.js');
+    const prompt = await missingPromptFor(questionnaire, remaining.missing, remaining.answers);
+    return [`Oi ${name}! Recebi o que você já mandou. Ainda falta:`, '', prompt].join('\n');
+  }
+  const { buildFormsBotGuidedInvite } = await import('./forms-bot-catalog-context.js');
+  const greeting = greetingFor(questionnaire, name) || QUESTIONNAIRE_FIRST_CONTACT_PHRASE.replace(/\{\{\s*1\s*\}\}/g, name);
+  return buildFormsBotGuidedInvite({ greeting, questionnaire });
+}
+
+function greetingFor(questionnaire: Questionnaire, name: string): string {
+  return (questionnaire.greeting || '')
+    .replace(/\{\{\s*1\s*\}\}/g, name)
+    .replace(/\{\{nome\}\}/gi, name)
+    .trim();
+}
+
 function buildSessionKickoffText(
   questionnaire: Questionnaire,
   name: string,
   onlyQuestions?: QuestionnaireQuestion[],
 ): string {
-  const greeting = (questionnaire.greeting || '')
-    .replace(/\{\{\s*1\s*\}\}/g, name)
-    .replace(/\{\{nome\}\}/gi, name)
-    .trim();
+  const greeting = greetingFor(questionnaire, name);
   const questions = onlyQuestions?.length ? onlyQuestions : questionnaire.questions;
   const remaining = Boolean(onlyQuestions?.length);
   const lines = questions.map((question, index) => `${index + 1}) ${question.body.trim()}`);

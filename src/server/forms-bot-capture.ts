@@ -201,6 +201,9 @@ export async function tryFormsBotCapture(input: {
     input.alreadySaved,
     pendingQuestionId,
   );
+  // Antes do número sozinho: “fornecedor 2, 50 kg de abacate” também resolve como “fornecedor 2”.
+  const combined = await tryLeadingIndexWithLines({ ...input, pendingQuestionId });
+  if (combined) return combined;
   const catalogIndex = await tryResolveCatalogIndexAnswer({
     inbound: input.inbound,
     questionnaire: input.questionnaire,
@@ -216,8 +219,6 @@ export async function tryFormsBotCapture(input: {
       detail: 'catálogo Forms por número',
     };
   }
-  const combined = await tryLeadingIndexWithLines({ ...input, pendingQuestionId });
-  if (combined) return combined;
   if (forceCatalogIndex) {
     const again = await buildFormsBotGuidedPrompt({
       questionnaire: input.questionnaire,
@@ -253,8 +254,9 @@ export async function tryFormsBotCapture(input: {
   };
 }
 
-// “4, 100 kg de manga…” / “4 - 100 kg…”. Vírgula só com espaço depois, para não pegar “4,5 kg”.
-const LEADING_INDEX_RE = /^\s*(\d{1,3})\s*(?:[;\-–—]|,(?=\s))\s*(\S[\s\S]*)$/u;
+// “4, 100 kg…”, “fornecedor 2, 50 kg…”, “2 e 50 kg…”. Vírgula só com espaço depois (“4,5 kg” é quantidade).
+const LEADING_INDEX_RE =
+  /^\s*(?:(?:fornecedor|cliente|produto|op[cç][aã]o|n[uú]mero)\s*)?(\d{1,3})(?:\s*[;\-–—]|\s*,(?=\s)|\s+e\s+)\s*(\S[\s\S]*)$/iu;
 
 /** Número da lista + linhas na mesma mensagem: grava a opção do catálogo e as linhas. */
 async function tryLeadingIndexWithLines(input: {

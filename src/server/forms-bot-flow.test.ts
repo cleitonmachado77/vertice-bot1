@@ -155,6 +155,14 @@ test('número do fornecedor e linhas na mesma mensagem', async () => {
   ]);
 });
 
+test('“fornecedor 2, 50 kg de abacate” e “2 e 50 kg de abacate” gravam fornecedor e linha', async () => {
+  for (const inbound of ['fornecedor 2, 50 kg de abacate', '2 e 50 kg de abacate', 'Opção 2 - 50 kg de abacate']) {
+    const answers = await runConversation([{ inbound, pendingQuestionId: 'v' }]);
+    assert.equal(answerFor(answers, 'v'), 'Fornecedor Teste Vertice', inbound);
+    assert.deepEqual(JSON.parse(answerFor(answers, 'l')), [{ product: 'abacate', quantity: '50 kg' }], inbound);
+  }
+});
+
 test('“4,5 kg de manga” é quantidade decimal, não fornecedor 4', async () => {
   const captured = await tryFormsBotCapture({
     inbound: '4,5 kg de manga',
