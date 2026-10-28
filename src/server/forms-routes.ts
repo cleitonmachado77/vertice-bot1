@@ -4,6 +4,9 @@ import { isAdm, type PublicUser } from './users.js';
 import {
   KIND_LABELS,
   PRODUCT_FIELDS,
+  PRODUCTION_HEADER_FIELDS,
+  PRODUCTION_LINE_FIELDS,
+  PRODUCTION_STATUSES,
   PURCHASE_HEADER_FIELDS,
   PURCHASE_LINE_FIELDS,
   PURCHASE_ODOO_STATUSES,
@@ -161,17 +164,20 @@ function schema() {
     kinds: [
       { id: 'product', label: KIND_LABELS.product },
       { id: 'purchase', label: KIND_LABELS.purchase },
+      { id: 'production', label: KIND_LABELS.production },
       { id: 'sale', label: KIND_LABELS.sale },
     ],
     fields: {
       sale: { header: SALE_HEADER_FIELDS, lines: SALE_LINE_FIELDS },
       purchase: { header: PURCHASE_HEADER_FIELDS, lines: PURCHASE_LINE_FIELDS },
       product: { header: PRODUCT_FIELDS, lines: [] },
+      production: { header: PRODUCTION_HEADER_FIELDS, lines: PRODUCTION_LINE_FIELDS },
     },
     statuses: {
       sale: SALE_ODOO_STATUSES,
       purchase: PURCHASE_ODOO_STATUSES,
       product: [],
+      production: PRODUCTION_STATUSES,
     },
   };
 }
@@ -330,6 +336,7 @@ export function registerFormsRoutes(): void {
         cost: text(input.cost),
         uom: text(input.uom),
         internal_ref: text(input.internal_ref),
+        weight: text(input.weight),
         qty_on_hand: text(input.qty_on_hand),
         track_inventory: text(input.track_inventory) || 'True',
       });
@@ -353,6 +360,7 @@ export function registerFormsRoutes(): void {
         cost: text(input.cost),
         uom: text(input.uom),
         internal_ref: text(input.internal_ref),
+        weight: text(input.weight),
         qty_on_hand: text(input.qty_on_hand),
         track_inventory: text(input.track_inventory) || 'True',
       });
@@ -486,8 +494,8 @@ export function registerFormsRoutes(): void {
         json(ctx.res, 200, await pushAllFormsToOdoo());
         return;
       }
-      if (kind !== 'sale' && kind !== 'purchase' && kind !== 'product') {
-        throw new Error('Informe kind=all|sale|purchase|product');
+      if (kind !== 'sale' && kind !== 'purchase' && kind !== 'product' && kind !== 'production') {
+        throw new Error('Informe kind=all|sale|purchase|product|production');
       }
       json(ctx.res, 200, await pushFormsByKind(kind));
     } catch (error) {
@@ -669,7 +677,10 @@ export function registerFormsRoutes(): void {
       const current = await getFormDocument(ctx.params.id);
       if (!current) throw new Error('Formulário não encontrado');
       assertFormOrderEditable(current, 'editar');
-      await saveFormDocument(ctx.params.id, parseSave(body(ctx)));
+      const input = parseSave(body(ctx));
+      // Gravar no Vertice = dado real no Odoo: a ordem de produção vai concluída (sem rascunho).
+      if (current.kind === 'production') input.status = 'done';
+      await saveFormDocument(ctx.params.id, input);
       const item = await markDocSyncPending(ctx.params.id);
       json(ctx.res, 200, { item, sync_status: 'syncing' });
       scheduleOdooPush(item.id);
@@ -687,10 +698,9 @@ export function registerFormsRoutes(): void {
       try {
         await cancelFormInOdoo(current);
       } catch (error) {
-        console.error(
-          `[odoo-auto-cancel] ${ctx.params.id}:`,
-          error instanceof Error ? error.message : error,
-        );
+        // Pedido já recebido/entregue: o Odoo recusa cancelar — manter o espelho em vez de apagar só aqui.
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`O Odoo não permitiu cancelar (${message}). O registro não foi excluído.`);
       }
       await deleteFormDocument(ctx.params.id);
       json(ctx.res, 200, { ok: true });
@@ -711,7 +721,8 @@ export function registerFormsRoutes(): void {
   route('POST', '/api/forms/:id/odoo-push', async (ctx) => {
     if (!(await requireUser(ctx))) return;
     try {
-      json(ctx.res, 200, { item: await pushFormToOdoo(ctx.params.id) });
+      // “Tentar novamente” repete a gravação: confirma no Odoo como o salvar.
+      json(ctx.res, 200, { item: await pushFormToOdoo(ctx.params.id, { confirm: true }) });
     } catch (error) {
       fail(ctx, error);
     }

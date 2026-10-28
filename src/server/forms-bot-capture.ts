@@ -13,11 +13,17 @@ import {
   FORMS_BOT_LINES_MORE_FIELD,
   fixedLinesProduct,
   hasExplicitUnit,
+  isConfirmCorrectionAnswer,
+  isConfirmYesAnswer,
   isLinesMoreDoneAnswer,
+  isMarkedNewValue,
   isQuantityOnly,
   mentionsNoMoreLines,
   parseQtyProductChunks,
+  unmarkNewValue,
 } from './forms-bot-fields.js';
+import { listCatalogOptionsForField, unknownLineProducts } from './forms-bot-match.js';
+import { isFormKind } from './forms-fields.js';
 import {
   CONFIRM_CORRECTION_REPLY,
   confirmPromptText,
@@ -125,11 +131,105 @@ export async function missingPromptFor(
 ): Promise<string> {
   if (!missing.length) return '';
   if (isFormsBotQuestionnaire(questionnaire)) {
+    const pendingNew = markedAnswerFor(missing[0], answers);
+    if (pendingNew) return newValuePrompt(questionnaire, missing[0], pendingNew);
     if (isConfirmQuestion(missing[0])) return confirmPromptText(questionnaire.questions, answers);
     const guided = await buildFormsBotGuidedPrompt({ questionnaire, questions: missing });
     if (guided.trim()) return guided;
   }
   return missing.map((item, index) => `${index + 1}) ${item.body}`).join('\n');
+}
+
+function markedAnswerFor(question: QuestionnaireQuestion | undefined, answers: CycleAnswer[]): string {
+  if (!question) return '';
+  const text = String(answers.find((row) => row.question_id === question.id)?.answer_text || '');
+  return isMarkedNewValue(text) ? unmarkNewValue(text) : '';
+}
+
+function isLinesField(question: QuestionnaireQuestion): boolean {
+  const field = String(question.export_field || '').trim();
+  return field === FORMS_BOT_LINES_FIELD || field === FORMS_BOT_LINES_MORE_FIELD;
+}
+
+function partnerLabel(question: QuestionnaireQuestion): string {
+  return String(question.export_field || '').trim() === 'customer' ? 'cliente' : 'fornecedor';
+}
+
+const RESEND_LINES_HINT = 'mande produto e quantidade de novo (ex.: 50 kg de abacate)';
+
+/** “Não encontrei X… é novo?” — fornecedor/cliente com a lista; produtos com o que faltou no cadastro. */
+async function newValuePrompt(
+  questionnaire: Questionnaire,
+  question: QuestionnaireQuestion,
+  value: string,
+): Promise<string> {
+  if (isLinesField(question)) {
+    const kind = String(questionnaire.formKind || '').trim();
+    const unknown = isFormKind(kind)
+      ? await unknownLineProducts({
+          kind,
+          field: String(question.export_field || '').trim(),
+          text: value,
+          companyOdooId: String(questionnaire.companyOdooId || '').trim() || '1',
+        })
+      : [];
+    const names = unknown.length ? unknown.map((name) => `“${name}”`).join(', ') : `“${describeLinesAnswer(value)}”`;
+    return [
+      `Não encontrei no cadastro de produtos: ${names}.`,
+      `É produto novo? Responda *sim* para cadastrar, ou ${RESEND_LINES_HINT}.`,
+    ].join('\n');
+  }
+  const label = partnerLabel(question);
+  const list = await buildFormsBotGuidedPrompt({ questionnaire, questions: [question] });
+  return [
+    `Não encontrei “${value}” entre os ${label === 'cliente' ? 'clientes' : 'fornecedores'} cadastrados.`,
+    `Se for um ${label} novo, responda *sim* para cadastrar. Se não, escolha na lista:`,
+    '',
+    list,
+  ].join('\n');
+}
+
+/** Resposta ao “é novo?”: “sim” grava sem a marca; “não/corrigir” pede de novo. */
+async function tryNewValueConfirm(input: {
+  inbound: string;
+  questionnaire: Questionnaire;
+  questions: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+  pendingQuestionId: string;
+}): Promise<FormsBotCapture | null> {
+  const target = missingQuestions(input.questions, input.alreadySaved)[0];
+  const value = markedAnswerFor(target, input.alreadySaved);
+  if (!target || !value) return null;
+  if (input.pendingQuestionId && input.pendingQuestionId !== target.id) return null;
+  if (isConfirmYesAnswer(input.inbound)) {
+    return {
+      kind: 'answers',
+      accepted: [{ questionId: target.id, text: value, type: 'text', confirmedNew: true }],
+      summary: `${describeLinesAnswer(value)} (cadastro novo)`,
+      detail: 'valor novo confirmado',
+    };
+  }
+  if (isConfirmCorrectionAnswer(input.inbound)) {
+    const text = isLinesField(target)
+      ? `Certo! Então ${RESEND_LINES_HINT}.`
+      : [
+          `Certo! Escolha o ${partnerLabel(target)} na lista ou digite o nome:`,
+          '',
+          await buildFormsBotGuidedPrompt({ questionnaire: input.questionnaire, questions: [target] }),
+        ].join('\n');
+    return { kind: 'reask', text, pendingQuestionId: target.id };
+  }
+  return null;
+}
+
+/** Resumo do que foi gravado, sem os valores que ainda aguardam “é novo?”. */
+export function acceptedSummary(accepted: ExtractedAnswer[], skipQuestionIds: string[]): string {
+  const skip = new Set(skipQuestionIds);
+  return accepted
+    .filter((item) => !skip.has(item.questionId) && !isLinesMoreDoneAnswer(item.text))
+    .map((item) => describeLinesAnswer(item.text))
+    .filter(Boolean)
+    .join('; ');
 }
 
 /** defaultQuestionnaireReply, mas sem numerar perguntas Forms (conflita com “1) opção”). */
@@ -183,6 +283,9 @@ export async function tryFormsBotCapture(input: {
 
   const pendingQuestionId = String(input.pendingQuestionId || '').trim();
 
+  const newValue = await tryNewValueConfirm({ ...input, pendingQuestionId });
+  if (newValue) return newValue;
+
   const confirm = tryConfirmCapture({ ...input, pendingQuestionId });
   if (confirm?.kind === 'yes') {
     return { kind: 'answers', accepted: confirm.accepted, summary: '', detail: 'confirmação Forms' };
@@ -201,6 +304,8 @@ export async function tryFormsBotCapture(input: {
     input.alreadySaved,
     pendingQuestionId,
   );
+  const switched = await tryExplicitPartnerSwitch(input);
+  if (switched) return switched;
   // Antes do número sozinho: “fornecedor 2, 50 kg de abacate” também resolve como “fornecedor 2”.
   const combined = await tryLeadingIndexWithLines({ ...input, pendingQuestionId });
   if (combined) return combined;
@@ -257,6 +362,57 @@ export async function tryFormsBotCapture(input: {
 // “4, 100 kg…”, “fornecedor 2, 50 kg…”, “2 e 50 kg…”. Vírgula só com espaço depois (“4,5 kg” é quantidade).
 const LEADING_INDEX_RE =
   /^\s*(?:(?:fornecedor|cliente|produto|op[cç][aã]o|n[uú]mero)\s*)?(\d{1,3})(?:\s*[;\-–—]|\s*,(?=\s)|\s+e\s+)\s*(\S[\s\S]*)$/iu;
+
+const EXPLICIT_PARTNER_INDEX_RE =
+  /^\s*(fornecedor|cliente)\s+(?:n[º°o]?\.?\s*)?(\d{1,3})(?![\d.,]\d)\s*(?:[,;\-–—]\s*|\s+e\s+)?([\s\S]*)$/iu;
+
+/**
+ * “fornecedor 2” (opcionalmente com linhas) quando o campo JÁ tem valor: troca pelo item 2
+ * do catálogo e avisa a troca. Campo vazio/“[novo?]” segue o fluxo normal da lista.
+ */
+async function tryExplicitPartnerSwitch(input: {
+  inbound: string;
+  questionnaire: Questionnaire;
+  questions: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+}): Promise<FormsBotCapture | null> {
+  const match = EXPLICIT_PARTNER_INDEX_RE.exec(input.inbound);
+  if (!match) return null;
+  const kind = String(input.questionnaire.formKind || '').trim();
+  if (!isFormKind(kind)) return null;
+  const fieldKey = match[1].toLowerCase() === 'cliente' ? 'customer' : 'vendor';
+  const question = input.questions.find((item) => String(item.export_field || '').trim() === fieldKey);
+  if (!question) return null;
+  const previous = String(
+    input.alreadySaved.find((row) => row.question_id === question.id)?.answer_text || '',
+  ).trim();
+  if (!previous || isMarkedNewValue(previous)) return null;
+
+  const options = await listCatalogOptionsForField(
+    kind,
+    fieldKey,
+    String(input.questionnaire.companyOdooId || '').trim() || '1',
+  );
+  const chosen = options[Number(match[2]) - 1]?.value;
+  if (!chosen) return null;
+
+  const rest = String(match[3] || '').trim();
+  const lines = rest
+    ? tryFormsLinesCapture({ inbound: rest, questions: input.questions, alreadySaved: input.alreadySaved })
+    : [];
+  if (rest && !lines?.length) return null;
+
+  const label = fieldKey === 'customer' ? 'cliente' : 'fornecedor';
+  const change =
+    chosen === previous ? `${label}: ${chosen}` : `${label} alterado para ${chosen} (antes: ${previous})`;
+  const lineItems = lines || [];
+  return {
+    kind: 'answers',
+    accepted: [{ questionId: question.id, text: chosen, type: 'text' }, ...lineItems],
+    summary: [change, acceptedSummary(lineItems, [])].filter(Boolean).join('; '),
+    detail: `troca de ${label} por número`,
+  };
+}
 
 /** Número da lista + linhas na mesma mensagem: grava a opção do catálogo e as linhas. */
 async function tryLeadingIndexWithLines(input: {

@@ -37,8 +37,9 @@ export type FormsBotAgendaIntent =
 
 const KIND_ORDER: Record<FormKind, number> = {
   purchase: 0,
-  sale: 1,
-  product: 2,
+  production: 1,
+  sale: 2,
+  product: 3,
 };
 
 // “fornecedor”, “cliente” e “produto” são nomes de CAMPO do questionário
@@ -46,6 +47,8 @@ const KIND_ORDER: Record<FormKind, number> = {
 const KIND_ALIASES: Array<{ kind: FormKind; patterns: RegExp[] }> = [
   { kind: 'purchase', patterns: [/\bcompras?\b/, /\bpurchase\b/] },
   { kind: 'sale', patterns: [/\bvendas?\b/, /\bsale\b/] },
+  // “fardos” fica de fora: aparece nas respostas (“3 fardos de PET”) e roubaria a captura.
+  { kind: 'production', patterns: [/\bfabricacao\b/, /\bprensagem\b/, /\bprensa(do|dos|r)?\b/] },
   {
     kind: 'product',
     patterns: [/\binventario\b/, /\bestoque\b/, /\bproducao\b/, /\bproduct\b/],
@@ -53,7 +56,7 @@ const KIND_ALIASES: Array<{ kind: FormKind; patterns: RegExp[] }> = [
 ];
 
 const FORM_MENTION_RE =
-  /\b(questionario|formulario|inventario|estoque|producao|vendas?|compras?)\b/;
+  /\b(questionario|formulario|inventario|estoque|producao|fabricacao|prensagem|vendas?|compras?)\b/;
 
 export function isFormsBotQuestionnaire(
   questionnaire: Pick<Questionnaire, 'id' | 'sourcePresetId'>,

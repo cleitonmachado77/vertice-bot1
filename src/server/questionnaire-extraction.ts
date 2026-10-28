@@ -16,7 +16,13 @@ import {
   type RfqFieldKey,
 } from './rfq-answer-dictionary.js';
 
-export type ExtractedAnswer = { questionId: string; text: string; type: string };
+export type ExtractedAnswer = {
+  questionId: string;
+  text: string;
+  type: string;
+  /** Contato confirmou cadastrar o valor fora do catálogo — grava sem a marca “[novo?]”. */
+  confirmedNew?: boolean;
+};
 export type Extracted = {
   reply: string;
   answers: ExtractedAnswer[];

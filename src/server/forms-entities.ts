@@ -21,6 +21,7 @@ export type EntityPartner = {
 };
 
 export type EntityProduct = CatalogProduct & {
+  weight?: string;
   odoo_id: string;
   odoo_sync_error?: string;
   track_inventory?: string;
@@ -266,6 +267,7 @@ export async function listEntityProducts(): Promise<EntityProduct[]> {
       cost: header.cost || '',
       uom: header.uom || '',
       internal_ref: header.internal_ref || '',
+      weight: header.weight || '',
       qty_on_hand: header.qty_on_hand || '',
       track_inventory: header.track_inventory || 'True',
       odoo_id: header.odoo_id || '',
@@ -283,6 +285,7 @@ export async function saveEntityProduct(input: {
   cost?: string;
   uom?: string;
   internal_ref?: string;
+  weight?: string;
   qty_on_hand?: string;
   track_inventory?: string;
 }): Promise<EntityProduct> {
@@ -295,6 +298,7 @@ export async function saveEntityProduct(input: {
   header.cost = input.cost || '';
   header.uom = input.uom || '';
   header.internal_ref = input.internal_ref || '';
+  header.weight = input.weight || '';
   header.qty_on_hand = input.qty_on_hand || '';
   header.track_inventory = input.track_inventory || 'True';
 
@@ -322,6 +326,7 @@ export async function saveEntityProduct(input: {
       cost: merged.cost || '',
       uom: merged.uom || '',
       internal_ref: merged.internal_ref || '',
+      weight: merged.weight || '',
       qty_on_hand: merged.qty_on_hand || '',
       track_inventory: merged.track_inventory || 'True',
       odoo_id: merged.odoo_id || '',
@@ -342,6 +347,7 @@ export async function saveEntityProduct(input: {
     cost: header.cost || '',
     uom: header.uom || '',
     internal_ref: header.internal_ref || '',
+    weight: header.weight || '',
     qty_on_hand: header.qty_on_hand || '',
     track_inventory: header.track_inventory || 'True',
     odoo_id: '',

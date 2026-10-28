@@ -15,11 +15,13 @@ export class OdooError extends Error {
 }
 
 export function getOdooConfig(): OdooConfig {
+  // ODOO_LOGIN/ODOO_API_KEY no ambiente do processo valem só para ele (ex.: script de teste com
+  // outro usuário) — não alteram as configurações salvas no banco.
   return {
     url: (getSetting('odoo_url') || '').replace(/\/$/, ''),
     db: getSetting('odoo_db') || '',
-    login: getSetting('odoo_login') || '',
-    apiKey: getSetting('odoo_api_key') || '',
+    login: process.env.ODOO_LOGIN || getSetting('odoo_login') || '',
+    apiKey: process.env.ODOO_API_KEY || getSetting('odoo_api_key') || '',
   };
 }
 

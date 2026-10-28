@@ -2,6 +2,7 @@ import {
   FORMS_BOT_CONFIRM_FIELD,
   FORMS_BOT_LINES_MORE_FIELD,
   isConfirmYesAnswer,
+  isMarkedNewValue,
   isUsableLinesMoreAnswer,
 } from './forms-bot-fields.js';
 import type { MediaUnderstanding } from './media-understand.js';
@@ -33,7 +34,23 @@ export function isGreetingOrAck(text: string): boolean {
   ) {
     return true;
   }
-  return /^(bom dia|boa tarde|boa noite)(\s+[!?.]*)?$/.test(folded);
+  if (/^(bom dia|boa tarde|boa noite)(\s+[!?.]*)?$/.test(folded)) return true;
+  return isAckPhrase(folded);
+}
+
+// Só palavras de saudação/aceite (“bom dia posso sim”, “pode sim, vamos lá”). “não” fica de fora:
+// “não posso” é recusa, não aceite.
+const ACK_PHRASE_RE =
+  /^(?:(?:bom dia|boa tarde|boa noite|tudo bem|td bem|tudo certo|com certeza|sim senhor|sim senhora|pode ser|pode mandar|pode perguntar|pode comecar|vamos la|bora la|por favor|oi+|ola|opa|eai|e ai|hey|beleza|blz|ok|okay|certo|sim|s|pode|posso|podemos|claro|vamos|bora|manda|show|top|otimo|perfeito|tranquilo|combinado|fechado|valeu|obrigad\w*|agora|aqui|to|estou|e|ai|sr|senhor|senhora|pf|pfv)(?:\s+|$))+$/;
+
+/** Frase composta só de saudação/aceite: aceita o convite, não responde nenhum campo. */
+export function isAckPhrase(text: string): boolean {
+  const folded = foldText(text)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!folded) return false;
+  return ACK_PHRASE_RE.test(folded);
 }
 
 export function looksLikeQuestionnaireAnswer(
@@ -145,6 +162,7 @@ export function looksLikeAnswerPayload(media: MediaUnderstanding, inbound: strin
 export function isUnusableQuestionnaireAnswer(text: string): boolean {
   const raw = String(text || '').trim();
   if (!raw) return true;
+  if (isMarkedNewValue(raw)) return true;
   if (isGreetingOrAck(raw)) return true;
   if (looksLikeQuestionnaireMeta(raw)) return true;
   const folded = foldText(raw);
@@ -181,7 +199,7 @@ export function isUsableAnswerForQuestion(
   text: string,
 ): boolean {
   const raw = String(text || '').trim();
-  if (!raw) return false;
+  if (!raw || isMarkedNewValue(raw)) return false;
   // “não” é resposta válida de “Mais produtos?” — avaliar antes da regra de saudação/ack.
   if (String(question.export_field || '').trim() === FORMS_BOT_LINES_MORE_FIELD) {
     return isUsableLinesMoreAnswer(raw);

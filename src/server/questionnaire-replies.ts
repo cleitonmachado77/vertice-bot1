@@ -65,7 +65,8 @@ export function ensureMissingAsked(input: {
   if (
     !trimmed ||
     asksConfirmation(trimmed) ||
-    claimsCompleteWhileIncomplete(trimmed)
+    claimsCompleteWhileIncomplete(trimmed) ||
+    promisesListWithoutItems(trimmed)
   ) {
     return defaultQuestionnaireReply(
       input.questions,
@@ -77,6 +78,16 @@ export function ensureMissingAsked(input: {
     );
   }
   return trimmed;
+}
+
+/** “Aqui estão as perguntas:” sem nenhuma pergunta depois (o modelo cortou a lista). */
+export function promisesListWithoutItems(reply: string): boolean {
+  const trimmed = reply.trim();
+  if (/^\s*(?:\d{1,3}[).]|[-•*])\s+\S/m.test(trimmed)) return false;
+  if (/:\s*$/.test(trimmed)) return true;
+  return /\b(aqui estao|aqui esta a lista|seguem|sao estas|sao elas|vou listar|listo abaixo|abaixo)\b/.test(
+    foldText(trimmed),
+  );
 }
 
 /** “Anotei tudo” (etc.) com itens ainda faltando — não pode seguir assim. */

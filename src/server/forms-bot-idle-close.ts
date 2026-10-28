@@ -2,7 +2,7 @@ import { zonedNow } from './clock.js';
 import { getSetting, many, one } from './db.js';
 import { missingPromptFor } from './forms-bot-capture.js';
 import { formsAnswersSummary } from './forms-bot-closing.js';
-import { FORMS_BOT_CONFIRM_FIELD, FORMS_BOT_LINES_MORE_FIELD } from './forms-bot-fields.js';
+import { FORMS_BOT_CONFIRM_FIELD, FORMS_BOT_LINES_MORE_FIELD, isMarkedNewValue } from './forms-bot-fields.js';
 import { effectiveIdleRules, isQuietTime, parseFormsBotRules, type EffectiveIdleRules } from './forms-bot-rules.js';
 import { enqueueOutbound } from './outbound-outbox.js';
 import {
@@ -28,6 +28,8 @@ export type IdleRunResult = { closed: number; reminded: number; alerted: number;
 
 /** Falta só o fechamento (“Mais produtos?” e/ou confirmação): os dados obrigatórios já chegaram. */
 export function isReadyForIdleClose(questions: QuestionnaireQuestion[], answers: CycleAnswer[]): boolean {
+  // Valor “[novo?]” aguardando o contato: encerrar sobrescreveria os itens novos com “não”.
+  if (answers.some((row) => isMarkedNewValue(row.answer_text))) return false;
   const missing = missingQuestions(questions, answers);
   return missing.length > 0 && missing.every((item) => CLOSING_FIELDS.has(String(item.export_field || '').trim()));
 }

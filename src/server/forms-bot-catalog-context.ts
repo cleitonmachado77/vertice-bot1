@@ -5,7 +5,7 @@ import {
   resolveCatalogValue,
   type MatchCandidate,
 } from './forms-bot-match.js';
-import { FORMS_BOT_LINES_FIELD, fixedLinesProduct } from './forms-bot-fields.js';
+import { FORMS_BOT_LINES_FIELD, fixedLinesProduct, isMarkedNewValue } from './forms-bot-fields.js';
 import { headerFieldsFor, isFormKind, lineFieldsFor, type FormField, type FormKind } from './forms-fields.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
 import { foldText } from './questionnaire-rules.js';
@@ -56,6 +56,8 @@ function catalogFieldsInQuestionnaire(
     if (key === FORMS_BOT_LINES_FIELD) {
       // Produto fixado no padrão (“Qtd de ABACATE?”): não há o que escolher no catálogo.
       if (fixedLinesProduct(question)) continue;
+      // Fabricação: “PET 120 kg, papelão 300 kg” digitado; a lista de todos os produtos atrapalharia.
+      if (kind === 'production') continue;
       const product = fieldByKey(kind, 'product');
       if (product && isFormsCatalogField(product) && !seen.has(product.key)) {
         seen.add(product.key);
@@ -235,7 +237,7 @@ function firstPendingCatalogField(
     if (!question) continue;
     const saved = alreadySaved.find((row) => row.question_id === question.id);
     const text = String(saved?.answer_text || '').trim();
-    if (text) continue;
+    if (text && !isMarkedNewValue(text)) continue;
     return { fieldKey: field.key, questionId: question.id };
   }
   return null;
@@ -251,7 +253,8 @@ function isCatalogFieldPending(
   );
   if (!question) return false;
   const saved = alreadySaved.find((row) => row.question_id === question.id);
-  return !String(saved?.answer_text || '').trim();
+  const text = String(saved?.answer_text || '').trim();
+  return !text || isMarkedNewValue(text);
 }
 
 function lastCatalogListOutbound(

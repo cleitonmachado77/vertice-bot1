@@ -6,6 +6,7 @@ import {
   isFormKind,
   lineFieldsFor,
   normalizeFormStatus,
+  statusesFor,
   type FormKind,
 } from './forms-fields.js';
 import { parseFormsBotRules, sanitizeFormsBotRules, type FormsBotRules } from './forms-bot-rules.js';
@@ -127,7 +128,7 @@ function editableHeaderKeys(kind: FormKind): Set<string> {
 function defaultVisible(kind: FormKind): FormPresetVisible {
   return {
     title: true,
-    status: kind !== 'product',
+    status: statusesFor(kind).length > 0,
     // Readonly (ex.: número do pedido) começa desmarcado — não aparece no novo.
     header: headerFieldsFor(kind)
       .filter((field) => !field.readonly)
@@ -189,7 +190,7 @@ function sanitizeVisible(kind: FormKind, input?: Partial<FormPresetVisible> | nu
     : fallback.lines;
   return {
     title: input.title == null ? fallback.title : Boolean(input.title),
-    status: kind === 'product' ? false : input.status == null ? fallback.status : Boolean(input.status),
+    status: !statusesFor(kind).length ? false : input.status == null ? fallback.status : Boolean(input.status),
     header,
     lines,
   };

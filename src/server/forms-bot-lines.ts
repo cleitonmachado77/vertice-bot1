@@ -5,6 +5,7 @@ import {
   quantityNumber,
 } from './forms-bot-fields.js';
 import { lineFieldsFor, type FormKind } from './forms-fields.js';
+import { splitQuantityUnit } from './forms-uom.js';
 
 export type BotLineRow = Record<string, string>;
 
@@ -32,8 +33,9 @@ export function planBotLines(input: {
   const plan = { ...empty };
   const linesAnswer = String(input.linesAnswer || '').trim();
   if (linesAnswer) {
+    // “uom” sempre: “10 bags” traz a unidade mesmo com o campo oculto no padrão.
     plan.primaryKeys = [
-      ...new Set([...input.visibleLineKeys, ...Object.keys(baseLines[0]?.values || {})]),
+      ...new Set([...input.visibleLineKeys, ...Object.keys(baseLines[0]?.values || {}), 'uom']),
     ];
     plan.resolvePrimary = true;
     const productFixed = !input.visibleLineKeys.includes('product');
@@ -59,7 +61,7 @@ export function planBotLines(input: {
 
   const moreAnswer = String(input.moreAnswer || '').trim();
   if (moreAnswer && !isLinesMoreDoneAnswer(moreAnswer)) {
-    plan.extraKeys = [...new Set([...input.visibleLineKeys, 'product', 'quantity', 'unit_price'])];
+    plan.extraKeys = [...new Set([...input.visibleLineKeys, 'product', 'quantity', 'unit_price', 'uom'])];
     plan.extra = parseLinesAnswer(moreAnswer, input.kind, plan.extraKeys);
   }
   return plan;
@@ -75,6 +77,16 @@ function sameProduct(typed: string, catalogName: string): boolean {
   return Boolean(a && b) && (b.includes(a) || a.includes(b));
 }
 
+/**
+ * Quantidade + unidade de contagem do Odoo (“10 bags” → 10, “Bag”): o Odoo converte para a
+ * unidade de estoque. Peso (“50 kg”) fica na unidade do produto, como antes.
+ */
+function lineQuantity(raw: string): BotLineRow {
+  const split = splitQuantityUnit(raw);
+  const quantity = quantityNumber(raw) || split.quantity || String(raw || '').trim();
+  return split.uom && split.uom !== 'KG' ? { quantity, uom: split.uom } : { quantity };
+}
+
 function withoutProductSpecific(values: BotLineRow): BotLineRow {
   const { product: _product, unit_price: _price, quantity: _quantity, ...rest } = values;
   return rest;
@@ -85,7 +97,7 @@ export function parseLinesAnswer(raw: string, kind: FormKind, visibleKeys: strin
   const text = String(raw || '').trim();
   if (!text) return [];
   // product/quantity sempre: o padrão pode mostrar só a quantidade, mas o item extra tem produto.
-  const keys = [...new Set([...visibleKeys, 'product', 'quantity'])];
+  const keys = [...new Set([...visibleKeys, 'product', 'quantity', 'uom'])];
   try {
     const parsed = JSON.parse(text) as unknown;
     if (Array.isArray(parsed)) {
@@ -96,8 +108,7 @@ export function parseLinesAnswer(raw: string, kind: FormKind, visibleKeys: strin
           for (const key of keys) {
             if (src[key] != null && String(src[key]).trim()) values[key] = String(src[key]);
           }
-          if (values.quantity) values.quantity = quantityNumber(values.quantity) || values.quantity;
-          return values;
+          return values.quantity && !values.uom ? { ...values, ...lineQuantity(values.quantity) } : values;
         })
         .filter((row) => Object.values(row).some((value) => value.trim()));
     }
@@ -108,15 +119,15 @@ export function parseLinesAnswer(raw: string, kind: FormKind, visibleKeys: strin
   const chunks = parseQtyProductChunks(text);
   if (chunks.length) {
     return chunks.map((chunk) => ({
-      quantity: quantityNumber(chunk.quantity) || chunk.quantity,
+      ...lineQuantity(chunk.quantity),
       product: chunk.product,
     }));
   }
 
   // “Qtd de ABACATE?” → “3” / “3 kg”: só a quantidade; o produto vem da linha do padrão.
   if (isQuantityOnly(text)) {
-    const quantity = quantityNumber(text);
-    if (quantity) return [{ quantity }];
+    const row = lineQuantity(text);
+    if (row.quantity) return [row];
   }
 
   const lineFields = lineFieldsFor(kind).filter((field) => visibleKeys.includes(field.key));

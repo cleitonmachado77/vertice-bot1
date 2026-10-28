@@ -7,6 +7,7 @@ import {
   isConfirmYesAnswer,
   isLinesMoreDoneAnswer,
   parseQtyProductChunks,
+  unmarkNewValue,
 } from './forms-bot-fields.js';
 import { missingQuestions, type CycleAnswer } from './questionnaire-cycles.js';
 import { isCorrectionOrDeleteRequest } from './questionnaire-edits.js';
@@ -19,15 +20,16 @@ const fieldOf = (question: QuestionnaireQuestion) => String(question.export_fiel
 
 /** JSON de linhas → “50 kg de abacate; 20 kg de mandioca”; texto livre fica como está. */
 export function describeLinesAnswer(text: string): string {
+  const raw = unmarkNewValue(text);
   try {
-    const rows = JSON.parse(text) as Array<{ product?: string; quantity?: string }>;
+    const rows = JSON.parse(raw) as Array<{ product?: string; quantity?: string }>;
     if (Array.isArray(rows)) {
       return rows.map((row) => `${row.quantity || ''} de ${row.product || ''}`.trim()).join('; ');
     }
   } catch {
     /* texto livre */
   }
-  return text;
+  return raw;
 }
 
 /** “Fornecedor Teste Vertice; 100 kg de manga; 20 kg de mandioca” (sem “não”/confirmação). */

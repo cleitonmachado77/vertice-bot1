@@ -1,6 +1,11 @@
 import { withTransaction } from './db.js';
-import { FORMS_BOT_LINES_FIELD } from './forms-bot-fields.js';
-import { resolveCatalogValue } from './forms-bot-match.js';
+import {
+  FORMS_BOT_LINES_FIELD,
+  FORMS_BOT_LINES_MORE_FIELD,
+  isMarkedNewValue,
+  markNewValue,
+} from './forms-bot-fields.js';
+import { resolveCatalogValue, unknownLineProducts } from './forms-bot-match.js';
 import { isFormKind } from './forms-fields.js';
 import type { MediaUnderstanding } from './media-understand.js';
 import {
@@ -28,7 +33,14 @@ async function expandFormsCatalogAnswers(input: {
   for (const item of input.accepted) {
     const question = byId.get(item.questionId);
     const field = String(question?.export_field || '').trim();
-    if (!field || field === FORMS_BOT_LINES_FIELD) {
+    if (field === FORMS_BOT_LINES_FIELD || field === FORMS_BOT_LINES_MORE_FIELD) {
+      const unknown = item.confirmedNew
+        ? []
+        : await unknownLineProducts({ kind: kindRaw, field, text: item.text, companyOdooId });
+      out.push(unknown.length ? { ...item, text: markNewValue(item.text) } : item);
+      continue;
+    }
+    if (!field) {
       out.push(item);
       continue;
     }
@@ -49,6 +61,10 @@ async function expandFormsCatalogAnswers(input: {
         console.warn(`questionnaire: "${item.text}" é produto, não ${field} — descartado`);
         continue;
       }
+      if (!item.confirmedNew) {
+        out.push({ ...item, text: markNewValue(resolved.value || item.text) });
+        continue;
+      }
     }
     out.push({ ...item, text: resolved.value || item.text });
   }
@@ -66,7 +82,13 @@ export async function persistAcceptedAnswers(input: {
   mediaUrl: string;
   formKind?: string;
   companyOdooId?: string;
-}): Promise<{ answers: CycleAnswer[]; missing: QuestionnaireQuestion[]; complete: boolean }> {
+}): Promise<{
+  answers: CycleAnswer[];
+  missing: QuestionnaireQuestion[];
+  complete: boolean;
+  /** Perguntas com valor fora do catálogo aguardando “sim” (marca “[novo?]”). */
+  pendingNew: string[];
+}> {
   return withTransaction(async () => {
     const accepted = await expandFormsCatalogAnswers({
       questions: input.questions,
@@ -98,7 +120,10 @@ export async function persistAcceptedAnswers(input: {
       complete,
       accepted.length > 0 || input.alreadySaved.length > 0,
     );
-    return { answers, missing, complete };
+    const pendingNew = answers
+      .filter((row) => isMarkedNewValue(row.answer_text))
+      .map((row) => row.question_id);
+    return { answers, missing, complete, pendingNew };
   });
 }
 

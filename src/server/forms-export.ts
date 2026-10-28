@@ -2,7 +2,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import type { FormDocument } from './forms.js';
-import { KIND_LABELS, type FormKind } from './forms-fields.js';
+import { many } from './db.js';
+import { KIND_LABELS, productionBalance, statusLabel, type FormKind } from './forms-fields.js';
+import { listUomInfos, toKg } from './forms-uom.js';
 import { getFormDocument, listFormDocuments } from './forms.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -134,16 +136,79 @@ async function exportProducts(docs: FormDocument[]): Promise<FormsExportResult> 
   };
 }
 
-export async function exportFormsByKind(kind: FormKind): Promise<FormsExportResult> {
-  const docs = await listFormDocuments(kind);
-  if (!docs.length) throw new Error(`Nenhum registro em ${KIND_LABELS[kind]} para exportar`);
+/** Uma linha por produto gerado da ordem de produção (principal + subprodutos), com o balanço em kg. */
+async function exportProductions(docs: FormDocument[]): Promise<FormsExportResult> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Fabricação');
+  sheet.addRow([
+    'Número',
+    'Data',
+    'Estado',
+    'Produto de entrada',
+    'Quantidade de entrada',
+    'Unidade de entrada',
+    'Kg de entrada',
+    'Produto gerado',
+    'Quantidade',
+    'Unidade',
+    'Kg',
+    'Divisão de custo (%)',
+    'Perda (kg)',
+  ]);
+  sheet.getRow(1).font = { bold: true };
+
+  const uoms = await listUomInfos();
+  const products = await many<{ name: string; uom: string }>(
+    `SELECT lower(trim(both FROM header_json::json->>'name')) AS name, COALESCE(header_json::json->>'uom', '') AS uom
+     FROM forms_documents WHERE kind = 'product'`,
+  );
+  const productUom = new Map(products.map((item) => [item.name, item.uom]));
+  const convert = (qty: number, uom: string, product: string) =>
+    toKg(qty, uom || productUom.get(product.trim().toLowerCase()) || '', uoms);
+
+  let rows = 0;
+  for (const doc of docs) {
+    const balance = productionBalance(doc, convert);
+    const lines = balance.lines.length ? balance.lines : [null];
+    lines.forEach((line, index) => {
+      rows += 1;
+      sheet.addRow([
+        index === 0 ? text(doc.header.order_reference) : '',
+        index === 0 ? text(doc.header.production_date) : '',
+        index === 0 ? statusLabel('production', doc.status) : '',
+        index === 0 ? text(doc.header.input_product) : '',
+        index === 0 ? balance.inputQty || '' : '',
+        index === 0 ? text(doc.header.input_uom) : '',
+        index === 0 ? (balance.inputKg ?? '') : '',
+        line?.product || '',
+        line?.quantity || '',
+        line?.uom || '',
+        line?.kg ?? '',
+        line?.costShare ?? '',
+        index === 0 ? (balance.lossKg ?? '') : '',
+      ]);
+    });
+  }
+
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const stamp = new Date().toISOString().slice(0, 10);
+  return { buffer, filename: `vertice-forms-fabricacao-${stamp}.xlsx`, rows };
+}
+
+function exportDocs(kind: FormKind, docs: FormDocument[]): Promise<FormsExportResult> {
   if (kind === 'product') return exportProducts(docs);
+  if (kind === 'production') return exportProductions(docs);
   return exportOrderDocs(kind, docs);
+}
+
+export async function exportFormsByKind(kind: FormKind): Promise<FormsExportResult> {
+  const docs = await listFormDocuments(kind, { includeLines: true });
+  if (!docs.length) throw new Error(`Nenhum registro em ${KIND_LABELS[kind]} para exportar`);
+  return exportDocs(kind, docs);
 }
 
 export async function exportFormById(id: string): Promise<FormsExportResult> {
   const doc = await getFormDocument(id);
   if (!doc) throw new Error('Formulário não encontrado');
-  if (doc.kind === 'product') return exportProducts([doc]);
-  return exportOrderDocs(doc.kind, [doc]);
+  return exportDocs(doc.kind, [doc]);
 }

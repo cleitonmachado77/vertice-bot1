@@ -21,6 +21,7 @@ import {
 const TABS = [
   { id: 'purchase', slug: 'compras', label: 'Compras' },
   { id: 'product', slug: 'inventario', label: 'Inventário' },
+  { id: 'production', slug: 'fabricacao', label: 'Fabricação' },
   { id: 'sale', slug: 'vendas', label: 'Vendas' },
   { id: 'cadastros', slug: 'cadastros', label: 'Cadastros' },
 ];
@@ -86,6 +87,7 @@ export function tabFromSlug(slug) {
   ) {
     return 'cadastros';
   }
+  if (raw === 'prensagem') return 'production';
   return TABS.find((tab) => tab.slug === slug)?.id || 'product';
 }
 
@@ -336,6 +338,16 @@ function listFilterConfig(kind) {
       searchPlaceholder: 'Buscar por título, número, cliente…',
     };
   }
+  if (kind === 'production') {
+    return {
+      selectKey: 'input_product',
+      selectLabel: 'Entrada',
+      selectAll: 'Todos os produtos de entrada',
+      dateMode: 'header',
+      dateKeys: ['production_date'],
+      searchPlaceholder: 'Buscar por título, material, ordem…',
+    };
+  }
   if (kind === 'product') {
     return {
       selectKey: 'category',
@@ -414,6 +426,8 @@ function filterItems(items, schema, kind, filters) {
       item.header?.name,
       item.header?.category,
       item.header?.internal_ref,
+      item.header?.input_product,
+      ...(Array.isArray(item.lines) ? item.lines.map((line) => line.values?.product) : []),
     ]
       .map((part) => String(part || '').toLowerCase())
       .join(' ');
@@ -548,11 +562,12 @@ function statusLabel(schema, kind, status) {
   return value;
 }
 
-/** Pedidos confirmados no Odoo não podem ser editados/excluídos no Vertice. */
+/** Como no Odoo: pedido confirmado segue editável; só bloqueado/cancelado trava. */
 function isOrderLocked(doc, kind) {
+  if (kind === 'production') return isProductionLocked(doc);
   if (kind !== 'sale' && kind !== 'purchase') return false;
   const state = String(doc?.header?.odoo_state || doc?.status || 'draft').toLowerCase();
-  return Boolean(state) && state !== 'draft' && state !== 'sent' && state !== 'to approve';
+  return state === 'done' || state === 'cancel';
 }
 
 function blankDraft(kind, schema) {
@@ -564,11 +579,19 @@ function blankDraft(kind, schema) {
   const hasLines = (fields.lines || []).length > 0;
   const lineValues = {};
   for (const field of fields.lines || []) lineValues[field.key] = '';
+  if (kind === 'production') header.production_date = new Date().toISOString().slice(0, 10);
   return {
     id: '',
     kind,
-    title: kind === 'sale' ? 'Cotação' : kind === 'purchase' ? 'Solicitação' : 'Produto',
-    status: 'draft',
+    title:
+      kind === 'sale'
+        ? 'Cotação'
+        : kind === 'purchase'
+          ? 'Solicitação'
+          : kind === 'production'
+            ? 'Fabricação'
+            : 'Produto',
+    status: kind === 'production' ? 'done' : 'draft',
     header,
     lines: hasLines ? [{ id: '', values: lineValues }] : [],
     updated_at: '',
@@ -1086,7 +1109,9 @@ function listLinesPreview(item, kind) {
   for (const line of lines) {
     const values = line?.values && typeof line.values === 'object' ? line.values : {};
     const product = shortProductLabel(values.product);
-    const qty = String(values.quantity || '').trim();
+    const rawQty = String(values.quantity || '').trim();
+    const lineUom = String(values.uom || '').trim();
+    const qty = lineUom && rawQty ? `${rawQty} ${lineUom}` : rawQty;
     if (!product && !qty) continue;
     if (product && qty) parts.push(`${qty} ${product}`);
     else parts.push(product || qty);
@@ -1106,6 +1131,8 @@ function listRow(item, activeId, schema, kind) {
   const headline =
     kind === 'product'
       ? item.title || item.header?.name || 'Sem título'
+      : kind === 'production'
+        ? [item.title || 'Fabricação', productionInputLabel(item.header)].filter(Boolean).join(' · ')
       : ref && partner
         ? `${ref} · ${partner}`
         : ref || partner || item.title || 'Sem título';
@@ -1167,19 +1194,42 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
     options.title || (isPreset ? 'Padrão' : isNew ? 'Novo registro' : 'Editar registro');
   const subtitle =
     options.subtitle ||
-    (confirmed
-      ? 'Pedido confirmado no Odoo — altere um campo para salvar e reenviar.'
+    (kind === 'production' && !isPreset
+      ? confirmed
+        ? 'Ordem de produção concluída/cancelada no Odoo — não pode ser alterada. Para desfazer, use “Desmontar” na ordem no Odoo.'
+        : 'Ao salvar, a ordem de produção é concluída no Odoo: o componente sai do estoque e os produtos gerados entram. A 1ª linha é o produto principal; as demais, subprodutos.'
+      : confirmed
+      ? 'Pedido bloqueado ou cancelado no Odoo — não pode ser alterado no Vertice.'
+      : (kind === 'purchase' || kind === 'sale') && !isPreset
+        ? kind === 'purchase'
+          ? 'Ao salvar, o pedido é confirmado no Odoo e o recebimento é validado (o estoque sobe). Alterações depois também atualizam o Odoo.'
+          : 'Ao salvar, a venda é confirmada no Odoo e a entrega é validada (o estoque baixa). Alterações depois também atualizam o Odoo.'
       : isPreset
         ? 'Defina o nome do botão e os valores padrão.'
         : isNew
           ? 'Preencha e salve para criar. Fechar sem salvar não cria o registro.'
           : 'Altere um campo para salvar. O envio ao Odoo é automático.');
 
+  // Compras, Vendas e Fabricação gravam dado real: o status é o do Odoo (só leitura).
+  const odooDrivenStatus = kind === 'purchase' || kind === 'sale' || kind === 'production';
   const statusControl =
     statuses.length === 0
       ? isPreset
         ? `<input type="hidden" name="status" value="draft" />`
         : ''
+      : odooDrivenStatus
+        ? isPreset
+          ? `<input type="hidden" name="status" value="${escapeHtml(currentStatus)}" />`
+          : `<label>Status
+        <input value="${escapeHtml(
+          isNew
+            ? kind === 'production'
+              ? 'Concluído ao salvar'
+              : 'Confirmado ao salvar'
+            : statusLabel(schema, kind, currentStatus),
+        )}" readonly />
+      </label>
+      <input type="hidden" name="status" value="${escapeHtml(currentStatus)}" />`
       : hideStatus && !isPreset
         ? `<input type="hidden" name="status" value="${escapeHtml(currentStatus)}" />`
         : (() => {
@@ -1364,7 +1414,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
         hasLines
           ? `<div class="forms-section">
               <div class="row forms-lines-head">
-                <h2>Linhas de produto</h2>
+                <h2>${kind === 'production' ? 'Produtos gerados' : 'Linhas de produto'}</h2>
                 <button class="btn-ghost" type="button" data-add-line>Adicionar linha</button>
               </div>
               ${lineShowBar}
@@ -1383,7 +1433,104 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
             </div>`
           : ''
       }
+      ${
+        kind === 'production' && !isPreset
+          ? `<div class="forms-section" data-production-balance>${productionBalanceHtml(doc.header || {}, doc.lines || [], catalog)}</div>`
+          : ''
+      }
     </form>`;
+}
+
+function numberOf(value) {
+  const match = /-?\d+(?:[.,]\d+)?/.exec(String(value || ''));
+  return match ? Number(match[0].replace(',', '.')) : 0;
+}
+
+function formatKg(value) {
+  return `${Number(value.toFixed(3)).toLocaleString('pt-BR')} kg`;
+}
+
+/** Ordem de produção concluída/cancelada no Odoo (mesma regra de isProductionLocked no servidor). */
+function isProductionLocked(doc) {
+  const state = String(doc?.header?.odoo_state || '').toLowerCase();
+  return state === 'done' || state === 'cancel';
+}
+
+function productionInputLabel(header = {}) {
+  const qty = numberOf(header.input_qty);
+  if (qty <= 0) return '';
+  return `${qty.toLocaleString('pt-BR')} ${header.input_uom || ''} de ${header.input_product || 'entrada'}`.replace(/\s+/g, ' ');
+}
+
+/** Unidade do Odoo (catálogo uom: raiz da árvore + fator), aceitando plural (“bags” → “Bag”). */
+function uomInfo(catalog, name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  const items = catalog?.refs?.uom || [];
+  const hit =
+    items.find((item) => item.name.toLowerCase() === key) ||
+    items.find((item) => item.name.toLowerCase().replace(/s$/, '') === key.replace(/s$/, ''));
+  return hit ? { name: hit.name, root: hit.meta?.root_id || hit.odoo_id, factor: Number(hit.meta?.factor) || 1 } : null;
+}
+
+/** Mesma conversão do Odoo (forms-uom toKg): unidade vazia = unidade do produto. */
+function qtyToKg(catalog, qty, uomName, productName) {
+  const productUom =
+    (catalog?.products || []).find(
+      (item) => item.name.trim().toLowerCase() === String(productName || '').trim().toLowerCase(),
+    )?.uom || '';
+  const from = uomInfo(catalog, uomName || productUom);
+  if (!from) return null;
+  const kg = (catalog?.refs?.uom || []).find(
+    (item) => item.name.toLowerCase() === 'kg' && (item.meta?.root_id || item.odoo_id) === from.root,
+  );
+  return kg ? (qty * from.factor) / (Number(kg.meta?.factor) || 1) : null;
+}
+
+/** Mesma regra de productionBalance (servidor): entrada e saída na unidade do Odoo e em kg. */
+function productionBalanceHtml(header, lines, catalog) {
+  const inputName = String(header.input_product || '').trim();
+  const inputQty = numberOf(header.input_qty);
+  const inputUom = String(header.input_uom || '').trim();
+  const inputKg = inputQty > 0 ? qtyToKg(catalog, inputQty, inputUom, inputName) : null;
+  const rows = lines
+    .map((line) => line?.values || {})
+    .filter((values) => String(values.product || '').trim() && numberOf(values.quantity) > 0)
+    .map((values) => ({
+      product: values.product,
+      qty: numberOf(values.quantity),
+      uom: values.uom || '',
+      kg: qtyToKg(catalog, numberOf(values.quantity), values.uom, values.product),
+    }));
+  const outputKg = rows.length && rows.every((row) => row.kg != null) ? rows.reduce((sum, row) => sum + row.kg, 0) : null;
+  const parts = [];
+  if (inputQty > 0) {
+    const inKg = inputKg != null && !/^kg$/i.test(inputUom) ? ` = ${formatKg(inputKg)}` : '';
+    parts.push(
+      `<p><strong>Componente:</strong> ${escapeHtml(`${inputQty.toLocaleString('pt-BR')} ${inputUom || ''}`.trim())}${escapeHtml(inKg)} de ${escapeHtml(inputName || 'entrada')}</p>`,
+    );
+  } else {
+    parts.push('<p class="muted">Informe a quantidade de entrada.</p>');
+  }
+  rows.forEach((row, index) => {
+    const label = index === 0 ? 'Produto principal' : 'Subproduto';
+    const inKg = row.kg != null && !/^kg$/i.test(row.uom) && row.uom ? ` = ${formatKg(row.kg)}` : '';
+    parts.push(
+      `<p><strong>${label}:</strong> ${escapeHtml(row.product)} ${escapeHtml(`${row.qty.toLocaleString('pt-BR')} ${row.uom}`.trim())}${escapeHtml(inKg)}</p>`,
+    );
+  });
+  if (inputKg != null && outputKg != null) {
+    const loss = inputKg - outputKg;
+    parts.push(
+      loss >= 0
+        ? `<p><strong>Perda:</strong> ${escapeHtml(formatKg(loss))} (${inputKg ? Math.round((loss / inputKg) * 100) : 0}%)</p>`
+        : `<p class="forms-sync-notice is-error">A saída pesa ${escapeHtml(formatKg(-loss))} a mais que a entrada — confira a quantidade de entrada.</p>`,
+    );
+  }
+  if (header.stock_warning) {
+    parts.push(`<p class="forms-sync-notice is-error">${escapeHtml(header.stock_warning)}</p>`);
+  }
+  return `<h2>Balanço da ordem de produção</h2>${parts.join('')}`;
 }
 
 function catalogComboField(field, value, options = {}) {
@@ -1436,7 +1583,7 @@ function headerInput(field, value, kind, options = {}) {
       </div>
     </label>`;
   }
-  if (field.key === 'name' && kind === 'product') {
+  if ((field.key === 'name' && kind === 'product') || (field.key === 'input_product' && kind === 'production')) {
     return `
     <label class="forms-combo-label">${escapeHtml(field.label)}${field.required ? ' *' : ''}
       <div class="forms-combo" data-product-combo="header">
@@ -1936,12 +2083,35 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
   bindLineRemoves(form, catalog);
   bindDirtySave(form, fields);
 
+  const balanceBox = form.querySelector('[data-production-balance]');
+  if (balanceBox) {
+    const refreshBalance = () => {
+      const payload = collectPayload(form, fields);
+      balanceBox.innerHTML = productionBalanceHtml(
+        { ...(doc.header || {}), ...(payload.header || {}) },
+        payload.lines || [],
+        catalog,
+      );
+    };
+    form._refreshProduction = refreshBalance;
+    form.addEventListener('input', refreshBalance);
+    form.addEventListener('change', refreshBalance);
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const saveBtn = form.querySelector('[data-save]');
     if (saveBtn?.hidden) return;
     try {
       const payload = collectPayload(form, fields);
+      if (
+        kind === 'production' &&
+        payload.status === 'done' &&
+        !isProductionLocked(doc) &&
+        !confirm('Concluir a ordem de produção no Odoo? O componente sai do estoque e os produtos gerados entram — depois não dá para editar.')
+      ) {
+        return;
+      }
       let id = doc.id;
       if (!id) {
         const created = await api('/api/forms', { method: 'POST', body: { kind } });
@@ -1984,12 +2154,17 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
     bindCatalogCombos(form, catalog);
     bindProductAutofill(form, catalog);
     syncLineQuantityLabels(form, catalog);
+    form._refreshProduction?.();
     form._checkDirty?.();
   });
 
   form.querySelector('[data-delete]')?.addEventListener('click', async () => {
     if (!doc.id) return;
-    if (!confirm('Excluir este registro? O pedido correspondente será cancelado no Odoo.')) return;
+    const question =
+      kind === 'production'
+        ? 'Excluir esta fabricação? A ordem de produção será cancelada no Odoo (nada foi lançado no estoque).'
+        : 'Excluir este registro? O pedido correspondente será cancelado no Odoo.';
+    if (!confirm(question)) return;
     try {
       await api(`/api/forms/${doc.id}`, { method: 'DELETE' });
       toast('Excluído · cancelado no Odoo', { tone: 'subtle' });

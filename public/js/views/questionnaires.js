@@ -6,6 +6,7 @@ const KIND_META = {
   purchase: { label: 'Compras', href: '#/forms/compras' },
   product: { label: 'Inventário', href: '#/forms/inventario' },
   sale: { label: 'Vendas', href: '#/forms/vendas' },
+  production: { label: 'Fabricação', href: '#/forms/fabricacao' },
 };
 
 /** @type {string} */
@@ -36,6 +37,7 @@ async function renderAnalytics(root, token = getNavToken()) {
     api('/api/forms/presets?kind=purchase').catch(() => ({ items: [] })),
     api('/api/forms/presets?kind=product').catch(() => ({ items: [] })),
     api('/api/forms/presets?kind=sale').catch(() => ({ items: [] })),
+    api('/api/forms/presets?kind=production').catch(() => ({ items: [] })),
   ]);
   if (!isNavActive(token)) return;
 
@@ -44,6 +46,7 @@ async function renderAnalytics(root, token = getNavToken()) {
     ['purchase', presetPacks[0]],
     ['product', presetPacks[1]],
     ['sale', presetPacks[2]],
+    ['production', presetPacks[3]],
   ]) {
     for (const preset of pack?.items || []) {
       if (preset.bot_enabled) {

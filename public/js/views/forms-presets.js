@@ -22,11 +22,16 @@ export function presetsToolbarHtml(presets) {
   return `${buttons}<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
 }
 
+/** Mesma regra do servidor (statusesFor): Inventário não tem status. */
+function hasStatuses(kind) {
+  return kind !== 'product';
+}
+
 /** Default: mostra editáveis; readonly (ex.: número) fica oculto no novo. */
 export function defaultPresetVisible(fields, kind) {
   return {
     title: true,
-    status: kind !== 'product',
+    status: hasStatuses(kind),
     header: (fields?.header || []).filter((field) => !field.readonly).map((field) => field.key),
     lines: (fields?.lines || []).map((field) => field.key),
   };
@@ -38,7 +43,7 @@ export function normalizePresetVisible(preset, fields, kind) {
   if (!raw || typeof raw !== 'object') return fallback;
   return {
     title: raw.title == null ? fallback.title : Boolean(raw.title),
-    status: kind === 'product' ? false : raw.status == null ? fallback.status : Boolean(raw.status),
+    status: !hasStatuses(kind) ? false : raw.status == null ? fallback.status : Boolean(raw.status),
     header: Array.isArray(raw.header) ? raw.header.map(String) : fallback.header,
     lines: Array.isArray(raw.lines) ? raw.lines.map(String) : fallback.lines,
   };

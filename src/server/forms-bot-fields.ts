@@ -7,6 +7,23 @@ export const FORMS_BOT_LINES_MORE_FIELD = '__lines_more__';
 export const FORMS_BOT_CONFIRM_FIELD = '__confirm__';
 export const CONFIRM_QUESTION_BODY = 'Confirma o registro? (sim / corrigir)';
 
+// Valor fora do catálogo (fornecedor/cliente/produto) aguardando “sim” do contato:
+// fica gravado com a marca e não conta como respondido, para não cadastrar lixo no Odoo.
+const NEW_VALUE_MARK = '[novo?] ';
+
+export function markNewValue(text: string): string {
+  return `${NEW_VALUE_MARK}${unmarkNewValue(text)}`;
+}
+
+export function isMarkedNewValue(text: string): boolean {
+  return String(text || '').startsWith(NEW_VALUE_MARK);
+}
+
+export function unmarkNewValue(text: string): string {
+  const raw = String(text || '');
+  return raw.startsWith(NEW_VALUE_MARK) ? raw.slice(NEW_VALUE_MARK.length) : raw;
+}
+
 /** “sim”, “confirmo”, “pode registrar”… (também “sim (encerrado por inatividade)”). */
 export function isConfirmYesAnswer(text: string): boolean {
   const folded = fold(text);
@@ -130,8 +147,13 @@ function cleanProduct(raw: string): string {
   }
   if (!product || UNIT_ONLY_RE.test(product)) return '';
   if (!/\p{L}{2,}/u.test(product)) return '';
+  // “fornecedor 2” é escolha da lista, não 2 kg do produto “fornecedor”.
+  if (FIELD_WORD_RE.test(fold(product))) return '';
   return product;
 }
+
+const FIELD_WORD_RE =
+  /^(?:o |a )?(fornecedor|fornecedores|cliente|clientes|produto|produtos|opcao|opcoes|numero|item|itens|parceiro)$/;
 
 const EXPLICIT_UNIT_RE = new RegExp(String.raw`\d\s*${UNIT_RE}\.?(?![\p{L}\d])`, 'iu');
 

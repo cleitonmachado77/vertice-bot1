@@ -6,6 +6,7 @@ import {
   pendingPreviousDaysNotice,
   type ConversationContextPack,
 } from './conversation-context.js';
+import { formsBotCompletionNote } from './forms-bot.js';
 import { questionIdForCatalogList } from './forms-bot-capture.js';
 import { tryFormsCatalogListReply } from './forms-bot-catalog-context.js';
 import {
@@ -374,6 +375,19 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     draft.detail !== 'edição sem mudança clara'
   ) {
     await clearConversationCompletedEditContext(input.conversationId);
+  }
+
+  // Prensagem recém-concluída: devolve o balanço (kg de entrada → fardos, rejeito, estoque).
+  if (
+    draft?.text &&
+    'completed' in draft &&
+    draft.completed &&
+    cycle &&
+    cycle.cycle.status !== 'completed' &&
+    cycle.questionnaire.formKind === 'production'
+  ) {
+    const note = await formsBotCompletionNote(cycle.cycle.id).catch(() => '');
+    if (note) draft = { ...draft, text: `${draft.text}\n\n${note}` };
   }
 
   // Após concluir um Forms Bot, oferece os outros pendentes do dia.

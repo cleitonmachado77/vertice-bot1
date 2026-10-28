@@ -274,7 +274,7 @@ async function upsertPartnerRow(input: {
 }
 
 async function upsertDoc(input: {
-  kind: 'product' | 'sale' | 'purchase';
+  kind: 'product' | 'sale' | 'purchase' | 'production';
   companyId: string;
   odooId: string;
   title: string;
@@ -439,6 +439,7 @@ async function pullProducts(
     company_id: unknown;
     is_storable?: boolean;
     type?: string;
+    weight?: number;
   }>(
     'product.template',
     withSince([], sinceIso),
@@ -452,6 +453,7 @@ async function pullProducts(
       'company_id',
       'is_storable',
       'type',
+      'weight',
     ],
     { limit: 5000, order: 'name asc' },
   );
@@ -469,6 +471,7 @@ async function pullProducts(
     header.sales_price = fromOdooNumber(row.list_price);
     header.cost = fromOdooNumber(row.standard_price);
     header.internal_ref = String(row.default_code || '');
+    header.weight = Number(row.weight) > 0 ? fromOdooNumber(row.weight) : '';
     header.category = odooLabelPt(m2oName(row.categ_id));
     header.uom = odooLabelPt(m2oName(row.uom_id));
     header.track_inventory = row.is_storable || row.type === 'product' ? 'True' : 'False';
@@ -593,6 +596,7 @@ type SaleLineRow = {
   product_uom_qty: number;
   price_unit: number;
   tax_ids?: number[];
+  product_uom_id?: unknown;
 };
 
 async function pullSales(sinceIso?: string | null): Promise<number> {
@@ -637,8 +641,15 @@ async function pullSales(sinceIso?: string | null): Promise<number> {
     ? (await odooSearchRead<SaleLineRow>(
         'sale.order.line',
         [['id', 'in', lineIds]],
-        ['order_id', 'product_id', 'name', 'product_uom_qty', 'price_unit', 'tax_ids'],
+        ['order_id', 'product_id', 'name', 'product_uom_qty', 'price_unit', 'tax_ids', 'product_uom_id'],
         { limit: 10000 },
+      ).catch(() =>
+        odooSearchRead<SaleLineRow>(
+          'sale.order.line',
+          [['id', 'in', lineIds]],
+          ['order_id', 'product_id', 'name', 'product_uom_qty', 'price_unit', 'tax_ids'],
+          { limit: 10000 },
+        ),
       ).catch(() =>
         odooSearchRead<SaleLineRow>(
           'sale.order.line',
@@ -683,6 +694,7 @@ async function pullSales(sinceIso?: string | null): Promise<number> {
       const values = emptyLine('sale');
       values.product = m2oName(line.product_id) || String(line.name || '');
       values.quantity = fromOdooNumber(line.product_uom_qty);
+      values.uom = odooLabelPt(m2oName(line.product_uom_id));
       values.unit_price = fromOdooNumber(line.price_unit);
       values.taxes = joinNames(m2mIds(line.tax_ids), taxNames);
       return values;
@@ -733,6 +745,7 @@ type PurchaseLineRow = {
   price_unit: number;
   taxes_id?: number[];
   tax_ids?: number[];
+  uom_id?: unknown;
 };
 
 async function pullPurchases(sinceIso?: string | null): Promise<number> {
@@ -758,8 +771,15 @@ async function pullPurchases(sinceIso?: string | null): Promise<number> {
     ? (await odooSearchRead<PurchaseLineRow>(
         'purchase.order.line',
         [['id', 'in', lineIds]],
-        ['order_id', 'product_id', 'name', 'product_qty', 'price_unit', 'taxes_id'],
+        ['order_id', 'product_id', 'name', 'product_qty', 'price_unit', 'tax_ids', 'uom_id'],
         { limit: 10000 },
+      ).catch(() =>
+        odooSearchRead<PurchaseLineRow>(
+          'purchase.order.line',
+          [['id', 'in', lineIds]],
+          ['order_id', 'product_id', 'name', 'product_qty', 'price_unit', 'taxes_id'],
+          { limit: 10000 },
+        ),
       ).catch(() =>
         odooSearchRead<PurchaseLineRow>(
           'purchase.order.line',
@@ -809,6 +829,7 @@ async function pullPurchases(sinceIso?: string | null): Promise<number> {
       const values = emptyLine('purchase');
       values.product = m2oName(line.product_id) || String(line.name || '');
       values.quantity = fromOdooNumber(line.product_qty);
+      values.uom = odooLabelPt(m2oName(line.uom_id));
       values.unit_price = fromOdooNumber(line.price_unit);
       values.taxes = joinNames(m2mIds(line.taxes_id || line.tax_ids), taxNames);
       return values;
@@ -835,6 +856,103 @@ async function pullPurchases(sinceIso?: string | null): Promise<number> {
     purchases += 1;
   }
   return purchases;
+}
+
+type ProductionRow = {
+  id: number;
+  name: string;
+  state: string;
+  product_id: unknown;
+  product_qty: number;
+  uom_id: unknown;
+  date_start: string | false;
+  origin: string | false;
+  company_id: unknown;
+  move_raw_ids: number[];
+  move_byproduct_ids: number[];
+};
+
+type ProductionMoveRow = { id: number; product_id: unknown; product_uom_qty: number; uom_id: unknown };
+
+/** mrp.production → Fabricação (componente, produto principal e subprodutos com as unidades do Odoo). */
+async function pullProductions(sinceIso?: string | null): Promise<number> {
+  const orders = await odooSearchRead<ProductionRow>(
+    'mrp.production',
+    withSince([], sinceIso),
+    [
+      'name',
+      'state',
+      'product_id',
+      'product_qty',
+      'uom_id',
+      'date_start',
+      'origin',
+      'company_id',
+      'move_raw_ids',
+      'move_byproduct_ids',
+    ],
+    { limit: 2000, order: 'id desc' },
+  ).catch((error) => {
+    // Sem o módulo Fabricação (ou sem acesso): nada a espelhar.
+    console.warn('odoo-pull: mrp.production indisponível:', error instanceof Error ? error.message : error);
+    return [] as ProductionRow[];
+  });
+  const moveIds = [...new Set(orders.flatMap((order) => [...(order.move_raw_ids || []), ...(order.move_byproduct_ids || [])]))];
+  const moves = moveIds.length
+    ? await odooSearchRead<ProductionMoveRow>(
+        'stock.move',
+        [['id', 'in', moveIds]],
+        ['product_id', 'product_uom_qty', 'uom_id'],
+        { limit: 20000 },
+      )
+    : [];
+  const moveById = new Map(moves.map((move) => [move.id, move]));
+
+  let productions = 0;
+  for (const order of orders) {
+    if (order.state === 'cancel') continue;
+    const companyId = resolveCompanyOdooId(order.company_id);
+    const [input] = (order.move_raw_ids || []).map((id) => moveById.get(id)).filter(Boolean) as ProductionMoveRow[];
+    const header = emptyHeader('production');
+    header.order_reference = String(order.name || '');
+    header.production_date = asDate(order.date_start);
+    header.input_product = input ? m2oName(input.product_id) : '';
+    header.input_qty = input ? fromOdooNumber(input.product_uom_qty) : '';
+    header.input_uom = input ? odooLabelPt(m2oName(input.uom_id)) : '';
+    header.notes = order.origin ? String(order.origin) : '';
+    header.odoo_id = String(order.id);
+    header.odoo_synced_at = new Date().toISOString();
+    header.company_odoo_id = companyId;
+    header.odoo_state = String(order.state || '');
+
+    const main = {
+      ...emptyLine('production'),
+      product: m2oName(order.product_id),
+      quantity: fromOdooNumber(order.product_qty),
+      uom: odooLabelPt(m2oName(order.uom_id)),
+    };
+    const byproducts = (order.move_byproduct_ids || [])
+      .map((id) => moveById.get(id))
+      .filter((move): move is ProductionMoveRow => Boolean(move))
+      .map((move) => ({
+        ...emptyLine('production'),
+        product: m2oName(move.product_id),
+        quantity: fromOdooNumber(move.product_uom_qty),
+        uom: odooLabelPt(m2oName(move.uom_id)),
+      }));
+
+    await upsertDoc({
+      kind: 'production',
+      companyId,
+      odooId: String(order.id),
+      title: documentTitle('production', header),
+      status: String(order.state || 'draft'),
+      header,
+      lines: [main, ...byproducts],
+    });
+    productions += 1;
+  }
+  return productions;
 }
 
 function emptyPull(at = new Date().toISOString()): OdooPullResult {
@@ -1063,6 +1181,10 @@ export async function pullFromOdoo(
       pushProgress(mode === 'incremental' ? 'compras (delta)' : 'compras', started);
       const purchases = await pullPurchases(sinceIso);
       pushProgress(`compras ok (${purchases})`, started);
+
+      pushProgress(mode === 'incremental' ? 'fabricação (delta)' : 'fabricação', started);
+      const productions = await pullProductions(sinceIso);
+      pushProgress(`fabricação ok (${productions})`, started);
 
       const at = new Date().toISOString();
       await setSetting('odoo_last_pull_at', at);

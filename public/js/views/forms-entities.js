@@ -393,6 +393,7 @@ async function openProductEditor(root, reload, item, token) {
     cost: '',
     uom: '',
     internal_ref: '',
+    weight: '',
     qty_on_hand: '',
     track_inventory: 'True',
     odoo_id: '',
@@ -432,6 +433,7 @@ async function openProductEditor(root, reload, item, token) {
         <label>Custo<input name="cost" value="${escapeHtml(value.cost || '')}" /></label>
         ${entityCombo('uom', 'Unidade de medida', odooLabelPt(value.uom || ''), 'Buscar unidade…')}
         <label>Referência interna<input name="internal_ref" value="${escapeHtml(value.internal_ref || '')}" /></label>
+        <label>Peso (kg)<input name="weight" value="${escapeHtml(value.weight || '')}" placeholder="Peso de 1 unidade do produto (Odoo)" /></label>
         <label>Quantidade em mãos<input name="qty_on_hand" value="${escapeHtml(value.qty_on_hand || '')}" readonly placeholder="Via estoque Odoo" /></label>
         <label>Rastrear inventário
           <select name="track_inventory">

@@ -35,6 +35,8 @@ export type CatalogProduct = {
   uom: string;
   internal_ref: string;
   qty_on_hand: string;
+  /** Peso médio de 1 unidade em kg (ex.: Bag). */
+  weight?: string;
 };
 
 export type CatalogPartner = {
@@ -88,6 +90,7 @@ export async function listCatalogProducts(): Promise<CatalogProduct[]> {
       uom: header.uom || '',
       internal_ref: header.internal_ref || '',
       qty_on_hand: header.qty_on_hand || '',
+      weight: header.weight || '',
     });
   }
   return products.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
@@ -327,6 +330,14 @@ export async function syncSharedCatalog(doc: FormDocument): Promise<void> {
       const productName = line.values.product || '';
       if (!productName.trim()) continue;
       await ensureProductByName(productName, { cost: line.values.unit_price || '' }, companyId);
+    }
+    return;
+  }
+
+  if (doc.kind === 'production') {
+    const names = [doc.header.input_product || '', ...doc.lines.map((line) => line.values.product || '')];
+    for (const name of names) {
+      if (name.trim()) await ensureProductByName(name, {}, companyId);
     }
     return;
   }

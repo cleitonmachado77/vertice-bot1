@@ -1,4 +1,5 @@
 import { many } from './db.js';
+import { FORMS_BOT_LINES_FIELD, isLinesMoreDoneAnswer, parseQtyProductChunks } from './forms-bot-fields.js';
 import { sqlPartnerVisibleInCompany } from './forms-companies.js';
 import type { FormCatalogRef, FormField, FormKind } from './forms-fields.js';
 import { headerFieldsFor, lineFieldsFor } from './forms-fields.js';
@@ -184,6 +185,43 @@ export async function resolveCatalogValue(input: {
   const top = ranked.filter((item) => item.score >= ranked[0].score - 10).slice(0, 8);
   if (top.length === 1) return { value: top[0].value, matched: true };
   return { value: raw, matched: false, ambiguous: top };
+}
+
+/** Produtos das linhas (JSON de “__lines__” ou texto de “Mais produtos?”) sem cadastro no catálogo. */
+export async function unknownLineProducts(input: {
+  kind: FormKind;
+  field: string;
+  text: string;
+  companyOdooId: string;
+}): Promise<string[]> {
+  const unknown: string[] = [];
+  for (const product of lineProductNames(input.field, input.text)) {
+    const resolved = await resolveCatalogValue({
+      kind: input.kind,
+      fieldKey: 'product',
+      raw: product,
+      companyOdooId: input.companyOdooId,
+    });
+    if (!resolved.matched) unknown.push(product);
+  }
+  return unknown;
+}
+
+function lineProductNames(field: string, text: string): string[] {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  if (field === FORMS_BOT_LINES_FIELD) {
+    try {
+      const rows = JSON.parse(raw) as Array<{ product?: string }>;
+      if (Array.isArray(rows)) {
+        return rows.map((row) => String(row?.product || '').trim()).filter(Boolean);
+      }
+    } catch {
+      /* texto livre */
+    }
+  }
+  if (isLinesMoreDoneAnswer(raw)) return [];
+  return parseQtyProductChunks(raw).map((chunk) => chunk.product);
 }
 
 export function formatAmbiguousOptions(candidates: MatchCandidate[]): string {

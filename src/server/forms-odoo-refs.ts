@@ -190,23 +190,45 @@ export async function pullOdooRefs(): Promise<Record<OdooRefType, number>> {
     })),
   );
 
-  const uoms = await odooSearchRead<{ id: number; name: string; category_id?: unknown }>(
-    'uom.uom',
-    [['active', '=', true]],
-    ['id', 'name', 'category_id'],
-    { limit: 2000, order: 'name asc' },
-  ).catch(() =>
-    odooSearchRead<{ id: number; name: string }>('uom.uom', [], ['id', 'name'], {
-      limit: 2000,
-      order: 'name asc',
-    }).catch(() => []),
-  );
+  // Odoo 19: unidade relativa a outra (“Bag” contém 100 “KG”). `factor` = quantidade absoluta
+  // na unidade raiz da árvore — mesma conversão que o Odoo faz entre unidades.
+  type UomRow = { id: number; name: string; factor?: number; relative_factor?: number; relative_uom_id?: unknown };
+  const uoms: UomRow[] =
+    (await odooSearchRead<UomRow>(
+      'uom.uom',
+      [['active', '=', true]],
+      ['id', 'name', 'factor', 'relative_factor', 'relative_uom_id'],
+      { limit: 2000, order: 'name asc' },
+    ).catch(() => null)) ||
+    (await odooSearchRead<UomRow>('uom.uom', [], ['id', 'name'], { limit: 2000, order: 'name asc' }).catch(() => []));
+  const byId = new Map(uoms.map((row) => [row.id, row]));
+  /** Unidade raiz da árvore e quantas unidades raiz cabem em 1 desta (Bag → KG, 100). */
+  const absolute = (id: number): { rootId: number; factor: number } => {
+    let current = id;
+    let factor = 1;
+    for (let depth = 0; depth < 20; depth += 1) {
+      const row = byId.get(current);
+      const parent = Number(m2oId(row?.relative_uom_id)) || 0;
+      if (!row || !parent || parent === current) break;
+      factor *= Number(row.relative_factor) || 1;
+      current = parent;
+    }
+    return { rootId: current, factor };
+  };
   counts.uom = await upsertRefs(
     'uom',
-    uoms.map((row) => ({
-      odoo_id: String(row.id),
-      name: odooLabelPt(String(row.name || '')),
-    })),
+    uoms.map((row) => {
+      const tree = absolute(row.id);
+      return {
+        odoo_id: String(row.id),
+        name: odooLabelPt(String(row.name || '')),
+        meta: {
+          root_id: String(tree.rootId),
+          factor: String(tree.factor),
+          relative_uom_id: m2oId(row.relative_uom_id),
+        },
+      };
+    }),
   );
 
   const terms = await odooSearchRead<{ id: number; name: string }>(

@@ -17,6 +17,7 @@ import {
   temporalRelationLabel,
 } from './questionnaire-dates.js';
 import {
+  foldText,
   isFullyAnswered,
   isGreetingOrAck,
   looksLikeAnswerPayload,
@@ -54,6 +55,7 @@ import {
   type ConversationHints,
 } from './conversation-context.js';
 import {
+  acceptedSummary,
   catalogContextBrief,
   formsAwareMissingReply,
   isCatalogListAsk,
@@ -63,6 +65,9 @@ import {
   tryCatalogListReply,
   tryFormsBotCapture,
 } from './forms-bot-capture.js';
+import { formsBotDisplayName, isFormsBotQuestionnaire } from './forms-bot-agenda.js';
+import { formsAnswersSummary } from './forms-bot-closing.js';
+import { isMarkedNewValue } from './forms-bot-fields.js';
 import { persistAcceptedAnswers } from './questionnaire-persist.js';
 
 export type QuestionnaireDraft = {
@@ -125,13 +130,19 @@ export async function draftQuestionnaireReply(input: {
     const toAsk = missing.length ? missing : questions;
     const ask = await missingPromptFor(input.context.questionnaire, toAsk, alreadySaved);
     await rememberCyclePrompt(input.context.cycle.id, promptQuestionId(toAsk), 'agente: saudação');
-    const hello = /bom dia/i.test(input.inbound)
+    // “bom dia, posso sim” aceita o convite (template): já segue com a lista, sem passar pelo modelo.
+    const acceptsInvite =
+      /\b(sim|pode|posso|podemos|claro|vamos|bora|ok|okay|certo|manda|combinado|fechado)\b/.test(
+        foldText(input.inbound),
+      );
+    const greeting = /bom dia/i.test(input.inbound)
       ? 'Bom dia!'
       : /boa tarde/i.test(input.inbound)
         ? 'Boa tarde!'
         : /boa noite/i.test(input.inbound)
           ? 'Boa noite!'
-          : 'Olá!';
+          : '';
+    const hello = acceptsInvite ? `${greeting || 'Ótimo!'} Vamos lá:` : greeting || 'Olá!';
     return {
       text: `${hello}\n${ask}`,
       source: 'fallback',
@@ -194,8 +205,13 @@ export async function draftQuestionnaireReply(input: {
       promptQuestionId(persisted.missing),
       `agente: atalho Forms (${captured.detail})`,
     );
+    // Valor fora do catálogo não foi “anotado” ainda: o próximo prompt pergunta se é novo.
+    const summary = persisted.pendingNew.length
+      ? acceptedSummary(captured.accepted, persisted.pendingNew)
+      : captured.summary;
+    const head = summary ? `Anotei: ${summary}.` : persisted.pendingNew.length ? '' : 'Anotei.';
     return {
-      text: [captured.summary ? `Anotei: ${captured.summary}.` : 'Anotei.', nextPrompt, notice]
+      text: [head, nextPrompt, notice]
         .filter(Boolean)
         .join('\n\n'),
       source: 'fallback',
@@ -256,6 +272,9 @@ export async function draftQuestionnaireReply(input: {
   let seededFromHeuristic = false;
 
   if (input.listQuestionsOnly || looksLikeQuestionnaireMeta(input.inbound)) {
+    if (isFormsBotQuestionnaire(input.context.questionnaire)) {
+      return formsBotQuestionsOverview({ ...input.context, answers: alreadySaved }, amending);
+    }
     const lines = questions.map((item, index) => `${index + 1}) ${item.body}`);
     const savedList = formatAnswers(questions, alreadySaved);
     const dayLabel = formatBrDate(cycleDate);
@@ -301,7 +320,7 @@ export async function draftQuestionnaireReply(input: {
       contactName: input.contactName,
     });
     if (capture?.complete) {
-      await persistAcceptedAnswers({
+      const persisted = await persistAcceptedAnswers({
         cycleId: input.context.cycle.id,
         questions,
         alreadySaved,
@@ -311,6 +330,7 @@ export async function draftQuestionnaireReply(input: {
         formKind: input.context.questionnaire.formKind,
         companyOdooId: input.context.questionnaire.companyOdooId,
       });
+      if (!persisted.complete) return pendingNewDraft(input.context, capture.accepted, persisted, 'registro em ciclo concluído');
       return {
         text: capture.reply.slice(0, 1500),
         source: 'fallback',
@@ -369,7 +389,7 @@ export async function draftQuestionnaireReply(input: {
       contactName: input.contactName,
     });
     if (capture?.complete) {
-      await persistAcceptedAnswers({
+      const persisted = await persistAcceptedAnswers({
         cycleId: input.context.cycle.id,
         questions,
         alreadySaved,
@@ -379,6 +399,7 @@ export async function draftQuestionnaireReply(input: {
         formKind: input.context.questionnaire.formKind,
         companyOdooId: input.context.questionnaire.companyOdooId,
       });
+      if (!persisted.complete) return pendingNewDraft(input.context, capture.accepted, persisted, 'atalho heuristico');
       return {
         text: capture.reply.slice(0, 1500),
         source: 'fallback',
@@ -663,7 +684,10 @@ export async function draftQuestionnaireReply(input: {
         media,
         contactName: input.contactName,
       });
-      if (
+      if (persisted.pendingNew.length) {
+        // O modelo não sabe que o valor ficou fora do catálogo: a pergunta “é novo?” é determinística.
+        reply = await pendingReplyText(input.context, accepted, persisted);
+      } else if (
         nothingSaved &&
         claimsSavedAnswer(reply) &&
         looksLikeAnswerPayload(media, input.inbound) &&
@@ -708,6 +732,66 @@ export async function draftQuestionnaireReply(input: {
     const detail = error instanceof Error ? error.message : 'Falha no modelo';
     throw new QuestionnaireTemporarilyUnavailableError(detail || fallback || 'Falha no modelo');
   }
+}
+
+/** Gravou, mas ainda falta algo (ex.: valor fora do catálogo aguardando “é novo?”). */
+async function pendingNewDraft(
+  context: ActiveCycleContext,
+  accepted: ExtractedAnswer[],
+  persisted: { answers: CycleAnswer[]; missing: QuestionnaireQuestion[]; pendingNew: string[] },
+  detail: string,
+): Promise<QuestionnaireDraft> {
+  return {
+    text: await pendingReplyText(context, accepted, persisted),
+    source: 'fallback',
+    detail: `${detail} (aguardando)`,
+    completed: false,
+  };
+}
+
+async function pendingReplyText(
+  context: ActiveCycleContext,
+  accepted: ExtractedAnswer[],
+  persisted: { answers: CycleAnswer[]; missing: QuestionnaireQuestion[]; pendingNew: string[] },
+): Promise<string> {
+  const saved = acceptedSummary(accepted, persisted.pendingNew);
+  const prompt = await missingPromptFor(context.questionnaire, persisted.missing, persisted.answers);
+  await rememberCyclePrompt(context.cycle.id, promptQuestionId(persisted.missing), 'agente: aguardando valor novo');
+  return [saved ? `Anotei: ${saved}.` : '', prompt].filter(Boolean).join('\n\n').slice(0, 1500);
+}
+
+/**
+ * “Quais as perguntas?” no Forms Bot: o que já foi anotado + a lista guiada do que falta
+ * (sem numerar perguntas — a numeração é das opções do catálogo).
+ */
+async function formsBotQuestionsOverview(
+  context: Pick<ActiveCycleContext, 'questionnaire' | 'cycle' | 'answers'>,
+  amending: boolean,
+): Promise<QuestionnaireDraft> {
+  const { questionnaire, cycle, answers } = context;
+  const missing = missingQuestions(questionnaire.questions, answers);
+  const saved = formsAnswersSummary(
+    questionnaire.questions,
+    answers.filter((row) => !isMarkedNewValue(row.answer_text)),
+  );
+  const body = missing.length
+    ? await missingPromptFor(questionnaire, missing, answers)
+    : 'Já está tudo respondido. Se quiser corrigir algo, me diga o que mudar.';
+  if (missing.length) {
+    await rememberCyclePrompt(cycle.id, promptQuestionId(missing), 'agente: listagem de perguntas');
+  }
+  return {
+    text: [
+      `Registro “${formsBotDisplayName(questionnaire)}” de ${formatBrDate(cycle.occurrence_date)}.`,
+      saved ? `Já anotei: ${saved}.` : '',
+      body,
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    source: 'fallback',
+    detail: 'listagem de perguntas (Forms)',
+    completed: amending,
+  };
 }
 
 /** Extrai respostas sem LLM; null se a mensagem não casar com o questionário. */

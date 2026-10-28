@@ -2,6 +2,7 @@ import { getSetting, many, one, run } from './db.js';
 import { zonedNow } from './clock.js';
 import {
   createFormDocument,
+  getFormDocument,
   saveFormDocument,
   type FormDocument,
 } from './forms.js';
@@ -21,9 +22,13 @@ import {
   headerFieldsFor,
   isFormKind,
   lineFieldsFor,
+  productionBalance,
   type FormField,
   type FormKind,
 } from './forms-fields.js';
+import { listUomInfos, splitQuantityUnit, toKg } from './forms-uom.js';
+import { fromOdooNumber } from './odoo-number.js';
+import { isProductionLocked } from './odoo-production.js';
 import { isUnusableQuestionnaireAnswer } from './questionnaire-rules.js';
 import {
   getFormPreset,
@@ -56,7 +61,18 @@ import { hasOpenCustomerWindow } from './thread.js';
 
 export { FORMS_BOT_LINES_FIELD, formsBotQuestionnaireId, isFormsBotExportField } from './forms-bot-fields.js';
 
-function questionBodyFor(field: FormField): string {
+/** “Bag” → “bags” (só para o exemplo da pergunta; o Odoo não tem plural). */
+function uomExample(uom: string): string {
+  const name = String(uom || '').trim().toLowerCase();
+  if (!name || name === 'kg') return '200 kg';
+  return `2 ${name.endsWith('s') ? name : `${name}s`} ou 200 kg`;
+}
+
+function questionBodyFor(field: FormField, preset: Pick<FormPreset, 'kind' | 'header'>): string {
+  if (preset.kind === 'production' && field.key === 'input_qty') {
+    const input = String(preset.header.input_product || '').trim() || 'produto de entrada';
+    return `Quanto de ${input} foi usado? (ex.: ${uomExample(preset.header.input_uom || '')})`;
+  }
   if (field.date) return `${field.label}? (dd/mm/aaaa)`;
   if (field.options?.length) {
     return `${field.label}? (${field.options.map((item) => item.label).join(' / ')})`;
@@ -79,6 +95,9 @@ function linesQuestionBody(
   const productDefault = String(templateLines[0]?.values?.product || '').trim();
   if (visibleLineKeys.length === 1 && visibleLineKeys[0] === 'quantity' && productDefault) {
     return quantityOnlyLinesQuestion(productDefault);
+  }
+  if (kind === 'production') {
+    return 'Quais produtos foram gerados e quanto de cada? (ex.: produto A 120 kg, produto B 80 kg)';
   }
   if (productDefault && visibleLineKeys.includes('quantity')) {
     return `${hint}? (padrão: ${productDefault})`;
@@ -115,15 +134,18 @@ export function buildFormsBotQuestions(preset: FormPreset): {
       defaultValues[field.key] = presetValue;
       continue;
     }
+    // A unidade de entrada vem junto da quantidade (“2 bags”); sem ela, vale a do produto.
+    if (preset.kind === 'production' && field.key === 'input_uom') continue;
     questions.push({
-      body: questionBodyFor(field),
+      body: questionBodyFor(field, preset),
       expectedType: 'any',
       exportField: field.key,
     });
   }
 
-  if (lineFieldsFor(preset.kind).length && visibleLines.size) {
-    const visibleKeys = [...visibleLines];
+  // “Unidade” da linha é opcional: vem junto da quantidade (“10 bags”) ou é a do produto.
+  const visibleKeys = [...visibleLines].filter((key) => key !== 'uom');
+  if (lineFieldsFor(preset.kind).length && visibleKeys.length) {
     const templateLines = preset.lines || [];
     if (needsLinesQuestion(visibleKeys, templateLines)) {
       // Produto do padrão sem “Produto” visível: o usuário só informa quantidade/preço.
@@ -135,7 +157,10 @@ export function buildFormsBotQuestions(preset: FormPreset): {
         fixedValue: visibleLines.has('product') ? '' : productDefault,
       });
       questions.push({
-        body: 'Mais produtos? (produto + qtd, ou “não”)',
+        body:
+          preset.kind === 'production'
+            ? 'Mais produtos gerados? (produto + quantidade, ou “não”)'
+            : 'Mais produtos? (produto + qtd, ou “não”)',
         expectedType: 'any',
         exportField: FORMS_BOT_LINES_MORE_FIELD,
       });
@@ -388,7 +413,8 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     id: string;
     questionnaire_id: string;
     status: string;
-  }>(`SELECT id, questionnaire_id, status FROM questionnaire_cycles WHERE id = $1`, [cycleId]);
+    occurrence_date: string;
+  }>(`SELECT id, questionnaire_id, status, occurrence_date FROM questionnaire_cycles WHERE id = $1`, [cycleId]);
   if (!cycle) return null;
 
   const questionnaire = await getQuestionnaire(cycle.questionnaire_id, true);
@@ -405,6 +431,14 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
      LIMIT 1`,
     [`%"source_cycle_id":"${cycleId}"%`],
   );
+  if (existingDoc && questionnaire.formKind === 'production') {
+    const current = await getFormDocument(existingDoc.id);
+    // Ordem concluída/cancelada não muda: a correção é “Desmontar” no Odoo + nova fabricação.
+    if (current && isProductionLocked(current)) {
+      console.warn(`forms-bot: fabricação ${current.id} já lançada no estoque — ciclo ${cycleId} não altera`);
+      return current;
+    }
+  }
 
   const preset = await getFormPresetById(questionnaire.sourcePresetId);
   if (!preset) {
@@ -443,6 +477,13 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     console.warn(`forms-bot: ciclo ${cycleId} sem cliente válido — não materializa`);
     return null;
   }
+  if (kind === 'production') {
+    // “2 bags” → 2 na unidade Bag do Odoo; “200 kg” → KG; só número → unidade do padrão/produto.
+    const typed = splitQuantityUnit(answersByField.input_qty || '');
+    if (typed.quantity) header.input_qty = typed.quantity;
+    if (typed.uom) header.input_uom = typed.uom;
+    header.production_date = header.production_date || cycle.occurrence_date;
+  }
   header.source = 'bot';
   header.source_cycle_id = cycleId;
   header.source_preset_id = questionnaire.sourcePresetId;
@@ -477,7 +518,8 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
   const docId = existingDoc?.id || (await createFormDocument(kind, { companyOdooId })).id;
   const saved = await saveFormDocument(docId, {
     title,
-    status: existingDoc ? undefined : preset.status || 'draft',
+    // Fabricação pelo WhatsApp registra o que já foi feito: a ordem vai concluída para o estoque.
+    status: kind === 'production' ? 'done' : existingDoc ? undefined : preset.status || 'draft',
     header,
     lines: kind === 'product' ? undefined : lines.length ? lines : [{ values: {} }],
   });
@@ -485,6 +527,61 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
   scheduleOdooPush(saved.id);
   if (existingDoc) console.log(`forms-bot: doc ${saved.id} atualizado a partir do ciclo ${cycleId}`);
   return saved;
+}
+
+/**
+ * “Fabricação: 2 Bag (200 kg) de Bag → FARDO PET 120 KG; FARDO PAPELÃO 60 KG. Perda: 20 kg.”
+ * `toKg` é a conversão do Odoo (unidade vazia = unidade do produto).
+ */
+export function productionSummaryText(
+  doc: { header: Record<string, string>; lines: Array<{ values: Record<string, string> }> },
+  toKg: (qty: number, uom: string, product: string) => number | null,
+): string {
+  const balance = productionBalance(doc, toKg);
+  const name = String(doc.header.input_product || '').trim() || 'produto de entrada';
+  const kg = (value: number) => `${fromOdooNumber(value) || '0'} kg`;
+  const qty = (value: number, uom: string) => `${fromOdooNumber(value) || '0'}${uom ? ` ${uom}` : ''}`;
+  const outputs = balance.lines.map((line) => `${line.product} ${qty(line.quantity, line.uom)}`).join('; ');
+  const ref = String(doc.header.order_reference || '').trim();
+  const head = ref ? `Fabricação ${ref}` : 'Fabricação';
+  const input =
+    balance.inputKg != null && !/^kg$/i.test(balance.inputUom)
+      ? `${qty(balance.inputQty, balance.inputUom)} (${kg(balance.inputKg)})`
+      : qty(balance.inputQty, balance.inputUom || 'kg');
+  const parts = [`${head}: ${input} de ${name} → ${outputs || 'sem produtos gerados'}.`];
+  if (balance.lossKg != null && balance.lossKg > 0) parts.push(`Perda: ${kg(balance.lossKg)}.`);
+  if (balance.lossKg != null && balance.lossKg < 0) {
+    parts.push(`Atenção: a saída pesou ${kg(-balance.lossKg)} a mais que a entrada — confira a quantidade de entrada.`);
+  }
+  if (doc.header.stock_warning) parts.push(`Atenção: ${doc.header.stock_warning}`);
+  return parts.join('\n');
+}
+
+/** Resumo da fabricação gerada pelo ciclo (vazio para os demais tipos). */
+export async function formsBotCompletionNote(cycleId: string): Promise<string> {
+  const row = await one<{ id: string }>(
+    `SELECT id FROM forms_documents
+     WHERE kind = 'production' AND header_json LIKE $1
+     ORDER BY created_at DESC LIMIT 1`,
+    [`%"source_cycle_id":"${cycleId}"%`],
+  );
+  const doc = row ? await getFormDocument(row.id) : undefined;
+  if (!doc) return '';
+  const names = [doc.header.input_product || '', ...doc.lines.map((line) => line.values.product || '')]
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  const products = await many<{ name: string; uom: string }>(
+    `SELECT lower(trim(both FROM header_json::json->>'name')) AS name, COALESCE(header_json::json->>'uom', '') AS uom
+     FROM forms_documents
+     WHERE kind = 'product' AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $1
+       AND lower(trim(both FROM COALESCE(header_json::json->>'name', ''))) = ANY($2::text[])`,
+    [doc.company_odoo_id || '1', names],
+  );
+  const productUom = new Map(products.map((item) => [item.name, item.uom]));
+  const uoms = await listUomInfos();
+  return productionSummaryText(doc, (qty, uom, product) =>
+    toKg(qty, uom || productUom.get(product.trim().toLowerCase()) || '', uoms),
+  );
 }
 
 export async function sendFormsBotPresetNow(input: {
