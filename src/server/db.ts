@@ -282,6 +282,12 @@ const SCHEMA = `
     awaiting_selection INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS conversation_menu_state (
+    conversation_id TEXT PRIMARY KEY,
+    node_json TEXT NOT NULL DEFAULT '{}',
+    shown_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS inbound_jobs (
     id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL UNIQUE,
@@ -772,6 +778,10 @@ async function seedSettings(): Promise<void> {
     agent_auto_reply: '0',
     agent_fallback: 'Recebi sua mensagem. Em instantes alguém da Vértice Inovação continua o atendimento.',
     agent_history: '16',
+    bot_menu_enabled: '1',
+    bot_menu_intro: 'O que deseja fazer hoje?',
+    bot_menu_session_hours: '2',
+    bot_menu_attendant: '1',
     nevoa_base_url: env(
       'NEVOA_BASE_URL',
       'https://nevoa-manager-backend-9e27f965f73e.herokuapp.com/api/public/v1',

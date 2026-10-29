@@ -45,6 +45,7 @@ import {
 } from './forms-bot-agenda.js';
 import { isFormsCatalogListAsk } from './forms-bot-catalog-context.js';
 import { looksLikeHumanHandoff } from './human-handoff.js';
+import { tryBotMenu } from './bot-menu.js';
 import { enqueueOutbound } from './outbound-outbox.js';
 import {
   getContact,
@@ -173,11 +174,32 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
 
   let cycle: ActiveCycleContext | undefined;
   let draft: QuestionnaireDraft | Draft | null = null;
-  const awaitingFormsOffer = await isAwaitingQuestionnaireSelection(input.conversationId);
+
+  // Menu numerado: abre a sessão e guia até o formulário; a coleta segue no fluxo abaixo.
+  if (contactId) {
+    const menu = await tryBotMenu({
+      contactId,
+      contactName,
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      inbound: inboundText,
+      inboundType,
+      mediaUrl,
+      date: clock.date,
+      minutes: clock.minutes,
+    });
+    if (menu.handled) {
+      draft = { text: menu.text, source: 'fallback', detail: menu.detail, completed: false };
+      if (menu.cycle) cycle = menu.cycle;
+    }
+  }
+
+  const awaitingFormsOffer = !draft && (await isAwaitingQuestionnaireSelection(input.conversationId));
 
   // Agenda Forms: oferta entre formulários / intenção explícita (pular, trocar, só X…).
   // Pedido de lista de catálogo (“quais fornecedores?”) nunca entra na agenda.
   if (
+    !draft &&
     !multiDayIntent &&
     !otherDayIntent &&
     contactId &&

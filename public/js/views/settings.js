@@ -1,4 +1,5 @@
 import { renderAgent } from './agent.js';
+import { renderBotMenu } from './bot-menu.js';
 import { renderIntegrations } from './integrations.js';
 import { renderEvents } from './events.js';
 import { getNavToken, isNavActive } from '../nav.js';
@@ -6,6 +7,7 @@ import { panelLoading } from '../ui.js';
 
 const TABS = [
   { id: 'agent', label: 'Agente', render: renderAgent },
+  { id: 'menu', label: 'Menu', render: renderBotMenu },
   { id: 'integrations', label: 'Integrações', render: renderIntegrations },
   { id: 'events', label: 'Eventos', render: renderEvents },
 ];
