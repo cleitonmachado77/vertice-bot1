@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { escapeHtml } from '../ui.js';
+import { escapeHtml, statCard } from '../ui.js';
 
 const MONTHS = [
   'Janeiro',
@@ -17,19 +17,21 @@ const MONTHS = [
 ];
 
 const PALETTE = [
-  '#3d9a78',
-  '#5b8def',
-  '#e0a84c',
-  '#d9776b',
-  '#8b7ec8',
-  '#4db6ac',
-  '#90a4ae',
-  '#c7906a',
-  '#6d9eeb',
-  '#a3b18a',
-  '#e07a5f',
-  '#81b29a',
+  '#f88828',
+  '#1aa897',
+  '#2b5aa8',
+  '#2ecc71',
+  '#7c5cd6',
+  '#e07b20',
+  '#1a4f9c',
+  '#e5487d',
+  '#f5b400',
+  '#2a2a2e',
+  '#14b8a6',
+  '#909090',
 ];
+
+const SECTION_TONES = { receipts: 'orange', production: 'teal', sales: 'blue' };
 
 let chartReady = null;
 const chartInstances = new Map();
@@ -106,26 +108,38 @@ function monthOptions(selected) {
   ).join('');
 }
 
-export function renderDashboardShell(period) {
+export function renderPeriodPicker(period) {
   const month = period?.month || new Date().getMonth() + 1;
   const year = period?.year || new Date().getFullYear();
   return `
-    <section class="card hub-dashboard" id="hub-dashboard" aria-label="Dashboard">
-      <div class="hub-dashboard-head">
-        <div>
-          <h2>Dashboard</h2>
-        </div>
-        <div class="hub-dashboard-filters">
-          <label>
-            <span>Mês</span>
-            <select id="hub-dash-month">${monthOptions(month)}</select>
-          </label>
-          <label>
-            <span>Ano</span>
-            <select id="hub-dash-year">${yearOptions(year)}</select>
-          </label>
-        </div>
-      </div>
+    <div class="hub-period" role="group" aria-label="Período dos indicadores">
+      <span class="hub-period-label">Período</span>
+      <select id="hub-dash-month" aria-label="Mês">${monthOptions(month)}</select>
+      <select id="hub-dash-year" aria-label="Ano">${yearOptions(year)}</select>
+    </div>`;
+}
+
+function statsCards(data = null) {
+  const loading = !data;
+  const receipts = data?.receipts || {};
+  const unit = String(receipts.unit || '').trim();
+  const receiptsValue = receipts.totalLabel || `${formatQty(receipts.total)}${unit ? ` ${unit}` : ''}`;
+  const salesValue = formatMoney(data?.sales?.total);
+  return [
+    statCard({ label: 'Recebido no período', value: receiptsValue, tone: 'orange', icon: 'truck', href: '#/forms/compras', title: receiptsValue, loading }),
+    statCard({ label: 'Produzido no período', value: formatQty(data?.production?.total), tone: 'teal', icon: 'factory', href: '#/forms/fabricacao', loading }),
+    statCard({ label: 'Vendido no período', value: salesValue, tone: 'blue', icon: 'money', href: '#/forms/vendas', title: salesValue, loading }),
+    statCard({ label: 'Catadores no período', value: (receipts.breakdown || []).length, tone: 'green', icon: 'contacts', href: '#/forms/cadastros/fornecedores', loading }),
+  ].join('');
+}
+
+export function renderDashboardStats() {
+  return `<section class="stat-row" id="hub-stats" aria-label="Resumo do período">${statsCards()}</section>`;
+}
+
+export function renderDashboardShell() {
+  return `
+    <section class="card hub-dashboard" id="hub-dashboard" aria-label="Indicadores">
       <div class="hub-dashboard-body" id="hub-dashboard-body">
         <p class="muted hub-dashboard-loading">Carregando indicadores…</p>
       </div>
@@ -134,7 +148,7 @@ export function renderDashboardShell(period) {
 
 function sectionHtml(id, title, totalLabel, totalValue, barTitle, pieTitle, barMeta = '') {
   return `
-    <article class="hub-dash-section" data-section="${escapeHtml(id)}">
+    <article class="hub-dash-section tone-${SECTION_TONES[id] || 'orange'}" data-section="${escapeHtml(id)}">
       <div class="hub-dash-section-head">
         <h3>${escapeHtml(title)}</h3>
         <p class="hub-dash-total">${escapeHtml(totalLabel)} <strong>${escapeHtml(totalValue)}</strong></p>
@@ -171,6 +185,8 @@ function receiptsBarMeta(section) {
 }
 
 function paintBody(data) {
+  const stats = document.querySelector('#hub-stats');
+  if (stats) stats.innerHTML = statsCards(data);
   const body = document.querySelector('#hub-dashboard-body');
   if (!body) return;
 
@@ -205,9 +221,12 @@ function paintBody(data) {
 }
 
 function chartDefaults(Chart) {
-  Chart.defaults.color = 'rgba(255,255,255,0.62)';
-  Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
-  Chart.defaults.font.family = 'Poppins, sans-serif';
+  Chart.defaults.color = '#6b6b70';
+  Chart.defaults.borderColor = 'rgba(26, 26, 28, 0.06)';
+  Chart.defaults.font.family = 'Outfit, "Segoe UI", sans-serif';
+  Chart.defaults.plugins.tooltip.backgroundColor = '#000008';
+  Chart.defaults.plugins.tooltip.padding = 10;
+  Chart.defaults.plugins.tooltip.cornerRadius = 10;
 }
 
 function makeBar(Chart, canvas, labels, datasets, isMoney) {
@@ -261,8 +280,9 @@ function makePie(Chart, canvas, labels, values, isMoney) {
       datasets: [
         {
           data: hasData ? values : [1],
-          backgroundColor: hasData ? labels.map((_, i) => PALETTE[i % PALETTE.length]) : ['rgba(255,255,255,0.12)'],
-          borderWidth: 0,
+          backgroundColor: hasData ? labels.map((_, i) => PALETTE[i % PALETTE.length]) : ['#ececee'],
+          borderColor: '#ffffff',
+          borderWidth: 2,
         },
       ],
     },
@@ -378,6 +398,8 @@ export async function mountHubDashboard(root) {
     const year = Number(yearEl.value);
     const body = root.querySelector('#hub-dashboard-body');
     if (body) body.innerHTML = '<p class="muted hub-dashboard-loading">Carregando indicadores…</p>';
+    const stats = root.querySelector('#hub-stats');
+    if (stats) stats.innerHTML = statsCards();
     destroyCharts();
     try {
       const data = await api(`/api/hub/dashboard?month=${month}&year=${year}`);

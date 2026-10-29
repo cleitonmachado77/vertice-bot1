@@ -247,7 +247,7 @@ function emptyThread() {
 }
 
 function avatarColor(name) {
-  const palette = ['#111827', '#1f2937', '#374151', '#047857', '#0f766e', '#1e3a5f'];
+  const palette = ['#f88828', '#1aa897', '#2b5aa8', '#2ecc71', '#7c5cd6', '#e07b20', '#1a4f9c', '#e5487d'];
   let index = 0;
   for (const char of String(name)) index = (index + char.charCodeAt(0)) % palette.length;
   return palette[index];

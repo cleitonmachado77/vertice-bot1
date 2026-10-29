@@ -1,9 +1,47 @@
+import { icon } from './icons.js';
+
 export function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
+}
+
+/**
+ * Card de estatística com ícone colorido (padrão Painel de Editais).
+ * @param {{ label: string, value: string | number, hint?: string, tone?: string, icon?: string, href?: string, title?: string, loading?: boolean }} opts
+ */
+export function statCard({ label, value, hint = '', tone = 'orange', icon: iconName = 'dashboard', href = '', title = '', loading = false }) {
+  const tag = href ? 'a' : 'article';
+  const attrs = [
+    `class="stat-card tone-${escapeHtml(tone)}${loading ? ' is-loading' : ''}"`,
+    href ? `href="${escapeHtml(href)}"` : '',
+    title ? `title="${escapeHtml(title)}"` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return `
+    <${tag} ${attrs}>
+      <span class="stat-card-icon">${icon(iconName)}</span>
+      <span class="stat-card-copy">
+        <span class="stat-card-value">${escapeHtml(loading ? '…' : value)}</span>
+        <span class="stat-card-label">${escapeHtml(label)}</span>
+        ${hint ? `<span class="stat-card-hint">${escapeHtml(hint)}</span>` : ''}
+      </span>
+    </${tag}>`;
+}
+
+/** Card de ação rápida: ícone + título + descrição. */
+export function actionCard({ href, title, description = '', icon: iconName = 'chevron', tone = 'orange' }) {
+  return `
+    <a class="action-card tone-${escapeHtml(tone)}" href="${escapeHtml(href)}">
+      <span class="action-card-icon">${icon(iconName)}</span>
+      <span>
+        <strong>${escapeHtml(title)}</strong>
+        ${description ? `<span class="muted">${escapeHtml(description)}</span>` : ''}
+      </span>
+    </a>`;
 }
 
 export function viewLoading(label = 'Carregando…') {

@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { odooLabelPt } from '../odoo-pt.js';
-import { escapeHtml, formatSyncError, toast } from '../ui.js';
+import { escapeHtml, formatSyncError, statCard, toast } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import {
   closeEditorModal,
@@ -97,12 +97,12 @@ export async function renderEntitiesBody(body, entity = 'produtos', token = getN
   const shellRoot = root || body.closest('#forms-view') || body;
 
   body.innerHTML = `
-    <div class="forms-catalog-bar muted">
-      Cadastros Odoo: <strong>${summary.products || 0}</strong> produtos ·
-      <strong>${summary.customers || 0}</strong> clientes ·
-      <strong>${summary.vendors || 0}</strong> fornecedores
-      · salvar localmente e enviar ao Odoo quando quiser
-    </div>
+    <section class="stat-row stat-row--3 forms-catalog-bar" aria-label="Cadastros Odoo">
+      ${statCard({ label: 'Produtos', value: summary.products || 0, tone: 'orange', icon: 'box', href: '#/forms/cadastros/produtos' })}
+      ${statCard({ label: 'Clientes', value: summary.customers || 0, tone: 'teal', icon: 'contacts', href: '#/forms/cadastros/clientes' })}
+      ${statCard({ label: 'Fornecedores', value: summary.vendors || 0, tone: 'blue', icon: 'truck', href: '#/forms/cadastros/fornecedores' })}
+    </section>
+    <p class="muted forms-catalog-note">Salve localmente e envie ao Odoo quando quiser.</p>
     <nav class="settings-tabs forms-tabs forms-entity-tabs" aria-label="Tipos de cadastro">
       ${ENTITY_TABS.map(
         (tab) =>

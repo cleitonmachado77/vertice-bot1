@@ -1,11 +1,3 @@
-.forms-shell {
-  min-height: 100%;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--paper);
-}
-
 .forms-shell .sr-only,
 .forms-pane .sr-only {
   position: absolute;
@@ -19,47 +11,6 @@
   border: 0;
 }
 
-.forms-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  height: 56px;
-  padding: 0 1.75rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--topbar-bg);
-  backdrop-filter: blur(12px);
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  box-sizing: border-box;
-}
-
-.forms-topbar-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.forms-topbar-brand img {
-  height: 32px;
-  width: auto;
-  filter: var(--logo-filter);
-}
-.forms-topbar-brand .forms-topbar-logo {
-  height: 36px;
-  filter: none;
-}
-
-.forms-topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .forms-main {
   flex: 1;
   overflow: auto;
@@ -68,11 +19,13 @@
 .forms-toolbar {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-end;
+  gap: 16px;
   flex-wrap: wrap;
-  margin: 0 0 16px;
+  margin: 0 0 20px;
 }
+
+.forms-toolbar .page-head { margin: 0; }
 
 .forms-top-actions {
   display: flex;
@@ -85,12 +38,12 @@
 .forms-badge--bot {
   display: inline-block;
   margin: 0 0 10px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
   font-weight: 600;
-  color: #1f6b4a;
-  background: rgba(31, 107, 74, 0.12);
+  color: var(--green-strong);
+  background: var(--green-soft);
 }
 
 .forms-preset-bot {
@@ -265,6 +218,15 @@
 
 .forms-preset-btn {
   white-space: nowrap;
+  background: var(--orange-soft);
+  color: var(--orange-strong);
+  border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
+  box-shadow: none;
+}
+
+.forms-preset-btn:hover {
+  background: var(--orange);
+  color: var(--brand-contrast);
 }
 
 .forms-presets-list {
@@ -358,17 +320,14 @@
 }
 
 .forms-catalog-bar {
-  margin: 0 0 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  font-size: 0.86rem;
+  margin: 0 0 16px;
 }
 
-.forms-catalog-bar strong {
-  color: var(--ink);
-  font-weight: 600;
+.forms-catalog-bar .stat-card { padding: 16px 18px; }
+
+.forms-catalog-note {
+  margin: -6px 0 16px;
+  font-size: 0.8rem;
 }
 
 .forms-layout {
@@ -377,7 +336,7 @@
 
 .forms-list-card,
 .forms-editor-card {
-  padding: 16px;
+  padding: 20px;
 }
 
 .forms-list-card {
@@ -423,7 +382,7 @@
 .forms-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 8px;
+  gap: 12px;
   margin-top: 14px;
   max-height: min(70vh, 720px);
   overflow: auto;
@@ -440,7 +399,8 @@ body.forms-modal-open {
   overflow: hidden;
 }
 
-body.forms-modal-open .forms-topbar {
+body.forms-modal-open .topbar,
+body.forms-modal-open .sidebar {
   z-index: 1;
   pointer-events: none;
 }
@@ -463,7 +423,8 @@ body.forms-modal-open .forms-topbar {
 .forms-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(15, 18, 24, 0.55);
+  background: var(--backdrop);
+  backdrop-filter: blur(3px);
   border: 0;
   cursor: pointer;
 }
@@ -474,7 +435,8 @@ body.forms-modal-open .forms-topbar {
   width: min(860px, 100%);
   max-height: min(calc(100vh - 112px), 900px);
   overflow: auto;
-  box-shadow: var(--shadow-lg, 0 18px 40px rgba(0, 0, 0, 0.18));
+  border-radius: 24px;
+  box-shadow: var(--shadow-lg);
 }
 
 .forms-modal-dialog #forms-form {
@@ -517,19 +479,22 @@ body > .forms-combo-menu {
   width: 100%;
   text-align: left;
   border: 1px solid var(--line);
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: 12px 12px;
+  background: var(--card);
+  border-radius: 16px;
+  padding: 14px 16px;
   color: inherit;
-  transition: border-color 0.2s ease, background 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .forms-list-item:hover {
-  background: var(--surface-hover);
+  border-color: color-mix(in srgb, var(--orange) 40%, var(--line));
+  box-shadow: var(--shadow-md);
 }
 
+.forms-list-item:hover strong { color: var(--orange-strong); }
+
 .forms-list-item.active {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
   background: var(--accent-soft);
 }
 

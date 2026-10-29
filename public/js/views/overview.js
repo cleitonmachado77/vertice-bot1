@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { escapeHtml, formatWhen, createPoll } from '../ui.js';
+import { escapeHtml, formatWhen, createPoll, statCard } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 
 const POLL_MS = 8000;
@@ -24,13 +24,13 @@ export async function renderOverview(root, token = getNavToken()) {
           <h1>Visão geral</h1>
         </div>
       </div>
-      <section class="cards" id="stats">
-        <article class="stat skeleton-card"></article>
-        <article class="stat skeleton-card"></article>
-        <article class="stat skeleton-card"></article>
-        <article class="stat skeleton-card"></article>
+      <section class="stat-row" id="stats">
+        <article class="skeleton-card"></article>
+        <article class="skeleton-card"></article>
+        <article class="skeleton-card"></article>
+        <article class="skeleton-card"></article>
       </section>
-      <section class="card" style="padding: 18px 18px 8px;">
+      <section class="card" style="padding: 20px 20px 8px; margin-top: 8px;">
         <div class="card-head">
           <h2>Últimas conversas</h2>
         </div>
@@ -82,11 +82,20 @@ function conversationsSig(conversations) {
 
 function stats(data) {
   const messages = data.counts.messages ?? data.counts.events ?? 0;
-  return `
-    <article class="stat"><span class="muted">Contatos</span><b>${data.counts.contacts}</b><span class="hint">Cadastrados</span></article>
-    <article class="stat"><span class="muted">Conversas</span><b>${data.counts.conversations}</b><span class="hint">Na operação</span></article>
-    <article class="stat"><span class="muted">Mensagens</span><b>${messages}</b><span class="hint">Na operação</span></article>
-    <article class="stat"><span class="muted">Resposta automática</span><b>${data.agent.autoReply ? 'Ligada' : 'Desligada'}</b><span class="hint">Estado do agente</span></article>`;
+  const autoReply = Boolean(data.agent.autoReply);
+  return [
+    statCard({ label: 'Contatos', value: data.counts.contacts, hint: 'Cadastrados', tone: 'orange', icon: 'contacts', href: '#/contacts' }),
+    statCard({ label: 'Conversas', value: data.counts.conversations, hint: 'Na operação', tone: 'teal', icon: 'inbox', href: '#/inbox' }),
+    statCard({ label: 'Mensagens', value: messages, hint: 'Na operação', tone: 'blue', icon: 'message' }),
+    statCard({
+      label: 'Resposta automática',
+      value: autoReply ? 'Ligada' : 'Desligada',
+      hint: 'Estado do agente',
+      tone: autoReply ? 'green' : 'graphite',
+      icon: 'zap',
+      href: '#/settings/agent',
+    }),
+  ].join('');
 }
 
 function recent(conversations) {

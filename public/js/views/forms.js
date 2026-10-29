@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { odooLabelPt } from '../odoo-pt.js';
-import { createPoll, escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
+import { createPoll, escapeHtml, formatSyncError, statCard, toast, viewLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import { entityFromSlug, renderEntitiesBody } from './forms-entities.js';
 import {
@@ -19,12 +19,17 @@ import {
 } from './forms-presets.js';
 
 const TABS = [
-  { id: 'purchase', slug: 'compras', label: 'Compras' },
-  { id: 'product', slug: 'inventario', label: 'Inventário' },
-  { id: 'production', slug: 'fabricacao', label: 'Fabricação' },
-  { id: 'sale', slug: 'vendas', label: 'Vendas' },
-  { id: 'cadastros', slug: 'cadastros', label: 'Cadastros' },
+  { id: 'purchase', slug: 'compras', label: 'Compras', icon: 'cart', description: 'Solicitações de cotação e pedidos de compra' },
+  { id: 'product', slug: 'inventario', label: 'Inventário', icon: 'box', description: 'Produtos e controle de estoque' },
+  { id: 'production', slug: 'fabricacao', label: 'Fabricação', icon: 'factory', description: 'Registros de produção e prensagem' },
+  { id: 'sale', slug: 'vendas', label: 'Vendas', icon: 'sales', description: 'Cotações e pedidos de venda' },
+  { id: 'cadastros', slug: 'cadastros', label: 'Cadastros', icon: 'folder', description: 'Produtos, clientes e fornecedores do Odoo' },
 ];
+
+export const FORMS_TABS = TABS.map((tab) => ({
+  ...tab,
+  href: tab.id === 'cadastros' ? '#/forms/cadastros/produtos' : `#/forms/${tab.slug}`,
+}));
 
 let schemaCache = null;
 let catalogCache = { products: [], partners: [], refs: {}, at: 0 };
@@ -116,11 +121,11 @@ async function loadCatalog(force = false) {
   return catalogCache;
 }
 
-function mainTabsHtml(activeKind) {
-  return TABS.map((tab) => {
-    const href = tab.id === 'cadastros' ? '#/forms/cadastros/produtos' : `#/forms/${tab.slug}`;
-    return `<a class="settings-tab${tab.id === activeKind ? ' active' : ''}" href="${href}">${escapeHtml(tab.label)}</a>`;
-  }).join('');
+function pageHeadHtml(activeKind) {
+  const tab = TABS.find((item) => item.id === activeKind) || TABS[0];
+  return `
+    <h1>${escapeHtml(tab.label)}</h1>
+    <p class="muted">${escapeHtml(tab.description)}</p>`;
 }
 
 function topActions(kind, presets = []) {
@@ -139,7 +144,7 @@ function ensureFormsShell(root, kind, presets = []) {
     root.innerHTML = `
       <div class="view-pane forms-pane">
         <div class="forms-toolbar">
-          <nav class="settings-tabs forms-tabs" id="forms-main-tabs" aria-label="Abas do Forms"></nav>
+          <header class="page-head" id="forms-page-head"></header>
           <div class="row forms-top-actions" id="forms-top-actions"></div>
         </div>
         <div id="forms-body" class="forms-body"></div>
@@ -153,13 +158,13 @@ function ensureFormsShell(root, kind, presets = []) {
       const toolbar = document.createElement('div');
       toolbar.className = 'forms-toolbar';
       toolbar.innerHTML = `
-        <nav class="settings-tabs forms-tabs" id="forms-main-tabs" aria-label="Abas do Forms"></nav>
+        <header class="page-head" id="forms-page-head"></header>
         <div class="row forms-top-actions" id="forms-top-actions"></div>`;
       pane.insertBefore(toolbar, body || pane.firstChild);
     }
   }
-  const tabs = root.querySelector('#forms-main-tabs');
-  if (tabs) tabs.innerHTML = mainTabsHtml(kind);
+  const head = root.querySelector('#forms-page-head');
+  if (head) head.innerHTML = pageHeadHtml(kind);
   const actions = root.querySelector('#forms-top-actions');
   if (actions) {
     actions.classList.add('forms-top-actions');
@@ -542,11 +547,11 @@ function catalogSummary(catalog) {
   const customers = (catalog.partners || []).filter((p) => p.is_customer).length;
   const vendors = (catalog.partners || []).filter((p) => p.is_vendor).length;
   return `
-    <div class="forms-catalog-bar muted">
-      Catálogo: <strong>${products}</strong> produtos ·
-      <strong>${customers}</strong> clientes ·
-      <strong>${vendors}</strong> fornecedores
-    </div>`;
+    <section class="stat-row stat-row--3 forms-catalog-bar" aria-label="Catálogo">
+      ${statCard({ label: 'Produtos no catálogo', value: products, tone: 'orange', icon: 'box', href: '#/forms/cadastros/produtos' })}
+      ${statCard({ label: 'Clientes', value: customers, tone: 'teal', icon: 'contacts', href: '#/forms/cadastros/clientes' })}
+      ${statCard({ label: 'Fornecedores', value: vendors, tone: 'blue', icon: 'truck', href: '#/forms/cadastros/fornecedores' })}
+    </section>`;
 }
 
 function statusOptions(schema, kind) {

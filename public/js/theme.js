@@ -1,19 +1,19 @@
 const KEY = 'vertice-theme';
 
-/** Tema fixo: apenas dark. */
+/** Tema fixo: claro (padrão Painel de Editais). */
 export function getTheme() {
-  return 'dark';
+  return 'light';
 }
 
 export function applyTheme() {
-  document.documentElement.dataset.theme = 'dark';
-  document.documentElement.style.colorScheme = 'dark';
+  document.documentElement.dataset.theme = 'light';
+  document.documentElement.style.colorScheme = 'light';
   try {
-    localStorage.setItem(KEY, 'dark');
+    localStorage.setItem(KEY, 'light');
   } catch {
     /* ignore */
   }
-  return 'dark';
+  return 'light';
 }
 
 export function initTheme() {

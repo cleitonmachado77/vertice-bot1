@@ -1,11 +1,12 @@
 import { api, ensureSession, invalidateSession } from './api.js';
-import { escapeHtml, viewLoading } from './ui.js';
+import { escapeHtml, initials, viewLoading } from './ui.js';
+import { icon } from './icons.js';
 import { nextNavToken, isNavActive } from './nav.js';
 import { initTheme } from './theme.js';
 import { clearCompaniesCache, mountCompanySwitcher, mountEntityBadge } from './company-switcher.js';
 import { renderHub, stopHubDashboard } from './views/hub.js';
 import { renderWebSettings } from './views/web-settings.js';
-import { renderForms, tabFromSlug } from './views/forms.js';
+import { FORMS_TABS, renderForms, tabFromSlug } from './views/forms.js';
 import { renderOverview, stopOverview } from './views/overview.js';
 import { renderContacts, stopContacts } from './views/contacts.js';
 import { renderContact } from './views/contact.js';
@@ -16,11 +17,35 @@ import { renderSettings } from './views/settings.js';
 initTheme();
 
 const botRoutes = {
-  overview: { title: 'Visão geral', render: renderOverview },
-  inbox: { title: 'Inbox', render: renderInbox },
-  contacts: { title: 'Contatos', render: renderContacts },
-  questionnaires: { title: 'Análise', render: renderQuestionnaires },
-  settings: { title: 'Configurações', render: renderSettings },
+  overview: { title: 'Visão geral', render: renderOverview, icon: 'dashboard' },
+  inbox: { title: 'Inbox', render: renderInbox, icon: 'inbox' },
+  contacts: { title: 'Contatos', render: renderContacts, icon: 'contacts' },
+  questionnaires: { title: 'Análise', render: renderQuestionnaires, icon: 'questionnaires' },
+  settings: { title: 'Configurações', render: renderSettings, icon: 'settings' },
+};
+
+const APPS = {
+  web: {
+    crumb: 'Vertice WEB',
+    logo: '/logo-vertice-web.png',
+    shellClass: 'hub-shell',
+    mainClass: 'main hub-main',
+    mainId: 'hub-view',
+  },
+  forms: {
+    crumb: 'Vertice Forms',
+    logo: '/logo-vertice-forms.png',
+    shellClass: 'forms-shell',
+    mainClass: 'main forms-main',
+    mainId: 'forms-view',
+  },
+  bot: {
+    crumb: 'Vertice Bot',
+    logo: '/logo-vertice-bot.png',
+    shellClass: 'bot-shell',
+    mainClass: 'main',
+    mainId: 'view',
+  },
 };
 
 const LEGACY = {
@@ -154,7 +179,7 @@ async function draw() {
   }
 
   if (current.name === 'web') {
-    mountWebChrome(me);
+    mountChrome('web', me, 'web', 'Dashboard');
     const view = document.querySelector('#hub-view');
     if (!view || !isNavActive(token)) return;
     await renderHub(view, me);
@@ -166,7 +191,7 @@ async function draw() {
       location.replace('#/web');
       return;
     }
-    mountWebChrome(me);
+    mountChrome('web', me, 'web-settings', 'Configurações');
     const view = document.querySelector('#hub-view');
     if (!view || !isNavActive(token)) return;
     await renderWebSettings(view, me, current.settingsTab || 'usuarios');
@@ -174,7 +199,9 @@ async function draw() {
   }
 
   if (current.name === 'forms') {
-    mountFormsChrome(me);
+    const formsKind = current.formsKind || 'product';
+    const formsTab = FORMS_TABS.find((tab) => tab.id === formsKind);
+    mountChrome('forms', me, formsKind, formsTab?.label || 'Vertice Forms');
     const view = document.querySelector('#forms-view');
     if (!view || !isNavActive(token)) return;
     await renderForms(view, current.formsKind || 'product', token, {
@@ -190,7 +217,7 @@ async function draw() {
   }
 
   const route = botRoutes[current.name] || botRoutes.overview;
-  mountBotChrome(current.name, route.title);
+  mountBotChrome(me, current.name, route.title);
   refreshInboxHandoffBadge();
 
   const view = document.querySelector('#view');
@@ -208,156 +235,144 @@ async function draw() {
   }
 }
 
-function sessionUserLabel(me) {
-  const user = me?.user;
-  if (!user) return '';
-  const role = user.role === 'adm' ? 'ADM' : 'Gestor Entidade';
-  return `${user.name || user.email} · ${role}`;
-}
-
 function isAdmSession(me) {
   return Boolean(me?.isAdm || me?.user?.role === 'adm');
 }
 
-function admTopbarControlsHtml() {
+function navItems(appKey, me) {
+  if (appKey === 'web') {
+    const adm = isAdmSession(me);
+    return [
+      { key: 'web', href: '#/web', label: 'Dashboard', icon: 'dashboard' },
+      adm && { key: 'bot', href: '#/overview', label: 'Vertice Bot', icon: 'bot' },
+      { key: 'forms', href: '#/forms/compras', label: 'Vertice Forms', icon: 'forms' },
+      adm && { key: 'web-settings', href: '#/web/settings/usuarios', label: 'Configurações', icon: 'settings' },
+    ].filter(Boolean);
+  }
+  if (appKey === 'forms') {
+    return FORMS_TABS.map((tab) => ({ key: tab.id, href: tab.href, label: tab.label, icon: tab.icon }));
+  }
+  return Object.entries(botRoutes).map(([key, route]) => ({
+    key,
+    href: `#/${key}`,
+    label: route.title,
+    icon: route.icon,
+    badge: key === 'inbox' ? '<span class="nav-badge" id="inbox-handoff-badge" hidden></span>' : '',
+  }));
+}
+
+function navLinkHtml(item, active) {
+  return `<a class="${item.key === active ? 'active' : ''}" data-nav="${escapeHtml(item.key)}" href="${escapeHtml(item.href)}" title="${escapeHtml(item.label)}">${icon(item.icon)}<span>${escapeHtml(item.label)}</span>${item.badge || ''}</a>`;
+}
+
+function sideFootHtml(me) {
+  const user = me?.user || {};
+  const name = user.name || user.email || 'Usuário';
+  const role = user.role === 'adm' ? 'Administrador' : 'Gestor Entidade';
   return `
-          <div id="company-switcher"></div>
-          <a class="btn-ghost" href="#/web/settings/usuarios" data-settings-link>Configurações</a>`;
+        <div class="side-foot">
+          <div class="side-user-row" title="${escapeHtml(user.email || name)}">
+            <span class="avatar">${escapeHtml(initials(name))}</span>
+            <div class="side-user"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(role)}</span></div>
+          </div>
+          <button class="side-logout" id="logout" type="button" title="Sair">${icon('logout')}<span>Sair</span></button>
+        </div>`;
 }
 
-function entityBadgeHtml() {
-  return `<div id="entity-badge"></div>`;
+function topbarActionsHtml(me) {
+  if (!isAdmSession(me)) return '<div id="entity-badge"></div>';
+  return `
+            <div id="company-switcher"></div>
+            <a class="icon-btn" href="#/web/settings/usuarios" data-settings-link title="Configurações do Vertice WEB" aria-label="Configurações">${icon('settings')}</a>`;
 }
 
-function ensureBeforeLogout(actions, el) {
-  const logout = actions.querySelector('#logout-hub, #logout-forms');
-  if (logout) actions.insertBefore(el, logout);
-  else actions.appendChild(el);
-}
-
-function syncAdmTopbar(actions, me) {
+function mountTopbarControls(me) {
+  const actions = document.querySelector('#topbar-actions');
   if (!actions) return;
-  const chip = actions.querySelector('#session-chip');
-  if (chip) chip.textContent = sessionUserLabel(me);
-
   const adm = isAdmSession(me);
-  let host = actions.querySelector('#company-switcher');
-  let settings = actions.querySelector('[data-settings-link]');
-  let entity = actions.querySelector('#entity-badge');
-
-  if (adm) {
-    entity?.remove();
-    if (!host) {
-      host = document.createElement('div');
-      host.id = 'company-switcher';
-      ensureBeforeLogout(actions, host);
-    }
-    if (!settings) {
-      settings = document.createElement('a');
-      settings.className = 'btn-ghost';
-      settings.href = '#/web/settings/usuarios';
-      settings.setAttribute('data-settings-link', '');
-      settings.textContent = 'Configurações';
-      ensureBeforeLogout(actions, settings);
-    }
-    if (chip && host && chip.nextElementSibling !== host) {
-      actions.insertBefore(chip, host);
-    }
-    if (host && !host.querySelector('[data-company-switcher], .company-switcher--empty')) {
-      mountCompanySwitcher(host, me);
-    }
+  let host = actions.querySelector(adm ? '#company-switcher' : '#entity-badge');
+  if (!host) {
+    actions.innerHTML = topbarActionsHtml(me);
+    host = actions.querySelector(adm ? '#company-switcher' : '#entity-badge');
+  }
+  if (!adm) {
+    mountEntityBadge(host, me);
     return;
   }
-
-  host?.remove();
-  settings?.remove();
-  if (!entity) {
-    entity = document.createElement('div');
-    entity.id = 'entity-badge';
-    if (chip) actions.insertBefore(entity, chip.nextSibling);
-    else ensureBeforeLogout(actions, entity);
+  if (!host.querySelector('[data-company-switcher], .company-switcher--empty')) {
+    mountCompanySwitcher(host, me);
   }
-  mountEntityBadge(entity, me);
 }
 
-function mountWebChrome(me) {
-  if (document.querySelector('.hub-shell') && !document.querySelector('.forms-shell')) {
-    syncAdmTopbar(document.querySelector('.hub-topbar-actions'), me);
-    return;
+/** Monta (ou reaproveita) a casca com sidebar. Retorna true quando a casca foi recriada. */
+function mountChrome(appKey, me, active, title) {
+  const current = document.querySelector('.shell');
+  if (current && current.dataset.app === appKey) {
+    syncChrome(active, title);
+    mountTopbarControls(me);
+    return false;
   }
-  const adm = isAdmSession(me);
-  const midControls = adm ? admTopbarControlsHtml() : entityBadgeHtml();
+  const cfg = APPS[appKey];
+  const hubLink =
+    appKey === 'web'
+      ? ''
+      : `<a class="nav-hub" href="#/web" data-nav="hub" title="Voltar ao Vertice WEB">${icon('apps')}<span>Vertice WEB</span></a>`;
+  const collapsed = sessionStorage.getItem('nav-collapsed') === '1';
   app.innerHTML = `
-    <div class="hub-shell">
-      <header class="hub-topbar">
-        <a class="hub-topbar-brand" href="#/web">
-          <img class="hub-topbar-logo-web" src="/logo-vertice-marca.png" alt="Vértice" />
-        </a>
-        <div class="hub-topbar-actions">
-          <span class="session-chip" id="session-chip">${escapeHtml(sessionUserLabel(me))}</span>
-          ${midControls}
-          <button class="btn-ghost" id="logout-hub" type="button">Sair</button>
+    <div class="shell ${cfg.shellClass}${collapsed ? ' collapsed' : ''}" data-app="${appKey}">
+      <aside class="sidebar">
+        <button class="sidebar-toggle" id="collapse" type="button" aria-label="Recolher menu">${icon('collapse')}</button>
+        <div class="side-brand">
+          <a class="brand" href="#/web" title="Vertice WEB"><img class="brand-logo" src="${cfg.logo}" alt="${escapeHtml(cfg.crumb)}" /></a>
         </div>
-      </header>
-      <main class="hub-main" id="hub-view"></main>
+        <nav class="side-nav">
+          ${hubLink}
+          ${navItems(appKey, me).map((item) => navLinkHtml(item, active)).join('')}
+        </nav>
+        ${sideFootHtml(me)}
+      </aside>
+      <div class="backdrop" id="backdrop"></div>
+      <div class="workspace">
+        <header class="topbar">
+          <button class="icon-btn nav-toggle" id="menu" type="button" aria-label="Abrir menu">${icon('menu')}</button>
+          <div class="topbar-title">
+            <span class="topbar-crumb">${escapeHtml(cfg.crumb)}</span>
+            <h2 class="page-title">${escapeHtml(title)}</h2>
+          </div>
+          <div class="topbar-actions" id="topbar-actions">${topbarActionsHtml(me)}</div>
+        </header>
+        <main class="${cfg.mainClass}" id="${cfg.mainId}"></main>
+      </div>
     </div>`;
-  document.querySelector('#logout-hub')?.addEventListener('click', leave);
-  if (adm) mountCompanySwitcher(document.querySelector('#company-switcher'), me);
-  else mountEntityBadge(document.querySelector('#entity-badge'), me);
-}
-
-function mountFormsChrome(me) {
-  if (document.querySelector('.forms-shell')) {
-    syncAdmTopbar(document.querySelector('.forms-topbar-actions'), me);
-    return;
-  }
-  const adm = isAdmSession(me);
-  const midControls = adm ? admTopbarControlsHtml() : entityBadgeHtml();
-  app.innerHTML = `
-    <div class="forms-shell">
-      <header class="forms-topbar">
-        <a class="forms-topbar-brand" href="#/web" title="Voltar ao Vertice WEB">
-          <img class="forms-topbar-logo" src="/logo-vertice-forms.png" alt="Vertice Forms" />
-        </a>
-        <div class="forms-topbar-actions">
-          <span class="session-chip" id="session-chip">${escapeHtml(sessionUserLabel(me))}</span>
-          ${midControls}
-          <button class="btn-ghost" id="logout-forms" type="button">Sair</button>
-        </div>
-      </header>
-      <main class="forms-main main" id="forms-view"></main>
-    </div>`;
-  document.querySelector('#logout-forms')?.addEventListener('click', leave);
-  if (adm) mountCompanySwitcher(document.querySelector('#company-switcher'), me);
-  else mountEntityBadge(document.querySelector('#entity-badge'), me);
-}
-
-function mountBotChrome(active, title) {
-  if (!document.querySelector('.shell') || document.querySelector('.hub-shell') || document.querySelector('.forms-shell')) {
-    app.innerHTML = shell(active, title);
-    const frame = document.querySelector('.shell');
-    if (sessionStorage.getItem('nav-collapsed') === '1') frame.classList.add('collapsed');
-    bindChrome(frame);
-    return;
-  }
+  const frame = document.querySelector('.shell');
+  bindChrome(frame);
   syncChrome(active, title);
+  mountTopbarControls(me);
+  return true;
+}
+
+function mountBotChrome(me, active, title) {
+  const fresh = mountChrome('bot', me, active, title);
+  if (fresh) return;
   const existingView = document.querySelector('#view');
   if (existingView) existingView.innerHTML = viewLoading();
 }
 
 function bindChrome(frame) {
-  document.querySelector('#menu').addEventListener('click', () => {
+  frame.querySelector('#menu').addEventListener('click', () => {
     frame.classList.toggle('nav-open');
   });
-  document.querySelector('#backdrop').addEventListener('click', () => {
+  frame.querySelector('#backdrop').addEventListener('click', () => {
     frame.classList.remove('nav-open');
   });
-  document.querySelector('#collapse').addEventListener('click', () => {
+  frame.querySelector('#collapse').addEventListener('click', () => {
     const collapsed = frame.classList.toggle('collapsed');
     sessionStorage.setItem('nav-collapsed', collapsed ? '1' : '0');
   });
-  document.querySelector('#logout').addEventListener('click', leave);
-  document.querySelector('#logout-top').addEventListener('click', leave);
+  frame.querySelector('.side-nav').addEventListener('click', (event) => {
+    if (event.target.closest('a')) frame.classList.remove('nav-open');
+  });
+  frame.querySelector('#logout').addEventListener('click', leave);
 }
 
 async function leave() {
@@ -392,57 +407,18 @@ function refreshInboxHandoffBadge() {
     .catch(() => {});
 }
 
-function shell(active, title) {
-  const links = Object.entries(botRoutes)
-    .map(([key, route]) => {
-      const badge =
-        key === 'inbox'
-          ? '<span class="nav-badge" id="inbox-handoff-badge" hidden></span>'
-          : '';
-      return `<a class="${key === active ? 'active' : ''}" data-nav="${key}" href="#/${key}">${icon(key)}<span>${escapeHtml(route.title)}</span>${badge}</a>`;
-    })
-    .join('');
-  return `
-    <div class="shell${active === 'inbox' ? ' is-inbox' : ''}">
-      <aside class="sidebar">
-        <div class="side-brand">
-          <a class="brand" href="#/web" title="Voltar ao Vertice WEB"><img class="brand-logo brand-logo--bot" src="/logo-vertice-bot.png" alt="Vertice Bot" /></a>
-          <button class="icon-btn" id="collapse" type="button" aria-label="Recolher menu">${icon('collapse')}</button>
-        </div>
-        <nav class="side-nav">
-          <a class="nav-hub" href="#/web" data-nav="web">${icon('apps')}<span>Vertice WEB</span></a>
-          ${links}
-        </nav>
-        <div class="side-foot">
-          <span class="avatar">VI</span>
-          <div class="side-user"><strong>Vertice Bot</strong><span>App</span></div>
-          <button class="icon-btn" id="logout" type="button" aria-label="Sair">${icon('logout')}</button>
-        </div>
-      </aside>
-      <div class="backdrop" id="backdrop"></div>
-      <div class="workspace">
-        <header class="topbar">
-          <button class="icon-btn nav-toggle" id="menu" type="button" aria-label="Abrir menu">${icon('menu')}</button>
-          <h2 class="page-title">${escapeHtml(title)}</h2>
-          <div class="topbar-actions">
-            <button class="btn-ghost" id="logout-top" type="button">Sair</button>
-          </div>
-        </header>
-        <main class="main" id="view"></main>
-      </div>
-    </div>`;
-}
-
 function renderLogin() {
   drawnKey = '';
   app.innerHTML = `
     <section class="gate">
-      <div class="gate-glow" aria-hidden="true"></div>
       <div class="gate-form-panel">
+        <div class="gate-brand">
+          <img class="gate-logo" src="/logo-vertice-marca.png" alt="Vértice" />
+        </div>
         <form class="gate-form" id="login-form">
           <div class="gate-form-head">
-            <img class="gate-logo" src="/logo-vertice-marca.png" alt="Vértice" />
-            <h1>Acesso à plataforma</h1>
+            <p class="gate-kicker">Vertice WEB</p>
+            <h1>Acesse sua conta</h1>
             <p class="gate-lead">Entre com seu e-mail e senha</p>
           </div>
 
@@ -526,28 +502,4 @@ function renderLogin() {
 
 function showError(error) {
   app.innerHTML = `<main class="main"><h1>Não foi possível abrir o painel</h1><p>${escapeHtml(error.message)}</p></main>`;
-}
-
-function icon(name) {
-  const paths = {
-    overview:
-      '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-    contacts:
-      '<path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9.5" cy="7" r="3"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a3 3 0 0 1 0 5.75"/>',
-    questionnaires:
-      '<path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/>',
-    inbox:
-      '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
-    settings:
-      '<circle cx="12" cy="12" r="3"/><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-    apps:
-      '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
-    menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
-    collapse: '<path d="M15 6l-6 6 6 6"/>',
-    logout: '<path d="M9 6H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/><path d="M14 16l4-4-4-4"/><path d="M18 12H9"/>',
-    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-    moon: '<path d="M21 14.5A8.5 8.5 0 0 1 9.5 3 7 7 0 1 0 21 14.5Z"/>',
-  };
-  const cls = name === 'sun' ? ' theme-icon-sun' : name === 'moon' ? ' theme-icon-moon' : '';
-  return `<svg class="${cls.trim()}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 }
