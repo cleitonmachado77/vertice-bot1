@@ -12,9 +12,11 @@ import { startLiveSync } from './live-sync.js';
 import { startMessageWorker } from './message-worker.js';
 import { startOdooPullScheduler } from './odoo-scheduler.js';
 import { startScheduler } from './scheduler.js';
+import { applyFormsReminderSchedule } from './forms-reminder.js';
 
 loadEnv();
 await initDatabase();
+await applyFormsReminderSchedule();
 const webhookSecret = getSetting('nevoa_webhook_secret') || env('NEVOA_WEBHOOK_SECRET');
 if (!webhookSecret && env('NODE_ENV') === 'production') {
   throw new Error('NEVOA_WEBHOOK_SECRET é obrigatório em produção');

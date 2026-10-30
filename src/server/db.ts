@@ -782,6 +782,8 @@ async function seedSettings(): Promise<void> {
     bot_menu_intro: 'O que deseja fazer hoje?',
     bot_menu_session_hours: '2',
     bot_menu_attendant: '1',
+    bot_reminder_time: '08:00',
+    bot_reminder_days: 'daily',
     nevoa_base_url: env(
       'NEVOA_BASE_URL',
       'https://nevoa-manager-backend-9e27f965f73e.herokuapp.com/api/public/v1',

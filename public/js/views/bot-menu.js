@@ -6,13 +6,12 @@ function previewText(settings) {
   const lines = [
     `Bom dia, Cleiton! ${settings.intro || 'O que deseja fazer hoje?'}`,
     '',
-    '1) Responder Compras de hoje (Ademir - Compras)',
-    '2) Compras',
-    '3) Inventário',
-    '4) Fabricação',
-    '5) Vendas',
+    '1) Compras — pendente hoje',
+    '2) Inventário — pendente hoje',
+    '3) Fabricação',
+    '4) Vendas — em andamento',
   ];
-  if (settings.attendant) lines.push('6) Falar com um atendente');
+  if (settings.attendant) lines.push('5) Falar com um atendente');
   lines.push('', 'Responda com o número da opção. Digite *menu* a qualquer momento para voltar aqui.');
   return lines.join('\n');
 }
@@ -27,9 +26,23 @@ export async function renderBotMenu(root, token) {
       <form class="card stack" id="bot-menu-form">
         <div class="card-head">
           <h2>Menu numerado no WhatsApp</h2>
-          <p class="muted">Abre cada atendimento com opções numeradas (Compras, Inventário, Fabricação, Vendas) montadas a partir dos padrões do Forms ligados ao contato. Dentro do formulário, a coleta continua igual.</p>
+          <p class="muted">Abre cada atendimento com opções numeradas (Compras, Inventário, Fabricação, Vendas) montadas a partir dos padrões do Forms ligados ao contato. No horário padrão, o Bot envia só este menu — não os formulários — e o contato escolhe o que preencher. Se o contato chamar por conta própria, o menu aparece direto. Dentro do formulário, a coleta continua igual.</p>
         </div>
         <label class="check"><input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}/> Menu ativo</label>
+        <div class="grid-2">
+          <div>
+            <label>Horário padrão do lembrete</label>
+            <input name="reminderTime" type="time" required value="${escapeHtml(settings.reminderTime || '08:00')}" />
+          </div>
+          <div>
+            <label>Dias do lembrete</label>
+            <select name="reminderDays">
+              <option value="daily"${settings.reminderDays === 'weekdays' ? '' : ' selected'}>Todos os dias</option>
+              <option value="weekdays"${settings.reminderDays === 'weekdays' ? ' selected' : ''}>Dias úteis</option>
+            </select>
+          </div>
+        </div>
+        <p class="muted">Vale para todos os formulários com Bot ativo. Os formulários ficam sempre disponíveis no menu; o lembrete só avisa o contato do que está pendente.</p>
         <label>Pergunta de abertura</label>
         <input name="intro" maxlength="300" value="${escapeHtml(settings.intro)}" />
         <div class="grid-2">
@@ -69,6 +82,8 @@ export async function renderBotMenu(root, token) {
       intro: String(data.get('intro') || ''),
       sessionHours: Number(data.get('sessionHours') || 2),
       attendant: data.get('attendant') === 'on',
+      reminderTime: String(data.get('reminderTime') || '08:00'),
+      reminderDays: String(data.get('reminderDays') || 'daily'),
     };
   };
   form.addEventListener('input', () => {

@@ -1,4 +1,4 @@
-import { getSetting } from './db.js';
+import { getSetting, one } from './db.js';
 import { minutesFromClock, zonedNow } from './clock.js';
 import { asList } from './map.js';
 import { NevoaError, listTemplates } from './nevoa.js';
@@ -10,6 +10,7 @@ import {
   listDueQuestionnaireSends,
   markCycleCompleted,
   markCycleFailed,
+  markCycleNotified,
   missingQuestions,
   recoverStuckSendingCycles,
   rememberCyclePrompt,
@@ -80,6 +81,11 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
     }
   };
 
+  const { botMenuSettings } = await import('./bot-menu.js');
+  const { isFormsBotQuestionnaire } = await import('./forms-bot-agenda.js');
+  const menuMode = botMenuSettings().enabled;
+  const menuBatches = new Map<string, MenuBatch>();
+
   const due = await listDueQuestionnaireSends(clock.weekday);
   if (!due.length) {
     result.skipped += 1;
@@ -124,6 +130,18 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
         });
         continue;
       }
+      // Menu ligado: os formulários do contato viram uma única mensagem com o menu (enviada após o laço).
+      if (menuMode && isFormsBotQuestionnaire(questionnaire)) {
+        const batch = menuBatches.get(item.contact_id) || {
+          item,
+          templateId: questionnaire.template_id || '',
+          cycles: [],
+        };
+        batch.cycles.push({ id: cycle.id, name: item.questionnaire_name });
+        menuBatches.set(item.contact_id, batch);
+        continue;
+      }
+
       const alreadyStarted = savedAnswers.length > 0;
       const windowOpen = await hasOpenCustomerWindow(item.contact_id, item.phone);
       // Com respostas parciais, só pede o que falta (texto). Template completo atrapalharia.
@@ -217,7 +235,130 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
     }
   }
 
+  for (const batch of menuBatches.values()) {
+    await sendMenuBatch(batch, { channelId, date: clock.date, minutes: clock.minutes, ensureTemplate, templateErrors, result });
+  }
+
   return result;
+}
+
+type MenuBatch = {
+  item: { contact_id: string; name: string; phone: string };
+  templateId: string;
+  cycles: { id: string; name: string }[];
+};
+
+/** Conversa ativa agora há pouco: o menu agendado não interrompe; os pendentes aparecem no próximo menu. */
+const MENU_BUSY_MINUTES = 10;
+
+async function sendMenuBatch(
+  batch: MenuBatch,
+  ctx: {
+    channelId: string;
+    date: string;
+    minutes: number;
+    ensureTemplate: (configuredId: string) => Promise<FirstContactTemplate | undefined>;
+    templateErrors: Map<string, string>;
+    result: QuestionnaireDispatchRun;
+  },
+): Promise<void> {
+  const { item, cycles } = batch;
+  const { result } = ctx;
+  const names = cycles.map((cycle) => cycle.name).join(', ');
+  try {
+    if (await hasOpenCustomerWindow(item.contact_id, item.phone)) {
+      for (const cycle of cycles) await markCycleNotified(cycle.id);
+      if (await hasRecentInbound(item.contact_id, MENU_BUSY_MINUTES)) {
+        result.skipped += 1;
+        result.items.push({
+          phone: item.phone,
+          status: 'skipped',
+          detail: `${names} (conversa em andamento → pendente no menu)`,
+        });
+        return;
+      }
+      const { buildMenuKickoff } = await import('./bot-menu.js');
+      const conversationId = await latestConversationId(item.contact_id);
+      const text = await buildMenuKickoff({
+        contactId: item.contact_id,
+        contactName: item.name || '',
+        conversationId,
+        date: ctx.date,
+        minutes: ctx.minutes,
+      });
+      if (!text) {
+        result.skipped += 1;
+        result.items.push({ phone: item.phone, status: 'skipped', detail: `${names} (menu vazio)` });
+        return;
+      }
+      await enqueueOutbound({
+        dedupeKey: `bot-menu:${cycles[0].id}:kickoff`,
+        kind: 'text',
+        phone: item.phone,
+        text,
+        channelId: ctx.channelId,
+        conversationId,
+        contactId: item.contact_id,
+        origin: 'scheduled',
+        raw: { source: 'bot-menu-kickoff', cycleIds: cycles.map((cycle) => cycle.id) },
+      });
+      result.sent += 1;
+      result.items.push({ phone: item.phone, status: 'queued', detail: `${names} (janela aberta → menu)` });
+      return;
+    }
+
+    const resolved = await ctx.ensureTemplate(batch.templateId);
+    if (!resolved) {
+      const templateError = ctx.templateErrors.get(batch.templateId) || 'Template indisponível';
+      for (const cycle of cycles) await markCycleFailed(cycle.id, templateError);
+      result.failed += 1;
+      result.items.push({ phone: item.phone, status: 'failed', detail: templateError });
+      return;
+    }
+    // Um template só; a resposta do contato abre o menu (sessão nova).
+    const [first, ...rest] = cycles;
+    for (const cycle of rest) await markCycleNotified(cycle.id);
+    await enqueueOutbound({
+      dedupeKey: `questionnaire:${first.id}:kickoff`,
+      kind: 'template',
+      variables: variablesFor(resolved.body, item.name || item.phone),
+      templateId: resolved.id,
+      phone: item.phone,
+      text: resolved.body.replace(/\{\{\s*1\s*\}\}/g, item.name || item.phone) || resolved.name,
+      channelId: ctx.channelId,
+      contactId: item.contact_id,
+      cycleId: first.id,
+      origin: 'scheduled',
+      raw: { source: 'bot-menu-template', cycleIds: cycles.map((cycle) => cycle.id) },
+    });
+    result.sent += 1;
+    result.items.push({ phone: item.phone, status: 'queued', detail: `${names} (janela fechada → template, menu na resposta)` });
+  } catch (error) {
+    const detail = error instanceof NevoaError ? error.message : 'Falha ao enviar menu';
+    for (const cycle of cycles) await markCycleFailed(cycle.id, detail);
+    result.failed += 1;
+    result.items.push({ phone: item.phone, status: 'failed', detail });
+  }
+}
+
+async function hasRecentInbound(contactId: string, minutes: number): Promise<boolean> {
+  const since = new Date(Date.now() - minutes * 60_000).toISOString();
+  const row = await one<{ id: string }>(
+    `SELECT m.id FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     WHERE c.contact_id = $1 AND m.direction = 'INBOUND' AND m.created_at > $2
+     LIMIT 1`,
+    [contactId, since],
+  );
+  return Boolean(row);
+}
+
+async function latestConversationId(contactId: string): Promise<string> {
+  const row = await one<{ id: string }>(
+    `SELECT id FROM conversations WHERE contact_id = $1 ORDER BY last_message_at DESC LIMIT 1`,
+    [contactId],
+  );
+  return row?.id || '';
 }
 
 /** Forms Bot: convite guiado (lista numerada do catálogo), igual ao “Enviar agora”. */

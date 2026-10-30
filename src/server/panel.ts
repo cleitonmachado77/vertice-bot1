@@ -12,6 +12,14 @@ import { json, route, type Ctx } from './http.js';
 import { NevoaError, nevoaRequest, sendWhatsappText } from './nevoa.js';
 import { listAgentModels, previewReply } from './agent.js';
 import { DEFAULT_MENU_INTRO, botMenuSettings } from './bot-menu.js';
+import {
+  REMINDER_DAYS_SETTING,
+  REMINDER_TIME_SETTING,
+  applyFormsReminderSchedule,
+  formsReminderSchedule,
+  sanitizeReminderDays,
+  sanitizeReminderTime,
+} from './forms-reminder.js';
 import { syncContactsAndConversations, syncConversationMessages } from './sync.js';
 import {
   dashboardCounts,
@@ -262,9 +270,14 @@ export function registerPanelRoutes(): void {
     json(ctx.res, 200, await previewReply(sample));
   });
 
+  const botMenuPayload = () => {
+    const schedule = formsReminderSchedule();
+    return { ...botMenuSettings(), reminderTime: schedule.sendTime, reminderDays: schedule.frequency };
+  };
+
   route('GET', '/api/bot-menu', async (ctx) => {
     if (!(await requireUser(ctx))) return;
-    json(ctx.res, 200, botMenuSettings());
+    json(ctx.res, 200, botMenuPayload());
   });
 
   route('PUT', '/api/bot-menu', async (ctx) => {
@@ -274,7 +287,10 @@ export function registerPanelRoutes(): void {
     await setSetting('bot_menu_intro', text(input.intro).trim().slice(0, 300) || DEFAULT_MENU_INTRO);
     await setSetting('bot_menu_session_hours', String(clamp(Number(input.sessionHours ?? 2), 0.25, 48)));
     await setSetting('bot_menu_attendant', input.attendant === false ? '0' : '1');
-    json(ctx.res, 200, botMenuSettings());
+    await setSetting(REMINDER_TIME_SETTING, sanitizeReminderTime(input.reminderTime));
+    await setSetting(REMINDER_DAYS_SETTING, sanitizeReminderDays(input.reminderDays));
+    await applyFormsReminderSchedule();
+    json(ctx.res, 200, botMenuPayload());
   });
 
   route('GET', '/api/contacts', async (ctx) => {

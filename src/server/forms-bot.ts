@@ -27,6 +27,7 @@ import {
   type FormKind,
 } from './forms-fields.js';
 import { listUomInfos, splitQuantityUnit, toKg } from './forms-uom.js';
+import { formsReminderSchedule } from './forms-reminder.js';
 import { fromOdooNumber } from './odoo-number.js';
 import { isProductionLocked } from './odoo-production.js';
 import { isUnusableQuestionnaireAnswer } from './questionnaire-rules.js';
@@ -221,13 +222,14 @@ export async function syncFormsBotQuestionnaire(preset: FormPreset): Promise<Que
   const greeting = `Oi {{1}}! ${kindLabel} — ${preset.name}`;
 
   const existing = await getQuestionnaire(questionnaireId, true);
+  const schedule = formsReminderSchedule();
   const saved = await upsertQuestionnaire({
     id: questionnaireId,
     name: `[Forms] ${kindLabel} · ${preset.name}`,
     greeting,
-    frequency: preset.bot_frequency || 'daily',
-    weekday: preset.bot_weekday ?? 1,
-    sendTime: preset.bot_send_time || '08:00',
+    frequency: schedule.frequency,
+    weekday: schedule.weekday,
+    sendTime: schedule.sendTime,
     templateId: preset.bot_template_id || existing?.template_id || '',
     active: true,
     defaultValues,

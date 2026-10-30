@@ -698,9 +698,6 @@ function openPresetEditor(root, kind, schema, catalog, items, token, preset, onS
     presetName: preset?.name || '',
     presetShow,
     botEnabled: Boolean(preset?.bot_enabled),
-    botFrequency: preset?.bot_frequency || 'daily',
-    botWeekday: preset?.bot_weekday ?? 1,
-    botSendTime: preset?.bot_send_time || '08:00',
     botTemplateId: preset?.bot_template_id || '',
     botContactId: preset?.bot_contact_id || '',
     botRules: preset?.bot_rules || {},
@@ -772,9 +769,6 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
         lines: payload.lines || [],
         visible: collectPresetVisible(form, fields),
         bot_enabled: data.get('bot_enabled') === '1',
-        bot_frequency: String(data.get('bot_frequency') || 'daily'),
-        bot_weekday: Number(data.get('bot_weekday') || 1),
-        bot_send_time: String(data.get('bot_send_time') || '08:00'),
         bot_template_id: String(data.get('bot_template_id') || ''),
         bot_contact_id: String(data.get('bot_contact_id') || ''),
         bot_rules: collectBotRules(data),
@@ -848,7 +842,7 @@ function bindPresetBotSendNow(form, preset) {
     }
     button.disabled = true;
     try {
-      // Persiste agenda/template atuais sem fechar o editor — o horário marcado segue intacto.
+      // Persiste contato/template atuais sem fechar o editor.
       const data = new FormData(form);
       const contactId = String(data.get('bot_contact_id') || '');
       if (!contactId) {
@@ -859,9 +853,6 @@ function bindPresetBotSendNow(form, preset) {
         method: 'PUT',
         body: {
           bot_enabled: true,
-          bot_frequency: String(data.get('bot_frequency') || 'daily'),
-          bot_weekday: Number(data.get('bot_weekday') || 1),
-          bot_send_time: String(data.get('bot_send_time') || '08:00'),
           bot_template_id: String(data.get('bot_template_id') || ''),
           bot_contact_id: contactId,
           bot_rules: collectBotRules(data),
@@ -871,7 +862,7 @@ function bindPresetBotSendNow(form, preset) {
         method: 'POST',
         body: {},
       });
-      toast(`Enviado agora para ${result.phone || 'WhatsApp'}. A agenda continua ativa.`);
+      toast(`Enviado agora para ${result.phone || 'WhatsApp'}. O lembrete do horário padrão continua ativo.`);
       await loadPresetBotActivity(form, preset.id);
     } catch (error) {
       toast(error.message || 'Falha ao enviar agora');
@@ -884,15 +875,12 @@ function bindPresetBotSendNow(form, preset) {
 function bindPresetBotControls(form) {
   const enabled = form.querySelector('[name=bot_enabled]');
   const panel = form.querySelector('[data-bot-schedule]');
-  const weekdayWrap = form.querySelector('[data-bot-weekday]');
-  const frequency = form.querySelector('[name=bot_frequency]');
   const templateSelect = form.querySelector('[name=bot_template_id]');
   const templatePreview = form.querySelector('[data-bot-template-preview]');
   const sendNow = form.querySelector('[data-bot-send-now]');
   const sync = () => {
     const on = Boolean(enabled?.checked);
     if (panel) panel.hidden = !on;
-    if (weekdayWrap) weekdayWrap.hidden = !on || frequency?.value !== 'weekly';
     if (sendNow && form.getAttribute('data-preset-id')) sendNow.disabled = !on;
   };
   const syncPreview = () => {
@@ -904,7 +892,6 @@ function bindPresetBotControls(form) {
       : 'Automático: usa o template padrão do sistema se a janela de 24h estiver fechada.';
   };
   enabled?.addEventListener('change', sync);
-  frequency?.addEventListener('change', sync);
   templateSelect?.addEventListener('change', syncPreview);
   sync();
   syncPreview();
@@ -1281,15 +1268,6 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
         )
         .join('');
 
-  const botFrequency = options.botFrequency || 'daily';
-  const botWeekday = Number(options.botWeekday ?? 1);
-  const botSendTime = options.botSendTime || '08:00';
-  const dayOptions = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
-    .map(
-      (label, index) =>
-        `<option value="${index}"${botWeekday === index ? ' selected' : ''}>${label}</option>`,
-    )
-    .join('');
   const titleBlock = isPreset
     ? `<label>Nome do padrão (botão)
         <input name="preset_name" value="${escapeHtml(options.presetName || '')}" placeholder="ex.: Plastico" required maxlength="60" />
@@ -1319,27 +1297,13 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
             </div>
             <button class="btn" type="button" data-bot-create-contact>Cadastrar e selecionar</button>
           </div>
-          <div class="grid-2">
-            <label>Frequência
-              <select name="bot_frequency">
-                <option value="daily"${botFrequency === 'daily' ? ' selected' : ''}>Todos os dias</option>
-                <option value="weekdays"${botFrequency === 'weekdays' ? ' selected' : ''}>Dias úteis</option>
-                <option value="weekly"${botFrequency === 'weekly' ? ' selected' : ''}>Um dia da semana</option>
-              </select>
-            </label>
-            <label>Horário
-              <input name="bot_send_time" type="time" value="${escapeHtml(botSendTime)}" required />
-            </label>
-          </div>
-          <label data-bot-weekday${botFrequency === 'weekly' ? '' : ' hidden'}>Dia da semana
-            <select name="bot_weekday">${dayOptions}</select>
-          </label>
+          <p class="muted">Fica sempre disponível no menu do WhatsApp deste contato. O lembrete sai no horário padrão, configurado em <a href="#/settings/menu">Vertice Bot › Configurações › Menu</a>.</p>
           <label>Template Meta (janela 24h)
             <select name="bot_template_id">
               <option value="">Carregando templates…</option>
             </select>
           </label>
-          <p class="muted forms-bot-template-hint" data-bot-template-preview>Se a janela de 24h estiver fechada, o Bot envia este template antes das perguntas.</p>
+          <p class="muted forms-bot-template-hint" data-bot-template-preview>Se a janela de 24h estiver fechada, o Bot envia este template antes do menu.</p>
           ${botRulesHtml(options.botRules)}
           <div class="forms-bot-send-row">
             <button class="btn" type="button" data-bot-send-now ${options.presetId ? '' : 'disabled'} title="${
@@ -1347,7 +1311,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
                 ? 'Envia o questionário agora sem alterar a agenda'
                 : 'Salve o padrão antes de enviar'
             }">Enviar agora</button>
-            <span class="muted">Disparo imediato. Frequência e horário seguem valendo para os próximos envios.</span>
+            <span class="muted">Disparo imediato deste formulário. O lembrete do horário padrão segue valendo.</span>
           </div>
         </div>
         <div class="forms-bot-activity" data-bot-activity hidden></div>

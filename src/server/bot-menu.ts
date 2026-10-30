@@ -17,6 +17,7 @@ import {
   matchMenuOption,
   menuGreeting,
   normalizeMenuForms,
+  singleRegisterOption,
   type MenuCycle,
   type MenuCycleStatus,
   type MenuForm,
@@ -128,6 +129,29 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
   return showMain('', true);
 }
 
+/**
+ * Disparo agendado: em vez de mandar cada formulário, manda o menu principal
+ * (com os pendentes do dia marcados) e deixa ele aberto para a resposta numerada.
+ */
+export async function buildMenuKickoff(input: {
+  contactId: string;
+  contactName: string;
+  conversationId: string;
+  date: string;
+  minutes: number;
+}): Promise<string> {
+  const settings = botMenuSettings();
+  const forms = await listMenuForms(input.contactId);
+  if (!forms.length) return '';
+  const cycles = await listTodayCycles(input.contactId, input.date);
+  const node = buildMainMenu({ forms, cycles, attendant: settings.attendant, title: settings.intro });
+  if (input.conversationId) {
+    await clearAgendaSelection(input.conversationId);
+    await saveMenuState(input.conversationId, node);
+  }
+  return formatMenu(node, { greeting: menuGreeting(input.contactName, input.minutes) });
+}
+
 async function runOption(
   option: MenuOption,
   current: MenuNode,
@@ -145,7 +169,10 @@ async function runOption(
     return showNode(input.conversationId, resolveNode(current.parent, forms, cycles, ctx.settings));
   }
   if (option.action === 'node' && option.target) {
-    return showNode(input.conversationId, resolveNode(option.target, forms, cycles, ctx.settings, current.node));
+    const node = resolveNode(option.target, forms, cycles, ctx.settings, current.node);
+    const only = singleRegisterOption(node);
+    if (only) return runOption(only, node, ctx);
+    return showNode(input.conversationId, node);
   }
   if (option.action === 'human') {
     await clearMenuState(input.conversationId);

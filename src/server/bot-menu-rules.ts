@@ -122,43 +122,43 @@ function kindsOf(forms: MenuForm[]): FormKind[] {
   return KIND_ORDER.filter((kind) => forms.some((form) => form.kind === kind));
 }
 
-/** Menu principal: atalhos do dia (convite / em andamento) + tipos de formulário + atendente. */
+/** Estado do dia de um tipo (soma dos padrões dele). */
+export function kindDayStatus(kind: FormKind, forms: MenuForm[], cycles: MenuCycle[]): 'in_progress' | 'pending' | 'completed' | '' {
+  const states = forms
+    .filter((form) => form.kind === kind)
+    .map((form) => cycleFor(cycles, form.questionnaireId));
+  if (states.some((cycle) => cycle.status === 'in_progress')) return 'in_progress';
+  if (states.some((cycle) => cycle.status === 'notified')) return 'pending';
+  if (states.length && states.every((cycle) => cycle.status === 'completed')) return 'completed';
+  return '';
+}
+
+const KIND_STATUS_SUFFIX = { in_progress: ' — em andamento', pending: ' — pendente hoje', completed: ' — concluído hoje', '': '' };
+
+/** Menu principal: tipos de formulário (com o estado do dia) + atendente. */
 export function buildMainMenu(input: {
   forms: MenuForm[];
   cycles: MenuCycle[];
   attendant: boolean;
   title: string;
 }): MenuNode {
-  const featured: Omit<MenuOption, 'key'>[] = [];
-  for (const form of input.forms) {
-    const cycle = cycleFor(input.cycles, form.questionnaireId);
-    const kindLabel = KIND_LABELS[form.kind];
-    if (cycle.status === 'in_progress') {
-      featured.push({
-        label: `Continuar ${kindLabel} de hoje (${form.name}) — em andamento`,
-        action: 'register',
-        target: form.questionnaireId,
-        featured: true,
-      });
-    } else if (cycle.status === 'notified' && cycle.answers === 0) {
-      featured.push({
-        label: `Responder ${kindLabel} de hoje (${form.name})`,
-        action: 'register',
-        target: form.questionnaireId,
-        featured: true,
-      });
-    }
-  }
-  const options: Omit<MenuOption, 'key'>[] = [
-    ...featured.slice(0, 2),
-    ...kindsOf(input.forms).map((kind) => ({
-      label: KIND_LABELS[kind],
+  const options: Omit<MenuOption, 'key'>[] = kindsOf(input.forms).map((kind) => {
+    const status = kindDayStatus(kind, input.forms, input.cycles);
+    return {
+      label: `${KIND_LABELS[kind]}${KIND_STATUS_SUFFIX[status]}`,
       action: 'node' as const,
       target: `kind:${kind}`,
-    })),
-  ];
+      featured: status === 'in_progress' || status === 'pending',
+    };
+  });
   if (input.attendant) options.push({ label: 'Falar com um atendente', action: 'human' });
   return { node: 'main', parent: '', title: input.title, options: numbered(options) };
+}
+
+/** Só há uma ação útil (registrar): entra direto no formulário em vez de mostrar submenu de 1 item. */
+export function singleRegisterOption(node: MenuNode): MenuOption | undefined {
+  const actions = node.options.filter((option) => option.action !== 'back');
+  return actions.length === 1 && actions[0].action === 'register' ? actions[0] : undefined;
 }
 
 /** Tipo com vários padrões → escolhe o padrão; com um só → vai direto às ações dele. */
@@ -244,10 +244,8 @@ export function matchMenuOption(inbound: string, node: MenuNode): MenuOption | u
     return aliases.some((alias) => folded === alias || words.includes(` ${alias} `));
   });
   if (hits.length === 1) return hits[0];
-  // “compras” no menu principal casa com o atalho do dia e com o tipo: o tipo vence.
-  const nonFeatured = hits.filter((option) => !option.featured);
-  if (nonFeatured.length === 1) return nonFeatured[0];
 
+  // “sim” ao convite: abre o primeiro tipo pendente do dia.
   if (node.node === 'main' && YES_RE.test(folded)) {
     return node.options.find((option) => option.featured);
   }
@@ -257,9 +255,8 @@ export function matchMenuOption(inbound: string, node: MenuNode): MenuOption | u
 function optionAliases(option: MenuOption): string[] {
   if (option.action === 'node' && option.target?.startsWith('kind:')) {
     const kind = option.target.slice('kind:'.length);
-    return isFormKind(kind) ? KIND_ALIASES[kind] : [];
+    return isFormKind(kind) ? [foldMenuText(KIND_LABELS[kind]), ...KIND_ALIASES[kind]] : [];
   }
-  if (option.featured) return [];
   return ACTION_ALIASES[option.action] || [];
 }
 

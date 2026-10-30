@@ -12,6 +12,7 @@ import {
   menuFormName,
   menuGreeting,
   normalizeMenuForms,
+  singleRegisterOption,
   type MenuCycle,
   type MenuForm,
 } from './bot-menu-rules.js';
@@ -40,27 +41,47 @@ test('menu principal lista tipos na ordem Compras, Inventário, Fabricação, Ve
   );
 });
 
-test('convite do dia e formulário em andamento viram atalhos no topo', () => {
+test('estado do dia aparece no próprio item do tipo, sem duplicar opções', () => {
   const cycles: MenuCycle[] = [
     { questionnaireId: 'forms-preset:p1', status: 'notified', answers: 0, lastPromptedAt: '' },
+    { questionnaireId: 'forms-preset:p2', status: 'completed', answers: 3, lastPromptedAt: '' },
     { questionnaireId: 'forms-preset:p3', status: 'in_progress', answers: 2, lastPromptedAt: '' },
   ];
   const node = buildMainMenu({ forms, cycles, attendant: false, title: 'Menu' });
-  assert.equal(node.options[0].label, 'Responder Compras de hoje (Ademir - Compras)');
-  assert.equal(node.options[1].label, 'Continuar Vendas de hoje (Vendas do Dia) — em andamento');
-  assert.equal(node.options[2].label, 'Compras');
-  assert.ok(!node.options.some((option) => option.action === 'human'));
+  assert.deepEqual(
+    node.options.map((option) => `${option.key}) ${option.label}`),
+    ['1) Compras — pendente hoje', '2) Inventário — concluído hoje', '3) Vendas — em andamento'],
+  );
+  assert.deepEqual(
+    node.options.map((option) => Boolean(option.featured)),
+    [true, false, true],
+  );
 });
 
-test('“sim” no menu principal aceita o atalho do dia; “compras” vai para o tipo', () => {
+test('“sim” abre o primeiro tipo pendente; nome do tipo e atendente casam por texto', () => {
   const cycles: MenuCycle[] = [
-    { questionnaireId: 'forms-preset:p1', status: 'notified', answers: 0, lastPromptedAt: '' },
+    { questionnaireId: 'forms-preset:p3', status: 'notified', answers: 0, lastPromptedAt: '' },
   ];
   const node = buildMainMenu({ forms, cycles, attendant: true, title: 'Menu' });
-  assert.equal(matchMenuOption('sim', node)?.action, 'register');
+  assert.equal(matchMenuOption('sim', node)?.target, 'kind:sale');
+  assert.equal(matchMenuOption('pode sim', node)?.target, 'kind:sale');
   assert.equal(matchMenuOption('Bom, pode sim', node), undefined);
   assert.equal(matchMenuOption('compras', node)?.target, 'kind:purchase');
   assert.equal(matchMenuOption('quero falar com atendente', node)?.action, 'human');
+
+  const nothingPending = buildMainMenu({ forms, cycles: none, attendant: true, title: 'Menu' });
+  assert.equal(matchMenuOption('sim', nothingPending), undefined);
+});
+
+test('entra direto no formulário quando a única ação é registrar', () => {
+  const fresh = buildFormMenu(forms[0], none, 'main');
+  assert.equal(singleRegisterOption(fresh)?.target, 'forms-preset:p1');
+  const done = buildFormMenu(
+    forms[0],
+    [{ questionnaireId: 'forms-preset:p1', status: 'completed', answers: 2, lastPromptedAt: '' }],
+    'main',
+  );
+  assert.equal(singleRegisterOption(done), undefined);
 });
 
 test('número escolhe a opção; número inexistente não casa', () => {
