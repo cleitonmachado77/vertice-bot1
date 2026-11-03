@@ -3,6 +3,9 @@ import { json, route, type Ctx } from './http.js';
 import { requireAuth } from './auth.js';
 import { DEFAULT_COMPANY_ODOO_ID, getActiveCompanyId } from './forms-companies.js';
 import { listUomInfos, toKg, type UomInfo } from './forms-uom.js';
+import { odooConfigured, odooSearchRead } from './odoo-client.js';
+import { toOdooNumber } from './odoo-number.js';
+import { odooLabelPt } from './odoo-pt.js';
 import { isAdm } from './users.js';
 
 type DocRow = {
@@ -167,7 +170,7 @@ async function loadKind(kind: 'purchase' | 'sale' | 'production', companyOdooId?
   }));
 }
 
-async function productUomByName(companyOdooId?: string): Promise<Map<string, string>> {
+async function loadProducts(companyOdooId?: string): Promise<Record<string, string>[]> {
   const params: unknown[] = ['product'];
   let sql = `SELECT header_json FROM forms_documents WHERE kind = $1`;
   if (companyOdooId) {
@@ -175,14 +178,87 @@ async function productUomByName(companyOdooId?: string): Promise<Map<string, str
     sql += ` AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`;
   }
   const rows = await many<{ header_json: string }>(sql, params);
+  return rows.map((row) => parseJson(row.header_json));
+}
+
+function productUomByName(products: Record<string, string>[]): Map<string, string> {
   const map = new Map<string, string>();
-  for (const row of rows) {
-    const header = parseJson(row.header_json);
+  for (const header of products) {
     const name = nameKey(header.name || '');
     const uom = String(header.uom || '').trim();
     if (name && uom) map.set(name, uom);
   }
   return map;
+}
+
+export type StockItem = { product: string; category: string; uom: string; qty: number };
+
+const byProductName = (a: StockItem, b: StockItem) => a.product.localeCompare(b.product, 'pt-BR');
+const m2oId = (value: unknown): number => (Array.isArray(value) ? Number(value[0]) || 0 : 0);
+const m2oName = (value: unknown): string => (Array.isArray(value) ? String(value[1] || '') : '');
+
+/** Estoque atual direto do Odoo: saldo dos locais internos (stock.quant), somado por produto. */
+async function odooStock(companyOdooId?: string): Promise<StockItem[]> {
+  const domain: unknown[] = [['quantity', '!=', 0], ['location_id.usage', '=', 'internal']];
+  if (companyOdooId) domain.push(['company_id', '=', Number(companyOdooId)]);
+  const quants = await odooSearchRead<{ product_id: unknown; quantity: number }>(
+    'stock.quant',
+    domain,
+    ['product_id', 'quantity'],
+    { limit: 10000 },
+  );
+  const qtyByVariant = new Map<number, { name: string; qty: number }>();
+  for (const quant of quants) {
+    const id = m2oId(quant.product_id);
+    if (!id) continue;
+    const entry = qtyByVariant.get(id) || { name: m2oName(quant.product_id), qty: 0 };
+    entry.qty += Number(quant.quantity) || 0;
+    qtyByVariant.set(id, entry);
+  }
+  if (!qtyByVariant.size) return [];
+  const variants = await odooSearchRead<{ id: number; uom_id: unknown; categ_id: unknown }>(
+    'product.product',
+    [['id', 'in', [...qtyByVariant.keys()]]],
+    ['id', 'uom_id', 'categ_id'],
+    { limit: 10000 },
+  );
+  const info = new Map(variants.map((row) => [row.id, row]));
+  return [...qtyByVariant.entries()]
+    .map(([id, entry]) => ({
+      product: entry.name,
+      category: odooLabelPt(m2oName(info.get(id)?.categ_id)),
+      uom: odooLabelPt(m2oName(info.get(id)?.uom_id)),
+      qty: Math.round(entry.qty * 1000) / 1000,
+    }))
+    .filter((item) => item.qty !== 0)
+    .sort(byProductName);
+}
+
+/** Estoque salvo na última sincronização (qty_on_hand); sem filtro de empresa soma por produto. */
+function localStock(products: Record<string, string>[]): StockItem[] {
+  const byKey = new Map<string, StockItem>();
+  for (const header of products) {
+    const product = String(header.name || '').trim();
+    const qty = toOdooNumber(header.qty_on_hand, 0);
+    if (!product || !qty) continue;
+    const uom = String(header.uom || '').trim();
+    const key = `${nameKey(product)}|${nameKey(uom)}`;
+    const item = byKey.get(key);
+    if (item) item.qty += qty;
+    else byKey.set(key, { product, category: String(header.category || '').trim(), uom, qty });
+  }
+  return [...byKey.values()].filter((item) => item.qty !== 0).sort(byProductName);
+}
+
+export async function hubStockPayload(companyOdooId?: string) {
+  if (odooConfigured()) {
+    try {
+      return { source: 'odoo', items: await odooStock(companyOdooId) };
+    } catch (error) {
+      console.warn('hub-stock: leitura do Odoo falhou, usando estoque salvo:', error instanceof Error ? error.message : error);
+    }
+  }
+  return { source: 'local', items: localStock(await loadProducts(companyOdooId)) };
 }
 
 type Units = {
@@ -346,14 +422,14 @@ export async function hubDashboardPayload(input: {
   companyOdooId?: string;
 }) {
   const { year, month, companyOdooId } = input;
-  const [purchases, productions, sales, productUoms, uoms] = await Promise.all([
+  const [purchases, productions, sales, products, uoms] = await Promise.all([
     loadKind('purchase', companyOdooId),
     loadKind('production', companyOdooId),
     loadKind('sale', companyOdooId),
-    productUomByName(companyOdooId),
+    loadProducts(companyOdooId),
     listUomInfos(),
   ]);
-  const units: Units = { uoms, productUoms, kgPerBag: toKg(1, 'Bag', uoms) || 0 };
+  const units: Units = { uoms, productUoms: productUomByName(products), kgPerBag: toKg(1, 'Bag', uoms) || 0 };
   return {
     year,
     month,
@@ -383,21 +459,36 @@ export function registerHubDashboardRoutes(): void {
       return;
     }
 
-    // ADM + Reciclarenda (id padrão): todas as empresas.
-    // ADM + outra empresa: filtra. Gestor: só a empresa da conta.
-    const fromQuery = String(ctx.query.get('companyId') || '').trim();
-    let companyOdooId: string | undefined;
-    if (isAdm(user)) {
-      const activeId = fromQuery || getActiveCompanyId();
-      companyOdooId = activeId === DEFAULT_COMPANY_ODOO_ID ? undefined : activeId;
-    } else {
-      companyOdooId = String(user.companyOdooId || '').trim() || getActiveCompanyId();
-    }
     try {
-      json(ctx.res, 200, await hubDashboardPayload({ year, month, companyOdooId }));
+      json(ctx.res, 200, await hubDashboardPayload({ year, month, companyOdooId: companyScope(ctx, user) }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Falha ao montar dashboard';
       json(ctx.res, 500, { error: message });
     }
   });
+
+  route('GET', '/api/hub/stock', async (ctx: Ctx) => {
+    const user = await requireAuth(ctx);
+    if (!user) return;
+    try {
+      json(ctx.res, 200, await hubStockPayload(companyScope(ctx, user)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao carregar estoque';
+      json(ctx.res, 500, { error: message });
+    }
+  });
+}
+
+type AuthUser = NonNullable<Awaited<ReturnType<typeof requireAuth>>>;
+
+/**
+ * ADM + Reciclarenda (id padrão): todas as empresas.
+ * ADM + outra empresa: filtra. Gestor: só a empresa da conta.
+ */
+function companyScope(ctx: Ctx, user: AuthUser): string | undefined {
+  if (isAdm(user)) {
+    const activeId = String(ctx.query.get('companyId') || '').trim() || getActiveCompanyId();
+    return activeId === DEFAULT_COMPANY_ODOO_ID ? undefined : activeId;
+  }
+  return String(user.companyOdooId || '').trim() || getActiveCompanyId();
 }

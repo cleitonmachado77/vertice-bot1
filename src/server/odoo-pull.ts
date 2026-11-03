@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getSetting, one, run, setSetting, withTransaction } from './db.js';
+import { getSetting, many, one, run, setSetting, withTransaction } from './db.js';
 import {
   DEFAULT_COMPANY_ODOO_ID,
   resolveCompanyOdooId,
@@ -52,21 +52,9 @@ function withSince(baseDomain: unknown[], sinceIso: string | null | undefined): 
   if (!Number.isFinite(sinceMs)) return baseDomain;
   const odooDt = toOdooDateTime(sinceMs);
   if (!odooDt) return baseDomain;
-  const leaf: unknown[] = ['write_date', '>=', odooDt];
-  if (!baseDomain.length) return [leaf];
-  // Domain polish: AND do bloco atual com write_date
-  if (baseDomain[0] === '&' || baseDomain[0] === '|' || baseDomain[0] === '!') {
-    return ['&', baseDomain, leaf];
-  }
-  if (baseDomain.length === 1 && Array.isArray(baseDomain[0])) {
-    return ['&', baseDomain[0], leaf];
-  }
-  // Vários leaves implícitos (AND) → agrupa e adiciona write_date
-  const grouped = baseDomain.reduce<unknown>((acc, item, index) => {
-    if (index === 0) return item;
-    return ['&', acc, item];
-  }, null);
-  return ['&', grouped, leaf];
+  // Domínio do Odoo é plano (notação polonesa): expressões no topo já são unidas por AND.
+  // Aninhar o domínio base como lista faz o Odoo recusar a busca (“unhashable type: 'list'”).
+  return [...baseDomain, ['write_date', '>=', odooDt]];
 }
 
 function nameKey(value: string): string {
@@ -357,77 +345,62 @@ async function upsertDoc(input: {
   return 'created';
 }
 
-async function pullStockQtyByTemplate(sinceIso?: string | null): Promise<Map<string, number>> {
-  const baseDomain: unknown[] = [
-    '&',
-    ['quantity', '!=', 0],
-    ['location_id.usage', '=', 'internal'],
-  ];
-
-  // Incremental: só quants alterados → depois recalcula o total desses produtos
-  // (somar só o delta subcontaria o estoque).
-  let quants = await odooSearchRead<{
-    product_id: unknown;
-    quantity: number;
-    company_id: unknown;
-  }>('stock.quant', withSince(baseDomain, sinceIso), ['product_id', 'quantity', 'company_id'], {
-    limit: 5000,
-  }).catch(() => []);
-
-  if (!quants.length) return new Map();
-
-  if (sinceIso) {
-    const touchedVariantIds = [
-      ...new Set(quants.map((row) => m2oId(row.product_id)).filter((id) => id > 0)),
-    ];
-    if (!touchedVariantIds.length) return new Map();
-    quants = await odooSearchRead<{
-      product_id: unknown;
-      quantity: number;
-      company_id: unknown;
-    }>(
-      'stock.quant',
-      [
-        '&',
-        '&',
-        ['quantity', '!=', 0],
-        ['location_id.usage', '=', 'internal'],
-        ['product_id', 'in', touchedVariantIds],
-      ],
-      ['product_id', 'quantity', 'company_id'],
-      { limit: 5000 },
-    ).catch(() => []);
-    if (!quants.length) return new Map();
-  }
-
-  const variantIds = [
-    ...new Set(quants.map((row) => m2oId(row.product_id)).filter((id) => id > 0)),
-  ];
+/**
+ * Saldo atual dos locais internos, por “empresa do produto:template” (a mesma chave dos
+ * documentos de produto; compartilhado = empresa padrão, somando o saldo de todas).
+ * Sempre completo, também no incremental: só vêm quants com saldo (é leve) e um quant que
+ * zerou some do filtro — por delta, o saldo antigo ficaria para sempre no Vertice.
+ */
+async function pullStockQtyByTemplate(): Promise<Map<string, number>> {
+  const quants = await odooSearchRead<{ product_id: unknown; quantity: number }>(
+    'stock.quant',
+    [['quantity', '!=', 0], ['location_id.usage', '=', 'internal']],
+    ['product_id', 'quantity'],
+    { limit: 20000 },
+  );
+  const variantIds = [...new Set(quants.map((row) => m2oId(row.product_id)).filter((id) => id > 0))];
   const variants = variantIds.length
-    ? await odooSearchRead<{ id: number; product_tmpl_id: unknown }>(
+    ? await odooSearchRead<{ id: number; product_tmpl_id: unknown; company_id: unknown }>(
         'product.product',
         [['id', 'in', variantIds]],
-        ['id', 'product_tmpl_id'],
-        { limit: 5000 },
+        ['id', 'product_tmpl_id', 'company_id'],
+        { limit: 20000 },
       )
     : [];
-  const variantToTmpl = new Map(variants.map((row) => [row.id, m2oId(row.product_tmpl_id)]));
+  const keyByVariant = new Map(
+    variants.map((row) => [row.id, `${resolveCompanyOdooId(row.company_id)}:${m2oId(row.product_tmpl_id)}`]),
+  );
   const qty = new Map<string, number>();
   for (const row of quants) {
-    const variantId = m2oId(row.product_id);
-    const tmplId = variantToTmpl.get(variantId);
-    if (!tmplId) continue;
-    const companyId = resolveCompanyOdooId(row.company_id);
-    const key = `${companyId}:${tmplId}`;
+    const key = keyByVariant.get(m2oId(row.product_id));
+    if (!key) continue;
     qty.set(key, (qty.get(key) || 0) + Number(row.quantity || 0));
   }
   return qty;
 }
 
-async function pullProducts(
-  stockMap: Map<string, number>,
-  sinceIso?: string | null,
-): Promise<{ products: number; stockUpdated: number }> {
+/** Grava o saldo em todos os produtos locais (sem saldo no Odoo = 0); só atualiza o que mudou. */
+async function applyStockToProductDocs(stockMap: Map<string, number>): Promise<number> {
+  const rows = await many<{ id: string; company_odoo_id: string; header_json: string }>(
+    `SELECT id, company_odoo_id, header_json FROM forms_documents WHERE kind = 'product'`,
+  );
+  let updated = 0;
+  for (const row of rows) {
+    const header = parseHeader(row.header_json);
+    const odooId = String(header.odoo_id || '').trim();
+    if (!odooId) continue;
+    const qty = stockMap.get(`${row.company_odoo_id || DEFAULT_COMPANY_ODOO_ID}:${odooId}`);
+    if (qty == null && header.track_inventory === 'False' && !header.qty_on_hand) continue;
+    const next = fromOdooNumber(qty ?? 0);
+    if (header.qty_on_hand === next) continue;
+    header.qty_on_hand = next;
+    await run(`UPDATE forms_documents SET header_json = $2 WHERE id = $1`, [row.id, JSON.stringify(header)]);
+    updated += 1;
+  }
+  return updated;
+}
+
+async function pullProducts(sinceIso?: string | null): Promise<number> {
   const rows = await odooSearchRead<{
     id: number;
     name: string;
@@ -459,14 +432,13 @@ async function pullProducts(
   );
 
   let products = 0;
-  let stockUpdated = 0;
   for (const row of rows) {
     const name = String(row.name || '').trim();
     if (!name) continue;
     const companyId = resolveCompanyOdooId(row.company_id);
-    const stockKey = `${companyId}:${row.id}`;
-    const qty = stockMap.get(stockKey);
     const header = emptyHeader('product');
+    // Saldo vem de applyStockToProductDocs; vazio aqui apagaria o valor já gravado.
+    delete header.qty_on_hand;
     header.name = name;
     header.sales_price = fromOdooNumber(row.list_price);
     header.cost = fromOdooNumber(row.standard_price);
@@ -478,10 +450,6 @@ async function pullProducts(
     header.odoo_id = String(row.id);
     header.odoo_synced_at = new Date().toISOString();
     header.company_odoo_id = companyId;
-    if (qty != null) {
-      header.qty_on_hand = fromOdooNumber(qty);
-      stockUpdated += 1;
-    }
     await upsertDoc({
       kind: 'product',
       companyId,
@@ -496,7 +464,7 @@ async function pullProducts(
       touchPullStep(`produtos ${products}/${rows.length}`);
     }
   }
-  return { products, stockUpdated };
+  return products;
 }
 
 async function pullPartners(sinceIso?: string | null): Promise<number> {
@@ -967,49 +935,6 @@ function emptyPull(at = new Date().toISOString()): OdooPullResult {
   };
 }
 
-/**
- * No incremental, estoque pode mudar sem touch em product.template.
- * Atualiza qty_on_hand dos produtos locais já conhecidos.
- */
-async function applyStockQtyToExistingDocs(stockMap: Map<string, number>): Promise<number> {
-  if (!stockMap.size) return 0;
-  let updated = 0;
-  for (const [key, qty] of stockMap) {
-    const sep = key.indexOf(':');
-    if (sep <= 0) continue;
-    const companyId = key.slice(0, sep);
-    const odooId = key.slice(sep + 1);
-    if (!odooId) continue;
-    const row = await one<{ id: string; header_json: string }>(
-      `SELECT id, header_json FROM forms_documents
-       WHERE kind = 'product'
-         AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $1
-         AND header_json::jsonb->>'odoo_id' = $2
-       LIMIT 1`,
-      [companyId || DEFAULT_COMPANY_ODOO_ID, odooId],
-    ).catch(() =>
-      one<{ id: string; header_json: string }>(
-        `SELECT id, header_json FROM forms_documents
-         WHERE kind = 'product'
-           AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $1
-           AND header_json LIKE $2
-         LIMIT 1`,
-        [companyId || DEFAULT_COMPANY_ODOO_ID, `%"odoo_id":"${odooId}"%`],
-      ),
-    );
-    if (!row) continue;
-    const header = parseHeader(row.header_json);
-    if (String(header.qty_on_hand || '') === fromOdooNumber(qty)) continue;
-    header.qty_on_hand = fromOdooNumber(qty);
-    await run(`UPDATE forms_documents SET header_json = $2 WHERE id = $1`, [
-      row.id,
-      JSON.stringify(header),
-    ]);
-    updated += 1;
-  }
-  return updated;
-}
-
 export type OdooPullProgress = {
   running: boolean;
   step: string;
@@ -1154,21 +1079,24 @@ export async function pullFromOdoo(
         }
       }
 
-      pushProgress(mode === 'incremental' ? 'estoque (delta)' : 'estoque', started);
-      const stockMap = await pullStockQtyByTemplate(sinceIso);
-      pushProgress(`estoque ok (${stockMap.size} itens)`, started);
-
       pushProgress(
         mode === 'incremental' ? 'produtos (delta)' : 'produtos (pode demorar)',
         started,
       );
-      const { products, stockUpdated: stockFromProducts } = await pullProducts(stockMap, sinceIso);
-      let stockUpdated = stockFromProducts;
-      if (mode === 'incremental' && stockMap.size) {
-        const stockOnly = await applyStockQtyToExistingDocs(stockMap);
-        stockUpdated += stockOnly;
-      }
+      const products = await pullProducts(sinceIso);
       pushProgress(`produtos ok (${products})`, started);
+
+      pushProgress('estoque', started);
+      let stockUpdated = 0;
+      try {
+        const stockMap = await pullStockQtyByTemplate();
+        stockUpdated = await applyStockToProductDocs(stockMap);
+        pushProgress(`estoque ok (${stockMap.size} com saldo · ${stockUpdated} atualizados)`, started);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('odoo-pull: estoque falhou (seguindo):', message);
+        pushProgress(`estoque falhou · ${message}`, started);
+      }
 
       pushProgress(mode === 'incremental' ? 'parceiros (delta)' : 'parceiros', started);
       const partners = await pullPartners(sinceIso);

@@ -90,6 +90,7 @@ const SECTIONS = [
     color: '#2b5aa8',
     icon: 'money',
     href: '#/forms/vendas',
+    wide: true,
   },
 ];
 
@@ -190,7 +191,7 @@ export function renderDashboardShell() {
 
 function sectionHtml(def, section) {
   return `
-    <article class="card hub-dash-section tone-${def.tone}" data-section="${escapeHtml(def.id)}">
+    <article class="card hub-dash-section tone-${def.tone}${def.wide ? ' hub-dash-wide' : ''}" data-section="${escapeHtml(def.id)}">
       <div class="hub-dash-section-head">
         <h3>${escapeHtml(def.title)}</h3>
         <p class="hub-dash-total">${escapeHtml(def.totalLabel)} <strong>${escapeHtml(formatValue(section?.unit, section?.total))}</strong></p>
@@ -202,12 +203,84 @@ function sectionHtml(def, section) {
     </article>`;
 }
 
+function stockMessageRow(text) {
+  return `<tr><td colspan="3" class="hub-stock-empty">${escapeHtml(text)}</td></tr>`;
+}
+
+function stockRowsHtml(items) {
+  if (!items.length) return stockMessageRow('Nenhum produto com saldo em estoque.');
+  return items
+    .map(
+      (item) => `
+        <tr data-stock-name="${escapeHtml(String(item.product || '').toLowerCase())}">
+          <td>${escapeHtml(item.product)}</td>
+          <td class="muted">${escapeHtml(item.category || '—')}</td>
+          <td class="hub-stock-qty${item.qty < 0 ? ' is-negative' : ''}">${escapeHtml(formatQty(item.qty))} <span>${escapeHtml(item.uom || '')}</span></td>
+        </tr>`,
+    )
+    .join('');
+}
+
+function stockHtml() {
+  return `
+    <article class="card hub-dash-section hub-dash-wide hub-stock tone-green" data-section="stock">
+      <div class="hub-dash-section-head">
+        <h3>Estoque atual</h3>
+        <input class="hub-stock-search" id="hub-stock-search" type="search" placeholder="Buscar produto…" aria-label="Buscar produto no estoque" disabled />
+      </div>
+      <p class="hub-dash-chart-title" id="hub-stock-count">Consultando o Odoo…</p>
+      <div class="hub-stock-wrap">
+        <table class="hub-stock-table">
+          <thead><tr><th>Produto</th><th>Categoria</th><th>Quantidade</th></tr></thead>
+          <tbody id="hub-stock-rows">${stockMessageRow('Carregando estoque…')}</tbody>
+        </table>
+      </div>
+    </article>`;
+}
+
+function stockCountText(total, shown, source) {
+  if (shown !== total) return `${shown} de ${total} produto(s) com saldo`;
+  const origin = source === 'odoo' ? 'saldo atual no Odoo' : 'última sincronização com o Odoo';
+  return `${total} produto(s) com saldo · ${origin}`;
+}
+
+async function loadStock(body) {
+  const rows = body.querySelector('#hub-stock-rows');
+  const count = body.querySelector('#hub-stock-count');
+  const input = body.querySelector('#hub-stock-search');
+  let data;
+  try {
+    data = await api('/api/hub/stock');
+  } catch (error) {
+    if (rows) rows.innerHTML = stockMessageRow(error.message || 'Falha ao carregar estoque');
+    if (count) count.textContent = 'Estoque indisponível';
+    return;
+  }
+  if (!rows?.isConnected) return;
+  const items = data.items || [];
+  rows.innerHTML = stockRowsHtml(items);
+  if (count) count.textContent = stockCountText(items.length, items.length, data.source);
+  if (!input) return;
+  input.disabled = false;
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    let shown = 0;
+    rows.querySelectorAll('tr[data-stock-name]').forEach((row) => {
+      const match = !q || row.dataset.stockName.includes(q);
+      row.hidden = !match;
+      if (match) shown += 1;
+    });
+    if (count) count.textContent = stockCountText(items.length, shown, data.source);
+  });
+}
+
 function paintBody(data) {
   const stats = document.querySelector('#hub-stats');
   if (stats) stats.innerHTML = statsCards(data);
   const body = document.querySelector('#hub-dashboard-body');
   if (!body) return;
-  body.innerHTML = SECTIONS.map((def) => sectionHtml(def, data[def.id])).join('');
+  body.innerHTML = SECTIONS.map((def) => sectionHtml(def, data[def.id])).join('') + stockHtml();
+  loadStock(body).catch(() => {});
 }
 
 function chartDefaults(Chart) {

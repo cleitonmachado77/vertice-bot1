@@ -154,7 +154,7 @@
 }
 
 .hub-dash-section { padding: 18px 20px 16px; }
-.hub-dash-section:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.hub-dash-wide { grid-column: 1 / -1; }
 .hub-dash-section-head {
   display: flex;
   flex-wrap: wrap;
@@ -197,6 +197,54 @@
   position: relative;
   height: 220px;
 }
+
+/* Estoque atual */
+.hub-stock-search {
+  width: min(260px, 100%);
+  height: 34px;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--input-bg);
+  font-size: 0.82rem;
+}
+.hub-stock-wrap {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+}
+.hub-stock-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.hub-stock-table th,
+.hub-stock-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line-soft);
+}
+.hub-stock-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.hub-stock-table th:last-child,
+.hub-stock-table td.hub-stock-qty { text-align: right; white-space: nowrap; }
+.hub-stock-table tbody tr:last-child td { border-bottom: 0; }
+.hub-stock-table tbody tr:hover { background: var(--surface-2); }
+.hub-stock-qty { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hub-stock-qty span { color: var(--muted); font-weight: 500; }
+.hub-stock-qty.is-negative { color: var(--danger); }
+.hub-stock-empty { text-align: center; color: var(--muted); padding: 24px; }
 
 @media (max-width: 1180px) {
   .hub-stats { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
