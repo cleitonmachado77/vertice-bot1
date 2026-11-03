@@ -11,7 +11,7 @@ export const modules = [
   },
   {
     id: 'forms',
-    name: 'Vertice Forms',
+    name: 'Vértice RSU',
     description: 'Compras, inventário, fabricação e vendas integrados ao Odoo',
     href: '#/forms/compras',
     logo: '/logo-vertice-forms.png',

@@ -21,8 +21,12 @@
   border: 1px solid var(--sidebar-border);
   border-radius: 24px;
   box-shadow: var(--shadow);
-  transition: width 0.3s ease-in-out, padding 0.3s ease-in-out, transform 0.3s ease-in-out;
+  transition:
+    width 0.42s var(--ease-spring),
+    padding 0.42s var(--ease-spring),
+    transform 0.42s var(--ease-spring);
   z-index: 40;
+  view-transition-name: sidebar;
 }
 
 .sidebar-toggle {
@@ -105,6 +109,7 @@
 }
 
 .side-nav {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -113,6 +118,23 @@
   gap: 4px;
   padding: 2px 0;
 }
+.side-nav-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 999px;
+  background: var(--sidebar-accent);
+  box-shadow: 0 6px 16px rgba(248, 136, 40, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.5s var(--ease-spring),
+    width 0.5s var(--ease-spring),
+    height 0.5s var(--ease-spring),
+    opacity 0.2s var(--ease-apple);
+}
+.side-nav-indicator.no-anim { transition: none; }
+.side-nav.has-indicator a.active { background: transparent; }
 .side-nav-label {
   margin: 12px 0 2px;
   padding: 0 12px;
@@ -136,8 +158,12 @@
   font-size: 0.875rem;
   font-weight: 500;
   white-space: nowrap;
-  transition: background 0.2s ease, color 0.2s ease;
+  transition:
+    background 0.2s var(--ease-apple),
+    color 0.3s var(--ease-apple),
+    transform 0.2s var(--ease-apple);
 }
+.side-nav a:active { transform: scale(0.97); }
 .side-nav a span { overflow: hidden; text-overflow: ellipsis; }
 .side-nav a:hover { background: var(--nav-hover-bg); color: var(--sidebar-fg); }
 .side-nav a.active {
@@ -292,6 +318,7 @@
   gap: 12px;
   padding: 10px max(24px, calc((100% - 1180px) / 2)) 6px;
   background: transparent;
+  view-transition-name: topbar;
 }
 .topbar-title {
   display: flex;
@@ -342,7 +369,11 @@
   padding: 10px max(24px, calc((100% - 1180px) / 2)) 48px;
 }
 .main > .view-pane {
-  animation: rise 0.22s ease both;
+  animation: page-in var(--dur-page) var(--ease-spring) both;
+}
+/* Atraso evita piscar o "Carregando…" em respostas rápidas */
+.main > .view-loading {
+  animation: page-fade 0.3s var(--ease-apple) 0.14s both;
 }
 
 /* ---------- Login ---------- */

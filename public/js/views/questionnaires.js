@@ -249,7 +249,7 @@ function activeCard(row) {
         </div>
         <span class="pill ${row.active || row.pendingSync ? '' : 'off'}">${escapeHtml(status)}</span>
       </div>
-      <p class="muted q-list-preview">Origem: Padrão no Vertice Forms (${escapeHtml(row.kindLabel)}).</p>
+      <p class="muted q-list-preview">Origem: Padrão no Vértice RSU (${escapeHtml(row.kindLabel)}).</p>
       <div class="row">
         <a class="btn-ghost" href="${escapeHtml(row.kindHref)}">Ver no Forms</a>
       </div>

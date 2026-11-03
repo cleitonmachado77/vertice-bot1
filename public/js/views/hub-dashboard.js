@@ -31,7 +31,67 @@ const PALETTE = [
   '#909090',
 ];
 
-const SECTION_TONES = { receipts: 'orange', production: 'teal', sales: 'blue' };
+/** Fluxo do RSU: recebimento → separação → prensagem → entrega → venda. */
+const SECTIONS = [
+  {
+    id: 'receipts',
+    title: 'Recebimentos',
+    chartTitle: 'KG recebidos por dia',
+    totalLabel: 'Total recebido',
+    statLabel: 'Recebido no período',
+    tone: 'orange',
+    color: '#f88828',
+    icon: 'truck',
+    href: '#/forms/compras',
+  },
+  {
+    id: 'separation',
+    title: 'Separação',
+    chartTitle: 'Bags produzidas por dia, por produto',
+    totalLabel: 'Total separado',
+    statLabel: 'Bags separadas',
+    tone: 'teal',
+    color: '#1aa897',
+    icon: 'box',
+    href: '#/forms/fabricacao',
+    stacked: true,
+  },
+  {
+    id: 'pressing',
+    title: 'Prensagem',
+    chartTitle: 'Fardos produzidos por dia (kg), por produto',
+    totalLabel: 'Total prensado',
+    statLabel: 'Fardos prensados',
+    tone: 'violet',
+    color: '#7c5cd6',
+    icon: 'factory',
+    href: '#/forms/fabricacao',
+    stacked: true,
+  },
+  {
+    id: 'deliveries',
+    title: 'Entrega',
+    chartTitle: 'Fardos entregues por dia (kg), por produto',
+    totalLabel: 'Total entregue',
+    statLabel: 'Fardos entregues',
+    tone: 'amber',
+    color: '#e07b20',
+    icon: 'cart',
+    href: '#/forms/vendas',
+    stacked: true,
+  },
+  {
+    id: 'sales',
+    title: 'Venda',
+    chartTitle: 'Valor vendido por dia',
+    totalLabel: 'Total vendido',
+    statLabel: 'Vendido no período',
+    tone: 'blue',
+    color: '#2b5aa8',
+    icon: 'money',
+    href: '#/forms/vendas',
+  },
+];
 
 let chartReady = null;
 const chartInstances = new Map();
@@ -40,29 +100,8 @@ async function loadChartJs() {
   if (chartReady) return chartReady;
   chartReady = (async () => {
     const mod = await import('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/+esm');
-    const {
-      Chart,
-      BarController,
-      BarElement,
-      CategoryScale,
-      LinearScale,
-      DoughnutController,
-      ArcElement,
-      Legend,
-      Tooltip,
-      Filler,
-    } = mod;
-    Chart.register(
-      BarController,
-      BarElement,
-      CategoryScale,
-      LinearScale,
-      DoughnutController,
-      ArcElement,
-      Legend,
-      Tooltip,
-      Filler,
-    );
+    const { Chart, BarController, BarElement, CategoryScale, LinearScale, Legend, Tooltip } = mod;
+    Chart.register(BarController, BarElement, CategoryScale, LinearScale, Legend, Tooltip);
     return { Chart };
   })();
   return chartReady;
@@ -78,6 +117,14 @@ function formatMoney(value) {
     currency: 'BRL',
     maximumFractionDigits: 2,
   });
+}
+
+/** Valor com a unidade da seção: R$, “12 bags”, “1.200 kg”. */
+function formatValue(unit, value) {
+  if (unit === 'R$') return formatMoney(value);
+  const qty = formatQty(value);
+  if (unit === 'Bag') return `${qty} ${Number(value) === 1 ? 'bag' : 'bags'}`;
+  return unit ? `${qty} ${unit}` : qty;
 }
 
 function destroyCharts() {
@@ -121,67 +168,38 @@ export function renderPeriodPicker(period) {
 
 function statsCards(data = null) {
   const loading = !data;
-  const receipts = data?.receipts || {};
-  const unit = String(receipts.unit || '').trim();
-  const receiptsValue = receipts.totalLabel || `${formatQty(receipts.total)}${unit ? ` ${unit}` : ''}`;
-  const salesValue = formatMoney(data?.sales?.total);
-  return [
-    statCard({ label: 'Recebido no período', value: receiptsValue, tone: 'orange', icon: 'truck', href: '#/forms/compras', title: receiptsValue, loading }),
-    statCard({ label: 'Produzido no período', value: formatQty(data?.production?.total), tone: 'teal', icon: 'factory', href: '#/forms/fabricacao', loading }),
-    statCard({ label: 'Vendido no período', value: salesValue, tone: 'blue', icon: 'money', href: '#/forms/vendas', title: salesValue, loading }),
-    statCard({ label: 'Catadores no período', value: (receipts.breakdown || []).length, tone: 'green', icon: 'contacts', href: '#/forms/cadastros/fornecedores', loading }),
-  ].join('');
+  return SECTIONS.map((def) => {
+    const section = data?.[def.id] || {};
+    const value = formatValue(section.unit, section.total);
+    return statCard({ label: def.statLabel, value, tone: def.tone, icon: def.icon, href: def.href, title: value, loading });
+  }).join('');
 }
 
 export function renderDashboardStats() {
-  return `<section class="stat-row" id="hub-stats" aria-label="Resumo do período">${statsCards()}</section>`;
+  return `<section class="stat-row hub-stats" id="hub-stats" aria-label="Resumo do período">${statsCards()}</section>`;
 }
 
 export function renderDashboardShell() {
   return `
-    <section class="card hub-dashboard" id="hub-dashboard" aria-label="Indicadores">
+    <section class="hub-dashboard" id="hub-dashboard" aria-label="Indicadores">
       <div class="hub-dashboard-body" id="hub-dashboard-body">
-        <p class="muted hub-dashboard-loading">Carregando indicadores…</p>
+        <p class="card muted hub-dashboard-loading">Carregando indicadores…</p>
       </div>
     </section>`;
 }
 
-function sectionHtml(id, title, totalLabel, totalValue, barTitle, pieTitle, barMeta = '') {
+function sectionHtml(def, section) {
   return `
-    <article class="hub-dash-section tone-${SECTION_TONES[id] || 'orange'}" data-section="${escapeHtml(id)}">
+    <article class="card hub-dash-section tone-${def.tone}" data-section="${escapeHtml(def.id)}">
       <div class="hub-dash-section-head">
-        <h3>${escapeHtml(title)}</h3>
-        <p class="hub-dash-total">${escapeHtml(totalLabel)} <strong>${escapeHtml(totalValue)}</strong></p>
+        <h3>${escapeHtml(def.title)}</h3>
+        <p class="hub-dash-total">${escapeHtml(def.totalLabel)} <strong>${escapeHtml(formatValue(section?.unit, section?.total))}</strong></p>
       </div>
-      <div class="hub-dash-charts">
-        <div class="hub-dash-chart-card">
-          <div class="hub-dash-chart-card-head">
-            <p class="hub-dash-chart-title">${escapeHtml(barTitle)}</p>
-            ${
-              barMeta
-                ? `<p class="hub-dash-chart-meta">${barMeta}</p>`
-                : ''
-            }
-          </div>
-          <div class="hub-dash-canvas-wrap">
-            <canvas id="chart-${escapeHtml(id)}-bar"></canvas>
-          </div>
-        </div>
-        <div class="hub-dash-chart-card">
-          <p class="hub-dash-chart-title">${escapeHtml(pieTitle)}</p>
-          <div class="hub-dash-canvas-wrap hub-dash-canvas-wrap--pie">
-            <canvas id="chart-${escapeHtml(id)}-pie"></canvas>
-          </div>
-        </div>
+      <p class="hub-dash-chart-title">${escapeHtml(def.chartTitle)}</p>
+      <div class="hub-dash-canvas-wrap">
+        <canvas id="chart-${escapeHtml(def.id)}"></canvas>
       </div>
     </article>`;
-}
-
-function receiptsBarMeta(section) {
-  const unit = String(section?.unit || '').trim();
-  const totalText = section?.totalLabel || `${formatQty(section?.total)}${unit ? ` ${unit}` : ''}`;
-  const unitText = unit ? escapeHtml(unit) : '—';
-  return `Unidade: <strong>${unitText}</strong> · Total: <strong>${escapeHtml(totalText)}</strong>`;
 }
 
 function paintBody(data) {
@@ -189,35 +207,7 @@ function paintBody(data) {
   if (stats) stats.innerHTML = statsCards(data);
   const body = document.querySelector('#hub-dashboard-body');
   if (!body) return;
-
-  const receiptsTotal = data.receipts?.totalLabel || formatQty(data.receipts?.total);
-
-  body.innerHTML = `
-    ${sectionHtml(
-      'receipts',
-      'Recebimentos',
-      'Total recebido',
-      receiptsTotal,
-      'Recebimentos por dia',
-      'Total por catador',
-      receiptsBarMeta(data.receipts),
-    )}
-    ${sectionHtml(
-      'production',
-      'Produção',
-      'Total produzido',
-      formatQty(data.production?.total),
-      'Produção por dia / produto',
-      'Total por produto',
-    )}
-    ${sectionHtml(
-      'sales',
-      'Vendas',
-      'Total vendido',
-      formatMoney(data.sales?.total),
-      'Vendas por dia / produto',
-      'Total vendido (R$) por produto',
-    )}`;
+  body.innerHTML = SECTIONS.map((def) => sectionHtml(def, data[def.id])).join('');
 }
 
 function chartDefaults(Chart) {
@@ -229,93 +219,14 @@ function chartDefaults(Chart) {
   Chart.defaults.plugins.tooltip.cornerRadius = 10;
 }
 
-function makeBar(Chart, canvas, labels, datasets, isMoney) {
-  if (!canvas) return;
-  const existing = chartInstances.get(canvas.id);
-  if (existing) existing.destroy();
-  const chart = new Chart(canvas, {
-    type: 'bar',
-    data: { labels, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: datasets.length > 1, position: 'bottom', labels: { boxWidth: 10 } },
-        tooltip: {
-          callbacks: {
-            label(ctx) {
-              const value = ctx.parsed.y ?? ctx.parsed;
-              const prefix = ctx.dataset.label ? `${ctx.dataset.label}: ` : '';
-              return prefix + (isMoney ? formatMoney(value) : formatQty(value));
-            },
-          },
-        },
-      },
-      scales: {
-        x: { stacked: datasets.length > 1, grid: { display: false } },
-        y: {
-          stacked: datasets.length > 1,
-          beginAtZero: true,
-          ticks: {
-            callback(value) {
-              return isMoney ? formatMoney(value) : formatQty(value);
-            },
-          },
-        },
-      },
-    },
-  });
-  chartInstances.set(canvas.id, chart);
-}
-
-function makePie(Chart, canvas, labels, values, isMoney) {
-  if (!canvas) return;
-  const existing = chartInstances.get(canvas.id);
-  if (existing) existing.destroy();
-  const hasData = values.some((v) => v > 0);
-  const chart = new Chart(canvas, {
-    type: 'doughnut',
-    data: {
-      labels: hasData ? labels : ['Sem dados'],
-      datasets: [
-        {
-          data: hasData ? values : [1],
-          backgroundColor: hasData ? labels.map((_, i) => PALETTE[i % PALETTE.length]) : ['#ececee'],
-          borderColor: '#ffffff',
-          borderWidth: 2,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'bottom', labels: { boxWidth: 10 } },
-        tooltip: {
-          callbacks: {
-            label(ctx) {
-              if (!hasData) return 'Sem dados no período';
-              const value = ctx.parsed;
-              return `${ctx.label}: ${isMoney ? formatMoney(value) : formatQty(value)}`;
-            },
-          },
-        },
-      },
-    },
-  });
-  chartInstances.set(canvas.id, chart);
-}
-
-function stackedDatasets(section) {
-  const products = section.products?.length
-    ? section.products
-    : [...new Set((section.dailyStacked || []).flatMap((d) => Object.keys(d.byProduct || {})))];
+function datasetsFor(def, section) {
+  const products = def.stacked ? section.products || [] : [];
   if (!products.length) {
     return [
       {
-        label: 'Total',
+        label: def.title,
         data: (section.daily || []).map((d) => d.value),
-        backgroundColor: PALETTE[0],
+        backgroundColor: def.color,
         borderRadius: 4,
       },
     ];
@@ -328,62 +239,56 @@ function stackedDatasets(section) {
   }));
 }
 
+function makeBar(Chart, canvas, def, section) {
+  if (!canvas) return;
+  const existing = chartInstances.get(canvas.id);
+  if (existing) existing.destroy();
+  const datasets = datasetsFor(def, section);
+  const stacked = Boolean(def.stacked && section.products?.length);
+  const unit = section.unit || '';
+  const chart = new Chart(canvas, {
+    type: 'bar',
+    data: { labels: (section.daily || []).map((d) => d.label), datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: stacked, position: 'bottom', labels: { boxWidth: 10 } },
+        tooltip: {
+          callbacks: {
+            title(items) {
+              return items[0] ? `Dia ${items[0].label}` : '';
+            },
+            label(ctx) {
+              return `${ctx.dataset.label}: ${formatValue(unit, ctx.parsed.y)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked, grid: { display: false } },
+        y: {
+          stacked,
+          beginAtZero: true,
+          ticks: {
+            callback(value) {
+              return unit === 'R$' ? formatMoney(value) : formatQty(value);
+            },
+          },
+        },
+      },
+    },
+  });
+  chartInstances.set(canvas.id, chart);
+}
+
 async function paintCharts(data) {
   const { Chart } = await loadChartJs();
   chartDefaults(Chart);
   destroyCharts();
-
-  makeBar(
-    Chart,
-    document.querySelector('#chart-receipts-bar'),
-    (data.receipts?.daily || []).map((d) => d.label),
-    [
-      {
-        label: 'Recebido',
-        data: (data.receipts?.daily || []).map((d) => d.value),
-        backgroundColor: PALETTE[0],
-        borderRadius: 4,
-      },
-    ],
-    false,
-  );
-  makePie(
-    Chart,
-    document.querySelector('#chart-receipts-pie'),
-    (data.receipts?.breakdown || []).map((d) => d.label),
-    (data.receipts?.breakdown || []).map((d) => d.value),
-    false,
-  );
-
-  makeBar(
-    Chart,
-    document.querySelector('#chart-production-bar'),
-    (data.production?.daily || []).map((d) => d.label),
-    stackedDatasets(data.production || {}),
-    false,
-  );
-  makePie(
-    Chart,
-    document.querySelector('#chart-production-pie'),
-    (data.production?.breakdown || []).map((d) => d.label),
-    (data.production?.breakdown || []).map((d) => d.value),
-    false,
-  );
-
-  makeBar(
-    Chart,
-    document.querySelector('#chart-sales-bar'),
-    (data.sales?.daily || []).map((d) => d.label),
-    stackedDatasets(data.sales || {}),
-    true,
-  );
-  makePie(
-    Chart,
-    document.querySelector('#chart-sales-pie'),
-    (data.sales?.breakdown || []).map((d) => d.label),
-    (data.sales?.breakdown || []).map((d) => d.value),
-    true,
-  );
+  for (const def of SECTIONS) {
+    makeBar(Chart, document.querySelector(`#chart-${def.id}`), def, data[def.id] || {});
+  }
 }
 
 let companyChangeHandler = null;
@@ -397,7 +302,7 @@ export async function mountHubDashboard(root) {
     const month = Number(monthEl.value);
     const year = Number(yearEl.value);
     const body = root.querySelector('#hub-dashboard-body');
-    if (body) body.innerHTML = '<p class="muted hub-dashboard-loading">Carregando indicadores…</p>';
+    if (body) body.innerHTML = '<p class="card muted hub-dashboard-loading">Carregando indicadores…</p>';
     const stats = root.querySelector('#hub-stats');
     if (stats) stats.innerHTML = statsCards();
     destroyCharts();
@@ -409,13 +314,13 @@ export async function mountHubDashboard(root) {
       } catch (chartError) {
         console.error('dashboard charts:', chartError);
         const tip = document.createElement('p');
-        tip.className = 'muted';
+        tip.className = 'card muted hub-dashboard-loading';
         tip.textContent = `Gráficos indisponíveis: ${chartError.message || 'erro ao carregar Chart.js'}`;
         body?.appendChild(tip);
       }
     } catch (error) {
       if (body) {
-        body.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Falha ao carregar dashboard')}</p>`;
+        body.innerHTML = `<p class="card muted hub-dashboard-loading">${escapeHtml(error.message || 'Falha ao carregar dashboard')}</p>`;
       }
     }
   };

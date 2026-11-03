@@ -2,6 +2,7 @@ import { many } from './db.js';
 import { json, route, type Ctx } from './http.js';
 import { requireAuth } from './auth.js';
 import { DEFAULT_COMPANY_ODOO_ID, getActiveCompanyId } from './forms-companies.js';
+import { listUomInfos, toKg, type UomInfo } from './forms-uom.js';
 import { isAdm } from './users.js';
 
 type DocRow = {
@@ -17,19 +18,24 @@ type LineRow = {
   line_json: string;
 };
 
+type LoadedDoc = {
+  header: Record<string, string>;
+  status: string;
+  lines: Record<string, string>[];
+  created_at: string;
+};
+
 type SeriesPoint = { label: string; value: number };
 type StackedDay = { day: number; label: string; total: number; byProduct: Record<string, number> };
 
 export type DashboardSection = {
   total: number;
-  /** Unidade principal (ex.: kg). */
-  unit?: string;
-  /** Total formatável com unidade(s), ex.: "1.234 kg". */
-  totalLabel?: string;
+  /** Unidade dos valores (kg, Bag, R$). */
+  unit: string;
   daily: SeriesPoint[];
+  /** Barras empilhadas por produto (vazio = barra única). */
   dailyStacked?: StackedDay[];
   products: string[];
-  breakdown: SeriesPoint[];
 };
 
 function parseJson(raw: string): Record<string, string> {
@@ -87,30 +93,50 @@ function daysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate();
 }
 
-function emptyDaily(year: number, month: number): SeriesPoint[] {
-  const days = daysInMonth(year, month);
-  return Array.from({ length: days }, (_, i) => ({
-    label: String(i + 1).padStart(2, '0'),
-    value: 0,
-  }));
+function dayLabel(day: number): string {
+  return String(day).padStart(2, '0');
 }
 
-function emptyStacked(year: number, month: number): StackedDay[] {
-  const days = daysInMonth(year, month);
-  return Array.from({ length: days }, (_, i) => ({
-    day: i + 1,
-    label: String(i + 1).padStart(2, '0'),
-    total: 0,
-    byProduct: {},
-  }));
+function inPeriod(date: Date | null, year: number, month: number): date is Date {
+  if (!date) return false;
+  return date.getFullYear() === year && date.getMonth() + 1 === month;
 }
 
-function isCancelled(status: string, header: Record<string, string>): boolean {
-  const state = String(header.odoo_state || status || '').toLowerCase();
+function nameKey(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+}
+
+function stateOf(doc: LoadedDoc): string {
+  return String(doc.header.odoo_state || doc.status || 'draft').toLowerCase();
+}
+
+function isCancelled(doc: LoadedDoc): boolean {
+  const state = stateOf(doc);
   return state === 'cancel' || state === 'cancelled' || state === 'canceled';
 }
 
-async function loadKind(kind: 'purchase' | 'sale', companyOdooId?: string) {
+/** Venda confirmada: o Vertice valida a entrega no Odoo junto com a confirmação. */
+function isConfirmedSale(doc: LoadedDoc): boolean {
+  const state = stateOf(doc);
+  return state === 'sale' || state === 'done';
+}
+
+/** Fabricação lançada (não rascunho nem cancelada). */
+function isPostedProduction(doc: LoadedDoc): boolean {
+  const state = stateOf(doc);
+  return state !== 'draft' && !isCancelled(doc);
+}
+
+const isFardo = (product: string) => /fardo/.test(nameKey(product));
+const isBagUnit = (uom: string) => /^bags?$/.test(nameKey(uom));
+const isBagProduct = (product: string) => /\bbags?\b/.test(nameKey(product));
+const isKgUnit = (uom: string) => /^(kg|kgs|quilos?|kilos?)$/.test(nameKey(uom));
+
+async function loadKind(kind: 'purchase' | 'sale' | 'production', companyOdooId?: string): Promise<LoadedDoc[]> {
   const params: unknown[] = [kind];
   let sql = `SELECT id, status, header_json, company_odoo_id, created_at
     FROM forms_documents WHERE kind = $1`;
@@ -119,13 +145,7 @@ async function loadKind(kind: 'purchase' | 'sale', companyOdooId?: string) {
     sql += ` AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`;
   }
   const docs = await many<DocRow>(sql, params);
-  type LoadedDoc = {
-    header: Record<string, string>;
-    status: string;
-    lines: Record<string, string>[];
-    created_at: string;
-  };
-  if (!docs.length) return [] as LoadedDoc[];
+  if (!docs.length) return [];
 
   const ids = docs.map((d) => d.id);
   const lines = await many<LineRow>(
@@ -147,27 +167,6 @@ async function loadKind(kind: 'purchase' | 'sale', companyOdooId?: string) {
   }));
 }
 
-function inPeriod(date: Date | null, year: number, month: number): boolean {
-  if (!date) return false;
-  return date.getFullYear() === year && date.getMonth() + 1 === month;
-}
-
-function topBreakdown(map: Map<string, number>, limit = 12): SeriesPoint[] {
-  return [...map.entries()]
-    .map(([label, value]) => ({ label, value }))
-    .filter((item) => item.value > 0)
-    .sort((a, b) => b.value - a.value)
-    .slice(0, limit);
-}
-
-function nameKey(value: string): string {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '');
-}
-
 async function productUomByName(companyOdooId?: string): Promise<Map<string, string>> {
   const params: unknown[] = ['product'];
   let sql = `SELECT header_json FROM forms_documents WHERE kind = $1`;
@@ -186,113 +185,159 @@ async function productUomByName(companyOdooId?: string): Promise<Map<string, str
   return map;
 }
 
-function formatTotalByUnit(byUom: Map<string, number>): { unit: string; totalLabel: string; total: number } {
-  const entries = [...byUom.entries()]
-    .filter(([, value]) => value > 0)
-    .sort((a, b) => b[1] - a[1]);
-  const total = entries.reduce((sum, [, value]) => sum + value, 0);
-  if (!entries.length) return { unit: '', totalLabel: '0', total: 0 };
-  const unit = entries[0][0];
-  const totalLabel = entries
-    .map(([uom, value]) => {
-      const qty = value.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
-      return uom ? `${qty} ${uom}` : qty;
-    })
-    .join(' · ');
-  return { unit, totalLabel, total };
+type Units = {
+  uoms: UomInfo[];
+  productUoms: Map<string, string>;
+  kgPerBag: number;
+};
+
+/** Unidade da linha; vazia = unidade do produto no cadastro. */
+function lineUom(line: Record<string, string>, units: Units): string {
+  return String(line.uom || '').trim() || units.productUoms.get(nameKey(line.product || '')) || '';
 }
 
-async function buildReceipts(year: number, month: number, companyOdooId?: string): Promise<DashboardSection> {
-  const [docs, uomMap] = await Promise.all([
-    loadKind('purchase', companyOdooId),
-    productUomByName(companyOdooId),
-  ]);
-  const daily = emptyDaily(year, month);
-  const byCatador = new Map<string, number>();
-  const byUom = new Map<string, number>();
-  let total = 0;
+/** Quantidade em kg; unidade vazia conta como kg. Unidades que não convertem (ex.: Unidades) → null. */
+function kgOf(qty: number, uom: string, units: Units): number | null {
+  if (!uom || isKgUnit(uom)) return qty;
+  return toKg(qty, uom, units.uoms);
+}
 
+/** Quantidade em Bags: direto na unidade Bag, ou peso do produto Bag convertido pelo fator do Odoo. */
+function bagsOf(qty: number, uom: string, units: Units): number | null {
+  if (isBagUnit(uom)) return qty;
+  const kg = kgOf(qty, uom, units);
+  return kg != null && units.kgPerBag > 0 ? kg / units.kgPerBag : null;
+}
+
+class DailySeries {
+  private readonly days: StackedDay[];
+  private readonly products = new Set<string>();
+  total = 0;
+
+  constructor(
+    year: number,
+    month: number,
+    private readonly unit: string,
+  ) {
+    this.days = Array.from({ length: daysInMonth(year, month) }, (_, i) => ({
+      day: i + 1,
+      label: dayLabel(i + 1),
+      total: 0,
+      byProduct: {},
+    }));
+  }
+
+  add(date: Date, value: number, product = ''): void {
+    if (!value) return;
+    const slot = this.days[date.getDate() - 1];
+    slot.total += value;
+    if (product) {
+      this.products.add(product);
+      slot.byProduct[product] = (slot.byProduct[product] || 0) + value;
+    }
+    this.total += value;
+  }
+
+  build(stacked: boolean): DashboardSection {
+    return {
+      total: this.total,
+      unit: this.unit,
+      daily: this.days.map((day) => ({ label: day.label, value: day.total })),
+      dailyStacked: stacked ? this.days : undefined,
+      products: stacked ? [...this.products].sort((a, b) => a.localeCompare(b, 'pt-BR')) : [],
+    };
+  }
+}
+
+function buildReceipts(docs: LoadedDoc[], year: number, month: number, units: Units): DashboardSection {
+  const series = new DailySeries(year, month, 'kg');
   for (const doc of docs) {
-    if (isCancelled(doc.status, doc.header)) continue;
+    if (isCancelled(doc)) continue;
     const date =
       parseDocDate(doc.header.order_deadline) ||
       parseDocDate(doc.header.expected_arrival) ||
       parseDocDate(doc.created_at);
-    if (!inPeriod(date, year, month) || !date) continue;
-    const day = date.getDate();
-    const vendor = String(doc.header.vendor || '').trim() || 'Sem catador';
-    let docQty = 0;
+    if (!inPeriod(date, year, month)) continue;
     for (const line of doc.lines) {
-      const qty = parseBrNumber(line.quantity);
-      if (!qty) continue;
-      const productName = String(line.product || '').trim();
-      const uom =
-        String(line.uom || '').trim() ||
-        uomMap.get(nameKey(productName)) ||
-        'kg';
-      docQty += qty;
-      byCatador.set(vendor, (byCatador.get(vendor) || 0) + qty);
-      byUom.set(uom, (byUom.get(uom) || 0) + qty);
+      const kg = kgOf(parseBrNumber(line.quantity), lineUom(line, units), units);
+      if (kg) series.add(date, kg);
     }
-    if (!docQty) continue;
-    daily[day - 1].value += docQty;
-    total += docQty;
   }
-
-  const units = formatTotalByUnit(byUom);
-  return {
-    total: units.total || total,
-    unit: units.unit,
-    totalLabel: units.totalLabel,
-    daily,
-    breakdown: topBreakdown(byCatador),
-    products: [],
-  };
+  return series.build(false);
 }
 
-async function buildSales(year: number, month: number, companyOdooId?: string): Promise<DashboardSection> {
-  const docs = await loadKind('sale', companyOdooId);
-  const dailyStacked = emptyStacked(year, month);
-  const byProduct = new Map<string, number>();
-  const productSet = new Set<string>();
-  let total = 0;
+function productionDate(doc: LoadedDoc): Date | null {
+  return parseDocDate(doc.header.production_date) || parseDocDate(doc.created_at);
+}
 
+/** Separação: linhas geradas em Bag (unidade ou produto “Bag…”), contadas em bags. */
+function buildSeparation(docs: LoadedDoc[], year: number, month: number, units: Units): DashboardSection {
+  const series = new DailySeries(year, month, 'Bag');
   for (const doc of docs) {
-    if (isCancelled(doc.status, doc.header)) continue;
-    const date = parseDocDate(doc.header.order_date) || parseDocDate(doc.created_at);
-    if (!inPeriod(date, year, month) || !date) continue;
-    const day = date.getDate();
+    if (!isPostedProduction(doc)) continue;
+    const date = productionDate(doc);
+    if (!inPeriod(date, year, month)) continue;
     for (const line of doc.lines) {
-      const product = String(line.product || '').trim() || 'Sem produto';
-      const qty = parseBrNumber(line.quantity);
-      const price = parseBrNumber(line.unit_price);
-      const amount = qty * price;
-      if (!amount) continue;
-      productSet.add(product);
-      dailyStacked[day - 1].byProduct[product] = (dailyStacked[day - 1].byProduct[product] || 0) + amount;
-      dailyStacked[day - 1].total += amount;
-      byProduct.set(product, (byProduct.get(product) || 0) + amount);
-      total += amount;
+      const product = String(line.product || '').trim();
+      const uom = lineUom(line, units);
+      if (isFardo(product) || !(isBagUnit(uom) || isBagProduct(product))) continue;
+      const bags = bagsOf(parseBrNumber(line.quantity), uom, units);
+      if (bags) series.add(date, bags, product || 'Bag');
     }
   }
-
-  const products = [...productSet].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  const daily = dailyStacked.map((item) => ({ label: item.label, value: item.total }));
-  return { total, daily, dailyStacked, products, breakdown: topBreakdown(byProduct) };
+  return series.build(true);
 }
 
-/**
- * Produção ainda não tem documento dedicado no Vertice.
- * Mantém o mesmo contrato da UI; retorna série vazia até existir a fonte.
- */
-async function buildProduction(year: number, month: number, _companyOdooId?: string): Promise<DashboardSection> {
-  return {
-    total: 0,
-    daily: emptyDaily(year, month),
-    dailyStacked: emptyStacked(year, month),
-    products: [],
-    breakdown: [],
-  };
+/** Prensagem: produtos FARDO gerados na Fabricação, em kg. */
+function buildPressing(docs: LoadedDoc[], year: number, month: number, units: Units): DashboardSection {
+  const series = new DailySeries(year, month, 'kg');
+  for (const doc of docs) {
+    if (!isPostedProduction(doc)) continue;
+    const date = productionDate(doc);
+    if (!inPeriod(date, year, month)) continue;
+    for (const line of doc.lines) {
+      const product = String(line.product || '').trim();
+      if (!isFardo(product)) continue;
+      const kg = kgOf(parseBrNumber(line.quantity), lineUom(line, units), units);
+      if (kg) series.add(date, kg, product);
+    }
+  }
+  return series.build(true);
+}
+
+function saleDate(doc: LoadedDoc): Date | null {
+  return parseDocDate(doc.header.order_date) || parseDocDate(doc.created_at);
+}
+
+/** Entrega: produtos FARDO em vendas confirmadas, em kg. */
+function buildDeliveries(docs: LoadedDoc[], year: number, month: number, units: Units): DashboardSection {
+  const series = new DailySeries(year, month, 'kg');
+  for (const doc of docs) {
+    if (!isConfirmedSale(doc)) continue;
+    const date = saleDate(doc);
+    if (!inPeriod(date, year, month)) continue;
+    for (const line of doc.lines) {
+      const product = String(line.product || '').trim();
+      if (!isFardo(product)) continue;
+      const kg = kgOf(parseBrNumber(line.quantity), lineUom(line, units), units);
+      if (kg) series.add(date, kg, product);
+    }
+  }
+  return series.build(true);
+}
+
+/** Venda: valor (R$) das vendas confirmadas por dia. */
+function buildSales(docs: LoadedDoc[], year: number, month: number): DashboardSection {
+  const series = new DailySeries(year, month, 'R$');
+  for (const doc of docs) {
+    if (!isConfirmedSale(doc)) continue;
+    const date = saleDate(doc);
+    if (!inPeriod(date, year, month)) continue;
+    for (const line of doc.lines) {
+      series.add(date, parseBrNumber(line.quantity) * parseBrNumber(line.unit_price));
+    }
+  }
+  return series.build(false);
 }
 
 export async function hubDashboardPayload(input: {
@@ -301,18 +346,23 @@ export async function hubDashboardPayload(input: {
   companyOdooId?: string;
 }) {
   const { year, month, companyOdooId } = input;
-  const [receipts, production, sales] = await Promise.all([
-    buildReceipts(year, month, companyOdooId),
-    buildProduction(year, month, companyOdooId),
-    buildSales(year, month, companyOdooId),
+  const [purchases, productions, sales, productUoms, uoms] = await Promise.all([
+    loadKind('purchase', companyOdooId),
+    loadKind('production', companyOdooId),
+    loadKind('sale', companyOdooId),
+    productUomByName(companyOdooId),
+    listUomInfos(),
   ]);
+  const units: Units = { uoms, productUoms, kgPerBag: toKg(1, 'Bag', uoms) || 0 };
   return {
     year,
     month,
     scope: companyOdooId ? 'entity' : 'all',
-    receipts,
-    production,
-    sales,
+    receipts: buildReceipts(purchases, year, month, units),
+    separation: buildSeparation(productions, year, month, units),
+    pressing: buildPressing(productions, year, month, units),
+    deliveries: buildDeliveries(sales, year, month, units),
+    sales: buildSales(sales, year, month),
   };
 }
 

@@ -33,7 +33,7 @@ const APPS = {
     mainId: 'hub-view',
   },
   forms: {
-    crumb: 'Vertice Forms',
+    crumb: 'Vértice RSU',
     logo: '/logo-vertice-forms.png',
     shellClass: 'forms-shell',
     mainClass: 'main forms-main',
@@ -179,7 +179,7 @@ async function draw() {
   }
 
   if (current.name === 'web') {
-    mountChrome('web', me, 'web', 'Dashboard');
+    await mountChrome('web', me, 'web', 'Dashboard');
     const view = document.querySelector('#hub-view');
     if (!view || !isNavActive(token)) return;
     await renderHub(view, me);
@@ -191,7 +191,7 @@ async function draw() {
       location.replace('#/web');
       return;
     }
-    mountChrome('web', me, 'web-settings', 'Configurações');
+    await mountChrome('web', me, 'web-settings', 'Configurações');
     const view = document.querySelector('#hub-view');
     if (!view || !isNavActive(token)) return;
     await renderWebSettings(view, me, current.settingsTab || 'usuarios');
@@ -201,7 +201,7 @@ async function draw() {
   if (current.name === 'forms') {
     const formsKind = current.formsKind || 'product';
     const formsTab = FORMS_TABS.find((tab) => tab.id === formsKind);
-    mountChrome('forms', me, formsKind, formsTab?.label || 'Vertice Forms');
+    await mountChrome('forms', me, formsKind, formsTab?.label || 'Vértice RSU');
     const view = document.querySelector('#forms-view');
     if (!view || !isNavActive(token)) return;
     await renderForms(view, current.formsKind || 'product', token, {
@@ -217,7 +217,8 @@ async function draw() {
   }
 
   const route = botRoutes[current.name] || botRoutes.overview;
-  mountBotChrome(me, current.name, route.title);
+  await mountBotChrome(me, current.name, route.title);
+  if (!isNavActive(token)) return;
   refreshInboxHandoffBadge();
 
   const view = document.querySelector('#view');
@@ -245,7 +246,7 @@ function navItems(appKey, me) {
     return [
       { key: 'web', href: '#/web', label: 'Dashboard', icon: 'dashboard' },
       adm && { key: 'bot', href: '#/overview', label: 'Vertice Bot', icon: 'bot' },
-      { key: 'forms', href: '#/forms/compras', label: 'Vertice Forms', icon: 'forms' },
+      { key: 'forms', href: '#/forms/compras', label: 'Vértice RSU', icon: 'forms' },
       adm && { key: 'web-settings', href: '#/web/settings/usuarios', label: 'Configurações', icon: 'settings' },
     ].filter(Boolean);
   }
@@ -304,14 +305,28 @@ function mountTopbarControls(me) {
   }
 }
 
-/** Monta (ou reaproveita) a casca com sidebar. Retorna true quando a casca foi recriada. */
-function mountChrome(appKey, me, active, title) {
+/** Monta (ou reaproveita) a casca com sidebar. Resolve true quando a casca foi recriada. */
+async function mountChrome(appKey, me, active, title) {
   const current = document.querySelector('.shell');
   if (current && current.dataset.app === appKey) {
     syncChrome(active, title);
     mountTopbarControls(me);
     return false;
   }
+  await withViewTransition(() => buildChrome(appKey, me, active, title));
+  return true;
+}
+
+function withViewTransition(update) {
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!document.startViewTransition || reduced || !app.querySelector('.shell, .gate')) {
+    update();
+    return Promise.resolve();
+  }
+  return document.startViewTransition(update).updateCallbackDone;
+}
+
+function buildChrome(appKey, me, active, title) {
   const cfg = APPS[appKey];
   const hubLink =
     appKey === 'web'
@@ -346,13 +361,12 @@ function mountChrome(appKey, me, active, title) {
     </div>`;
   const frame = document.querySelector('.shell');
   bindChrome(frame);
-  syncChrome(active, title);
+  syncChrome(active, title, { animate: false });
   mountTopbarControls(me);
-  return true;
 }
 
-function mountBotChrome(me, active, title) {
-  const fresh = mountChrome('bot', me, active, title);
+async function mountBotChrome(me, active, title) {
+  const fresh = await mountChrome('bot', me, active, title);
   if (fresh) return;
   const existingView = document.querySelector('#view');
   if (existingView) existingView.innerHTML = viewLoading();
@@ -369,10 +383,38 @@ function bindChrome(frame) {
     const collapsed = frame.classList.toggle('collapsed');
     sessionStorage.setItem('nav-collapsed', collapsed ? '1' : '0');
   });
-  frame.querySelector('.side-nav').addEventListener('click', (event) => {
+  const nav = frame.querySelector('.side-nav');
+  nav.addEventListener('click', (event) => {
     if (event.target.closest('a')) frame.classList.remove('nav-open');
   });
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => placeNavIndicator(nav, false)).observe(nav);
+  }
   frame.querySelector('#logout').addEventListener('click', leave);
+}
+
+/** Pílula do item ativo que desliza entre os links (estilo segmented control). */
+function placeNavIndicator(nav, animate) {
+  if (!nav) return;
+  let pill = nav.querySelector('.side-nav-indicator');
+  if (!pill) {
+    pill = document.createElement('span');
+    pill.className = 'side-nav-indicator';
+    pill.setAttribute('aria-hidden', 'true');
+    nav.prepend(pill);
+  }
+  const link = nav.querySelector('a.active');
+  nav.classList.toggle('has-indicator', Boolean(link));
+  if (!link) {
+    pill.style.opacity = '0';
+    return;
+  }
+  const wasHidden = pill.style.opacity !== '1';
+  pill.classList.toggle('no-anim', !animate || wasHidden);
+  pill.style.width = `${link.offsetWidth}px`;
+  pill.style.height = `${link.offsetHeight}px`;
+  pill.style.transform = `translate(${link.offsetLeft}px, ${link.offsetTop}px)`;
+  pill.style.opacity = '1';
 }
 
 async function leave() {
@@ -386,7 +428,7 @@ async function leave() {
   renderLogin();
 }
 
-function syncChrome(active, title) {
+function syncChrome(active, title, { animate = true } = {}) {
   document.querySelector('.shell')?.classList.toggle('is-inbox', active === 'inbox');
   document.querySelector('.shell')?.classList.remove('has-thread');
   const heading = document.querySelector('.page-title');
@@ -394,6 +436,7 @@ function syncChrome(active, title) {
   document.querySelectorAll('.side-nav a[data-nav]').forEach((link) => {
     link.classList.toggle('active', link.getAttribute('data-nav') === active);
   });
+  placeNavIndicator(document.querySelector('.side-nav'), animate);
 }
 
 function refreshInboxHandoffBadge() {

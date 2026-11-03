@@ -28,7 +28,7 @@ function render(data) {
     <main class="forms-public">
       <div class="forms-public-card">
         <div>
-          <p class="kicker">Vertice Forms · ${escapeHtml(kindLabel || '')}</p>
+          <p class="kicker">Vértice RSU · ${escapeHtml(kindLabel || '')}</p>
           <h1>Preenchimento externo</h1>
           <p class="muted">Sugestões do catálogo compartilhado. Salve quando terminar.</p>
         </div>

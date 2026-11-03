@@ -7,6 +7,11 @@ html[data-theme="light"],
 html[data-theme="dark"] {
   color-scheme: light;
 
+  /* Movimento (curvas no padrão Apple) */
+  --ease-apple: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-page: 0.48s;
+
   /* Paleta estendida */
   --orange: #f88828;
   --orange-strong: #e07b20;
@@ -749,6 +754,32 @@ pre {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
 }
+
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.992); filter: blur(3px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+@keyframes page-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vt-fade-out {
+  to { opacity: 0; }
+}
+
+@keyframes vt-fade-in {
+  from { opacity: 0; transform: scale(1.012); }
+}
+
+/* Troca de app (Vertice WEB ↔ Forms ↔ Bot) via View Transitions */
+::view-transition-group(*) {
+  animation-duration: var(--dur-page);
+  animation-timing-function: var(--ease-spring);
+}
+::view-transition-old(root) { animation: 0.24s var(--ease-apple) both vt-fade-out; }
+::view-transition-new(root) { animation: var(--dur-page) var(--ease-spring) both vt-fade-in; }
 
 @keyframes spin {
   to { transform: rotate(360deg); }

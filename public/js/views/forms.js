@@ -1,6 +1,6 @@
 import { api } from '../api.js';
 import { odooLabelPt } from '../odoo-pt.js';
-import { createPoll, escapeHtml, formatSyncError, statCard, toast, viewLoading } from '../ui.js';
+import { createPoll, escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import { entityFromSlug, renderEntitiesBody } from './forms-entities.js';
 import {
@@ -188,7 +188,7 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
 
   const soft = Boolean(options.soft && root.querySelector('.forms-pane'));
   if (!soft && !root.querySelector('.forms-pane')) {
-    root.innerHTML = viewLoading('Abrindo Vertice Forms…');
+    root.innerHTML = viewLoading('Abrindo Vértice RSU…');
   }
 
   const body = ensureFormsShell(root, kind, []);
@@ -239,7 +239,6 @@ function paintBody(body, kind, schema, catalog, items, editing) {
       ? `${items.length} item(ns)`
       : `${filtered.length} de ${items.length} item(ns)`;
   body.innerHTML = `
-    ${catalogSummary(catalog)}
     <div class="forms-layout">
       <section class="card forms-list-card">
         <div class="card-head forms-list-head">
@@ -540,18 +539,6 @@ function bindFilters(root, kind, schema, catalog, items, token) {
   partnerSelect?.addEventListener('change', apply);
   dateInput?.addEventListener('input', apply);
   dateInput?.addEventListener('change', apply);
-}
-
-function catalogSummary(catalog) {
-  const products = catalog.products?.length || 0;
-  const customers = (catalog.partners || []).filter((p) => p.is_customer).length;
-  const vendors = (catalog.partners || []).filter((p) => p.is_vendor).length;
-  return `
-    <section class="stat-row stat-row--3 forms-catalog-bar" aria-label="Catálogo">
-      ${statCard({ label: 'Produtos no catálogo', value: products, tone: 'orange', icon: 'box', href: '#/forms/cadastros/produtos' })}
-      ${statCard({ label: 'Clientes', value: customers, tone: 'teal', icon: 'contacts', href: '#/forms/cadastros/clientes' })}
-      ${statCard({ label: 'Fornecedores', value: vendors, tone: 'blue', icon: 'truck', href: '#/forms/cadastros/fornecedores' })}
-    </section>`;
 }
 
 function statusOptions(schema, kind) {
