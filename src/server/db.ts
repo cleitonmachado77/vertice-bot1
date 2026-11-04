@@ -90,6 +90,7 @@ export async function setSetting(key: string, value: string): Promise<void> {
 export async function initDatabase(): Promise<void> {
   await getPool().query(SCHEMA);
   await migrate();
+  await lockPublicApiAccess();
   await importLocalSqlite();
   await seedSettings();
   const rows = await many<{ key: string; value: string }>('SELECT key, value FROM settings');
@@ -641,6 +642,34 @@ async function migrate(): Promise<void> {
  * Valor fixado pelo padrão Forms numa pergunta (ex.: produto de “Qtd de ABACATE?”).
  * Perguntas antigas só tinham isso no texto: preenche uma vez a partir do corpo.
  */
+/**
+ * O Supabase publica o schema public na API REST para os papéis anon/authenticated, e
+ * settings guarda as chaves (OpenAI, Odoo, Névoa). O Vertice só usa o usuário postgres
+ * (dono das tabelas, ignora RLS): RLS ligado e sem grants fecha a API pública.
+ * Os privilégios padrão valem para tabelas criadas depois.
+ */
+async function lockPublicApiAccess(): Promise<void> {
+  try {
+    const tables = await many<{ tablename: string }>(
+      `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND NOT rowsecurity`,
+    );
+    for (const { tablename } of tables) {
+      await run(`ALTER TABLE public."${tablename.replace(/"/g, '""')}" ENABLE ROW LEVEL SECURITY`);
+    }
+    const roles = await many<{ rolname: string }>(
+      `SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')`,
+    );
+    if (!roles.length) return;
+    const list = roles.map((role) => role.rolname).join(', ');
+    await run(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${list}`);
+    await run(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM ${list}`);
+    await run(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM ${list}`);
+    await run(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM ${list}`);
+  } catch (error) {
+    console.warn('db: não foi possível fechar o acesso público às tabelas:', error instanceof Error ? error.message : error);
+  }
+}
+
 async function migrateQuestionFixedValue(): Promise<void> {
   for (const table of ['questionnaire_questions', 'questionnaire_revision_questions']) {
     await run(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS fixed_value TEXT NOT NULL DEFAULT ''`);
