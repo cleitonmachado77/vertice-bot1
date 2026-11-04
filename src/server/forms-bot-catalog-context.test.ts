@@ -172,3 +172,41 @@ test('lista antiga no histórico não vale quando o bot já perguntou outra cois
   });
   assert.equal(hit, null);
 });
+
+test('número da lista de produto grava a linha, não um campo product inexistente', async () => {
+  const list = [
+    'Olá!',
+    'Produto — escolha o número:',
+    '1) FARDO TESTE VERTICE - KG',
+    '2) Bag',
+    '3) SUCATA DE FERRO',
+    'Digite *mais* para ver 11–20 (total 30).',
+    '',
+    'Depois: Mais produtos? (produto + qtd, ou “não”).',
+  ].join('\n');
+  const questionnaire = {
+    id: 'forms-preset:bags',
+    formKind: 'purchase',
+    companyOdooId: '1',
+    questions: [
+      {
+        id: 'l',
+        questionnaire_id: 'forms-preset:bags',
+        body: 'Produtos?',
+        expected_type: 'any',
+        export_field: '__lines__',
+        sort_order: 0,
+      },
+    ],
+  } as unknown as Questionnaire;
+  const hit = await tryResolveCatalogIndexAnswer({
+    inbound: '3',
+    questionnaire,
+    history: [{ direction: 'OUTBOUND', text: list }],
+    alreadySaved: [],
+    pendingQuestionId: 'l',
+  });
+  assert.equal(hit?.questionId, 'l');
+  assert.equal(hit?.fieldKey, 'product');
+  assert.equal(hit?.value, 'SUCATA DE FERRO');
+});

@@ -5,7 +5,11 @@ import {
   buildKindMenu,
   buildMainMenu,
   formatMenu,
+  isBotAsking,
+  isContactOpener,
+  isLikelyFormAnswer,
   isMenuKeyword,
+  parseMenuDecision,
   isNewMenuSession,
   isShortMenuReply,
   matchMenuOption,
@@ -33,15 +37,25 @@ test('normaliza padrões: tira prefixo e ignora questionário sem tipo Forms', (
   assert.equal(menuFormName('[Forms] Fabricação · Prensa', 'production'), 'Prensa');
 });
 
-test('menu principal lista tipos na ordem Compras, Inventário, Fabricação, Vendas + atendente', () => {
+test('menu principal lista o nome de cada padrão, sem a tela, + atendente', () => {
   const node = buildMainMenu({ forms, cycles: none, attendant: true, title: 'O que deseja fazer hoje?' });
   assert.deepEqual(
     node.options.map((option) => `${option.key}) ${option.label}`),
-    ['1) Compras', '2) Inventário', '3) Vendas', '4) Falar com um atendente'],
+    [
+      '1) Ademir - Compras',
+      '2) Estoque geral',
+      '3) Vendas do Dia',
+      '4) Feira',
+      '5) Falar com um atendente',
+    ],
+  );
+  assert.deepEqual(
+    node.options.slice(0, 4).map((option) => option.target),
+    ['form:forms-preset:p1', 'form:forms-preset:p2', 'form:forms-preset:p3', 'form:forms-preset:p4'],
   );
 });
 
-test('estado do dia aparece no próprio item do tipo, sem duplicar opções', () => {
+test('estado do dia aparece no próprio padrão, sem duplicar opções', () => {
   const cycles: MenuCycle[] = [
     { questionnaireId: 'forms-preset:p1', status: 'notified', answers: 0, lastPromptedAt: '' },
     { questionnaireId: 'forms-preset:p2', status: 'completed', answers: 3, lastPromptedAt: '' },
@@ -50,23 +64,29 @@ test('estado do dia aparece no próprio item do tipo, sem duplicar opções', ()
   const node = buildMainMenu({ forms, cycles, attendant: false, title: 'Menu' });
   assert.deepEqual(
     node.options.map((option) => `${option.key}) ${option.label}`),
-    ['1) Compras — pendente hoje', '2) Inventário — concluído hoje', '3) Vendas — em andamento'],
+    [
+      '1) Ademir - Compras — pendente hoje',
+      '2) Estoque geral — concluído hoje',
+      '3) Vendas do Dia — em andamento',
+      '4) Feira',
+    ],
   );
   assert.deepEqual(
     node.options.map((option) => Boolean(option.featured)),
-    [true, false, true],
+    [true, false, true, false],
   );
 });
 
-test('“sim” abre o primeiro tipo pendente; nome do tipo e atendente casam por texto', () => {
+test('“sim” abre o primeiro padrão pendente; nome do padrão e atendente casam por texto', () => {
   const cycles: MenuCycle[] = [
     { questionnaireId: 'forms-preset:p3', status: 'notified', answers: 0, lastPromptedAt: '' },
   ];
   const node = buildMainMenu({ forms, cycles, attendant: true, title: 'Menu' });
-  assert.equal(matchMenuOption('sim', node)?.target, 'kind:sale');
-  assert.equal(matchMenuOption('pode sim', node)?.target, 'kind:sale');
+  assert.equal(matchMenuOption('sim', node)?.target, 'form:forms-preset:p3');
+  assert.equal(matchMenuOption('pode sim', node)?.target, 'form:forms-preset:p3');
   assert.equal(matchMenuOption('Bom, pode sim', node), undefined);
-  assert.equal(matchMenuOption('compras', node)?.target, 'kind:purchase');
+  assert.equal(matchMenuOption('vendas do dia', node)?.target, 'form:forms-preset:p3');
+  assert.equal(matchMenuOption('feira', node)?.target, 'form:forms-preset:p4');
   assert.equal(matchMenuOption('quero falar com atendente', node)?.action, 'human');
 
   const nothingPending = buildMainMenu({ forms, cycles: none, attendant: true, title: 'Menu' });
@@ -86,9 +106,9 @@ test('entra direto no formulário quando a única ação é registrar', () => {
 
 test('número escolhe a opção; número inexistente não casa', () => {
   const node = buildMainMenu({ forms, cycles: none, attendant: true, title: 'Menu' });
-  assert.equal(matchMenuOption('2', node)?.target, 'kind:product');
-  assert.equal(matchMenuOption(' 2) ', node)?.target, 'kind:product');
-  assert.equal(matchMenuOption('opção 3', node)?.target, 'kind:sale');
+  assert.equal(matchMenuOption('2', node)?.target, 'form:forms-preset:p2');
+  assert.equal(matchMenuOption(' 2) ', node)?.target, 'form:forms-preset:p2');
+  assert.equal(matchMenuOption('opção 3', node)?.target, 'form:forms-preset:p3');
   assert.equal(matchMenuOption('9', node), undefined);
   assert.equal(matchMenuOption('50 kg de abacate', node), undefined);
 });
@@ -141,8 +161,37 @@ test('formatação numerada com rodapé e “0) Voltar” no fim', () => {
   const main = formatMenu(buildMainMenu({ forms, cycles: none, attendant: true, title: 'O que deseja?' }), {
     greeting: 'Bom dia, Cleiton!',
   });
-  assert.match(main, /^Bom dia, Cleiton! O que deseja\?\n\n1\) Compras/);
+  assert.match(main, /^Bom dia, Cleiton! O que deseja\?\n\n1\) Ademir - Compras/);
   assert.match(main, /Digite \*menu\*/);
+});
+
+test('fala do usuário abre o menu; resposta da pergunta não', () => {
+  const quantidade = 'Anotei o produto SUCATA DE FERRO. Qual a quantidade?';
+  const lista = 'Produto — escolha o número:\n1) FARDO\n2) Bag\n3) SUCATA DE FERRO';
+  const agenda = 'Ainda posso registrar hoje:\n1) Compras\n2) Vendas\nResponda o número, o nome, ou diga se prefere pular algum.';
+  assert.equal(isBotAsking(quantidade), true);
+  assert.equal(isBotAsking('Perfeito! Anotei tudo, obrigado.'), false);
+  assert.equal(isLikelyFormAnswer('20 kg', quantidade), true);
+  assert.equal(isLikelyFormAnswer('3', lista), true);
+  assert.equal(isLikelyFormAnswer('Não', agenda), true);
+  assert.equal(isLikelyFormAnswer('quero registrar as compras', quantidade), false);
+  assert.equal(isLikelyFormAnswer('me ajuda com o estoque de hoje', lista), false);
+  assert.equal(isLikelyFormAnswer('Oi', quantidade), false);
+  assert.equal(parseMenuDecision('{"menu": true}'), true);
+  assert.equal(parseMenuDecision('texto {"menu": false} fim'), false);
+  assert.equal(parseMenuDecision('não sei'), null);
+});
+
+test('saudação abre o contato; resposta de formulário não', () => {
+  assert.equal(isContactOpener('Oi'), true);
+  assert.equal(isContactOpener('Oie'), true);
+  assert.equal(isContactOpener('Olá!'), true);
+  assert.equal(isContactOpener('Bom dia'), true);
+  assert.equal(isContactOpener('boa tarde, tudo bem'), true);
+  assert.equal(isContactOpener('3'), false);
+  assert.equal(isContactOpener('20 kg'), false);
+  assert.equal(isContactOpener('Não'), false);
+  assert.equal(isContactOpener('sim'), false);
 });
 
 test('palavra “menu” e sessão nova', () => {

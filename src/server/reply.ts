@@ -42,6 +42,7 @@ import {
   isFormsBotQuestionnaire,
   looksLikeFormsBotAgendaMeta,
   offerRemainingFormsBotAgenda,
+  outboundOffersFormsAgenda,
 } from './forms-bot-agenda.js';
 import { isFormsCatalogListAsk } from './forms-bot-catalog-context.js';
 import { looksLikeHumanHandoff } from './human-handoff.js';
@@ -175,7 +176,10 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   let cycle: ActiveCycleContext | undefined;
   let draft: QuestionnaireDraft | Draft | null = null;
 
-  // Menu numerado: abre a sessão e guia até o formulário; a coleta segue no fluxo abaixo.
+  const lastBotText = lastOutboundText(historyRows);
+
+  // Menu antes da agenda: se a fala parte do usuário e há formulário, o menu abre.
+  // Número, quantidade e “não” da pergunta seguem o formulário.
   if (contactId) {
     const menu = await tryBotMenu({
       contactId,
@@ -187,10 +191,40 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
       mediaUrl,
       date: clock.date,
       minutes: clock.minutes,
+      lastBotText,
     });
     if (menu.handled) {
       draft = { text: menu.text, source: 'fallback', detail: menu.detail, completed: false };
       if (menu.cycle) cycle = menu.cycle;
+    }
+  }
+
+  const agendaOfferOpen =
+    !draft &&
+    !multiDayIntent &&
+    !otherDayIntent &&
+    !isFormsCatalogListAsk(inboundText) &&
+    outboundOffersFormsAgenda(lastBotText);
+
+  // A oferta entre formulários vale mesmo se o envio tiver recolocado o ciclo concluído.
+  if (agendaOfferOpen && contactId) {
+    const agendaResult = await applyFormsBotAgendaIntent({
+      contactId,
+      conversationId: input.conversationId,
+      date: clock.date,
+      weekday: clock.weekday,
+      nowMinutes: clock.minutes,
+      inbound: inboundText,
+      awaitingOffer: true,
+    });
+    if (agendaResult.handled && agendaResult.text) {
+      draft = {
+        text: agendaResult.text,
+        source: 'fallback',
+        detail: agendaResult.detail || 'agenda Forms',
+        completed: Boolean(agendaResult.completed),
+      };
+      if (agendaResult.cycle) cycle = agendaResult.cycle;
     }
   }
 
@@ -536,6 +570,13 @@ async function pendingQuestionTrace(cycle: ActiveCycleContext | undefined) {
     },
     after: await readCyclePrompt(cycle.cycle.id),
   };
+}
+
+function lastOutboundText(history: { direction: string; text: string }[]): string {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index].direction === 'OUTBOUND') return history[index].text || '';
+  }
+  return '';
 }
 
 async function isAwaitingQuestionnaireSelection(conversationId: string): Promise<boolean> {

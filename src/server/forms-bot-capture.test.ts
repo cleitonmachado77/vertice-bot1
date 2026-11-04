@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { questionIdForCatalogList, tryFormsLinesCapture } from './forms-bot-capture.js';
+import { questionIdForCatalogList, tryFormsBotCapture, tryFormsLinesCapture } from './forms-bot-capture.js';
 import type { Questionnaire, QuestionnaireQuestion } from './questionnaires.js';
 
 const questions: QuestionnaireQuestion[] = [
@@ -29,6 +29,54 @@ const questions: QuestionnaireQuestion[] = [
     sort_order: 2,
   },
 ];
+
+test('“20 kg” completa o produto escolhido na lista', () => {
+  const accepted = tryFormsLinesCapture({
+    inbound: '20 kg',
+    questions,
+    alreadySaved: [
+      {
+        id: 'p',
+        cycle_id: 'c',
+        question_id: 'l',
+        answer_text: '[produto?] SUCATA DE FERRO',
+        answer_type: 'text',
+        media_url: '',
+      },
+    ],
+    pendingQuestionId: 'm',
+  });
+  assert.ok(accepted);
+  assert.equal(accepted[0].questionId, 'l');
+  assert.deepEqual(JSON.parse(accepted[0].text), [{ product: 'SUCATA DE FERRO', quantity: '20 kg' }]);
+});
+
+test('“não” não encerra enquanto o produto escolhido está sem quantidade', async () => {
+  const captured = await tryFormsBotCapture({
+    inbound: 'Não',
+    questionnaire: {
+      id: 'forms-preset:bags',
+      formKind: 'purchase',
+      companyOdooId: '1',
+      questions,
+    } as never,
+    questions,
+    alreadySaved: [
+      {
+        id: 'p',
+        cycle_id: 'c',
+        question_id: 'l',
+        answer_text: '[produto?] SUCATA DE FERRO',
+        answer_type: 'text',
+        media_url: '',
+      },
+    ],
+    history: [],
+    pendingQuestionId: 'm',
+  });
+  assert.equal(captured?.kind, 'reask');
+  assert.match(captured && captured.kind === 'reask' ? captured.text : '', /quantidade de SUCATA DE FERRO/);
+});
 
 test('tryFormsLinesCapture grava JSON nas linhas', () => {
   const accepted = tryFormsLinesCapture({

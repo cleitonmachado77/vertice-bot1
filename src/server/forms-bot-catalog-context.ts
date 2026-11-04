@@ -5,7 +5,12 @@ import {
   resolveCatalogValue,
   type MatchCandidate,
 } from './forms-bot-match.js';
-import { FORMS_BOT_LINES_FIELD, fixedLinesProduct, isMarkedNewValue } from './forms-bot-fields.js';
+import {
+  FORMS_BOT_LINES_FIELD,
+  fixedLinesProduct,
+  isMarkedNewValue,
+  linesAnswerHasQuantity,
+} from './forms-bot-fields.js';
 import { headerFieldsFor, isFormKind, lineFieldsFor, type FormField, type FormKind } from './forms-fields.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
 import { foldText } from './questionnaire-rules.js';
@@ -224,6 +229,29 @@ export function extractCatalogIndexInbound(inbound: string): string | null {
   return match[1] || match[2] || null;
 }
 
+/** Lista de produto do Forms Bot responde `__lines__` quando não há campo `product` separado. */
+function questionForCatalogField(
+  questionnaire: Questionnaire,
+  fieldKey: string,
+): QuestionnaireQuestion | undefined {
+  const direct = questionnaire.questions.find(
+    (item) => String(item.export_field || '').trim() === fieldKey,
+  );
+  if (direct) return direct;
+  if (fieldKey !== 'product') return undefined;
+  return questionnaire.questions.find(
+    (item) =>
+      String(item.export_field || '').trim() === FORMS_BOT_LINES_FIELD && !fixedLinesProduct(item),
+  );
+}
+
+function catalogAnswerStillOpen(question: QuestionnaireQuestion, text: string): boolean {
+  if (String(question.export_field || '').trim() === FORMS_BOT_LINES_FIELD) {
+    return !linesAnswerHasQuantity(text);
+  }
+  return !text || isMarkedNewValue(text);
+}
+
 function firstPendingCatalogField(
   kind: FormKind,
   questionnaire: Questionnaire,
@@ -231,13 +259,15 @@ function firstPendingCatalogField(
 ): { fieldKey: string; questionId: string } | null {
   const fields = catalogFieldsInQuestionnaire(kind, questionnaire.questions);
   for (const field of fields) {
+    // Só campo com a própria pergunta. `__lines__` não rouba um “3” solto
+    // (isso é quantidade) — a lista de produto na tela é tratada à parte.
     const question = questionnaire.questions.find(
       (item) => String(item.export_field || '').trim() === field.key,
     );
     if (!question) continue;
     const saved = alreadySaved.find((row) => row.question_id === question.id);
     const text = String(saved?.answer_text || '').trim();
-    if (text && !isMarkedNewValue(text)) continue;
+    if (!catalogAnswerStillOpen(question, text)) continue;
     return { fieldKey: field.key, questionId: question.id };
   }
   return null;
@@ -248,13 +278,11 @@ function isCatalogFieldPending(
   fieldKey: string,
   alreadySaved: CycleAnswer[],
 ): boolean {
-  const question = questionnaire.questions.find(
-    (item) => String(item.export_field || '').trim() === fieldKey,
-  );
+  const question = questionForCatalogField(questionnaire, fieldKey);
   if (!question) return false;
   const saved = alreadySaved.find((row) => row.question_id === question.id);
   const text = String(saved?.answer_text || '').trim();
-  return !text || isMarkedNewValue(text);
+  return catalogAnswerStillOpen(question, text);
 }
 
 function lastCatalogListOutbound(
@@ -392,9 +420,7 @@ export async function tryResolveCatalogIndexAnswer(input: {
     pending?.fieldKey;
   if (!fieldKey) return null;
 
-  const question = input.questionnaire.questions.find(
-    (item) => String(item.export_field || '').trim() === fieldKey,
-  );
+  const question = questionForCatalogField(input.questionnaire, fieldKey);
   if (!question) return null;
 
   const index = Number(indexRaw);

@@ -65,6 +65,59 @@ export function foldMenuText(value: string): string {
     .trim();
 }
 
+/** A última fala do bot espera uma resposta (lista, quantidade, sim/não, agenda). */
+export function isBotAsking(lastBotText: string): boolean {
+  const bot = foldMenuText(lastBotText);
+  if (!bot) return false;
+  return /escolha o numero|qual a quantidade|quantidade de|mais produtos|confirma o registro|ainda posso registrar|responda o numero|responda com o numero|quer seguir|digite \*?mais/.test(
+    bot,
+  );
+}
+
+/**
+ * Resposta direta ao que o bot acabou de pedir.
+ * Fora isso, a fala parte do usuário e o menu entra se houver formulário.
+ */
+export function isLikelyFormAnswer(inbound: string, lastBotText: string): boolean {
+  const folded = foldMenuText(inbound);
+  if (!folded || isContactOpener(inbound) || !isBotAsking(lastBotText)) return false;
+  const bot = foldMenuText(lastBotText);
+  if (/^\d{1,3}$/.test(folded)) return true;
+  if (
+    /^(sim|s|nao|n|ok|pode)$/.test(folded) &&
+    /mais produtos|confirma|quer seguir|ainda posso registrar/.test(bot)
+  ) {
+    return true;
+  }
+  if (/\bpular\b/.test(folded) && /ainda posso registrar|pular/.test(bot)) return true;
+  if (/\d/.test(folded) && /quantidade/.test(bot)) return true;
+  return false;
+}
+
+/** JSON {"menu": true|false} do modelo. null se não deu para ler. */
+export function parseMenuDecision(raw: string): boolean | null {
+  const text = String(raw || '').trim();
+  const body = text.match(/\{[\s\S]*\}/)?.[0] || text;
+  try {
+    const parsed = JSON.parse(body) as { menu?: unknown };
+    if (typeof parsed.menu === 'boolean') return parsed.menu;
+  } catch {
+    /* segue */
+  }
+  if (/^\s*true\s*$/i.test(text)) return true;
+  if (/^\s*false\s*$/i.test(text)) return false;
+  return null;
+}
+
+/** A pessoa está abrindo a conversa (“oi”, “bom dia”), não respondendo uma pergunta. */
+export function isContactOpener(inbound: string): boolean {
+  const folded = foldMenuText(inbound);
+  if (!folded || folded.length > 40) return false;
+  return /^(?:oi+|oie+|ola|opa|hey|eai|e ai|bom dia|boa tarde|boa noite|tudo bem|td bem)(?:\s+(?:oi+|oie+|ola|opa|tudo bem|td bem))?$/.test(
+    folded,
+  );
+}
+
 export function isMenuKeyword(inbound: string): boolean {
   return /^(menu|menu principal|abrir menu|ver menu|voltar ao menu|voltar pro menu|opcoes|ver opcoes|inicio)$/.test(
     foldMenuText(inbound),
@@ -118,36 +171,33 @@ function numbered(options: Omit<MenuOption, 'key'>[]): MenuOption[] {
   });
 }
 
-function kindsOf(forms: MenuForm[]): FormKind[] {
-  return KIND_ORDER.filter((kind) => forms.some((form) => form.kind === kind));
+/** Padrões na ordem das telas (Compras, Inventário, Fabricação, Vendas), sem mostrar o nome da tela. */
+function formsInMenuOrder(forms: MenuForm[]): MenuForm[] {
+  return KIND_ORDER.flatMap((kind) => forms.filter((form) => form.kind === kind));
 }
 
-/** Estado do dia de um tipo (soma dos padrões dele). */
-export function kindDayStatus(kind: FormKind, forms: MenuForm[], cycles: MenuCycle[]): 'in_progress' | 'pending' | 'completed' | '' {
-  const states = forms
-    .filter((form) => form.kind === kind)
-    .map((form) => cycleFor(cycles, form.questionnaireId));
-  if (states.some((cycle) => cycle.status === 'in_progress')) return 'in_progress';
-  if (states.some((cycle) => cycle.status === 'notified')) return 'pending';
-  if (states.length && states.every((cycle) => cycle.status === 'completed')) return 'completed';
+function formDayStatus(cycle: MenuCycle): 'in_progress' | 'pending' | 'completed' | '' {
+  if (cycle.status === 'in_progress') return 'in_progress';
+  if (cycle.status === 'notified') return 'pending';
+  if (cycle.status === 'completed') return 'completed';
   return '';
 }
 
 const KIND_STATUS_SUFFIX = { in_progress: ' — em andamento', pending: ' — pendente hoje', completed: ' — concluído hoje', '': '' };
 
-/** Menu principal: tipos de formulário (com o estado do dia) + atendente. */
+/** Menu principal: um item por padrão (nome que demos a ele) + atendente. */
 export function buildMainMenu(input: {
   forms: MenuForm[];
   cycles: MenuCycle[];
   attendant: boolean;
   title: string;
 }): MenuNode {
-  const options: Omit<MenuOption, 'key'>[] = kindsOf(input.forms).map((kind) => {
-    const status = kindDayStatus(kind, input.forms, input.cycles);
+  const options: Omit<MenuOption, 'key'>[] = formsInMenuOrder(input.forms).map((form) => {
+    const status = formDayStatus(cycleFor(input.cycles, form.questionnaireId));
     return {
-      label: `${KIND_LABELS[kind]}${KIND_STATUS_SUFFIX[status]}`,
+      label: `${form.name}${KIND_STATUS_SUFFIX[status]}`,
       action: 'node' as const,
-      target: `kind:${kind}`,
+      target: `form:${form.questionnaireId}`,
       featured: status === 'in_progress' || status === 'pending',
     };
   });
@@ -256,6 +306,10 @@ function optionAliases(option: MenuOption): string[] {
   if (option.action === 'node' && option.target?.startsWith('kind:')) {
     const kind = option.target.slice('kind:'.length);
     return isFormKind(kind) ? [foldMenuText(KIND_LABELS[kind]), ...KIND_ALIASES[kind]] : [];
+  }
+  if (option.action === 'node' && option.target?.startsWith('form:')) {
+    const name = option.label.split(' — ')[0];
+    return name ? [foldMenuText(name)] : [];
   }
   return ACTION_ALIASES[option.action] || [];
 }

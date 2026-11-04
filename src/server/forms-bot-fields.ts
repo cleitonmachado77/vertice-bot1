@@ -10,6 +10,8 @@ export const CONFIRM_QUESTION_BODY = 'Confirma o registro? (sim / corrigir)';
 // Valor fora do catálogo (fornecedor/cliente/produto) aguardando “sim” do contato:
 // fica gravado com a marca e não conta como respondido, para não cadastrar lixo no Odoo.
 const NEW_VALUE_MARK = '[novo?] ';
+/** Produto já escolhido na lista, ainda sem quantidade — não fecha a linha. */
+const PENDING_PRODUCT_MARK = '[produto?] ';
 
 export function markNewValue(text: string): string {
   return `${NEW_VALUE_MARK}${unmarkNewValue(text)}`;
@@ -22,6 +24,45 @@ export function isMarkedNewValue(text: string): boolean {
 export function unmarkNewValue(text: string): string {
   const raw = String(text || '');
   return raw.startsWith(NEW_VALUE_MARK) ? raw.slice(NEW_VALUE_MARK.length) : raw;
+}
+
+export function markPendingProduct(name: string): string {
+  const clean = String(name || '').trim();
+  return clean ? `${PENDING_PRODUCT_MARK}${clean}` : '';
+}
+
+export function pendingProductName(text: string): string {
+  const raw = String(text || '');
+  return raw.startsWith(PENDING_PRODUCT_MARK) ? raw.slice(PENDING_PRODUCT_MARK.length).trim() : '';
+}
+
+/** Linha aproveitável: tem quantidade. Nome de produto sozinho ainda não. */
+export function linesAnswerHasQuantity(text: string): boolean {
+  const raw = String(text || '').trim();
+  if (!raw || pendingProductName(raw) || isMarkedNewValue(raw)) return false;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.some((row) => quantityNumber(String((row as { quantity?: string })?.quantity || '')) !== '');
+    }
+  } catch {
+    /* texto livre */
+  }
+  if (isQuantityOnly(raw)) return true;
+  return parseQtyProductChunks(raw).length > 0;
+}
+
+/**
+ * Produto escolhido na lista (ou nome salvo sem quantidade) esperando “20 kg”.
+ * Vazio se a linha já tem quantidade.
+ */
+export function linesProductAwaitingQuantity(text: string): string {
+  const pending = pendingProductName(text);
+  if (pending) return pending;
+  const raw = String(text || '').trim();
+  if (!raw || linesAnswerHasQuantity(raw) || isMarkedNewValue(raw) || isLinesMoreDoneAnswer(raw)) return '';
+  if (raw.startsWith('[') || raw.startsWith('{')) return '';
+  return raw;
 }
 
 /** “sim”, “confirmo”, “pode registrar”… (também “sim (encerrado por inatividade)”). */

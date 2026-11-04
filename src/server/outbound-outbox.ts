@@ -7,6 +7,7 @@ import {
   markCyclePrompted,
   setConversationCycleContext,
 } from './questionnaire-cycles.js';
+import { outboundOffersFormsAgenda } from './forms-bot-agenda.js';
 import { looksLikeHumanHandoff } from './human-handoff.js';
 import { getContact, setAwaitingHuman, upsertConversation } from './store.js';
 import { ensureConversation, recordOutbound } from './thread.js';
@@ -179,7 +180,9 @@ async function finalizeOutbound(job: OutboundJob, response: unknown): Promise<vo
     }
     if (job.cycle_id && job.origin === 'scheduled') await markCycleNotified(job.cycle_id);
     else if (job.cycle_id) await markCyclePrompted(job.cycle_id);
-    if (job.cycle_id && conversationId) {
+    // A oferta “Ainda posso registrar hoje” já gravou a seleção. Recolocar o ciclo
+    // concluído apagava awaiting_selection e o próximo número fechava o formulário errado.
+    if (job.cycle_id && conversationId && !outboundOffersFormsAgenda(job.text || '')) {
       await setConversationCycleContext(conversationId, job.cycle_id);
     }
     await run(

@@ -5,6 +5,7 @@ import {
   compareFormsBotAgendaItems,
   formatFormsBotAgendaOffer,
   looksLikeFormsBotAgendaMeta,
+  outboundOffersFormsAgenda,
   parseFormsBotAgendaIntent,
   pickPrimaryFormsBotAgendaItem,
   remainingFormsBotAgendaItems,
@@ -138,6 +139,21 @@ test('parseFormsBotAgendaIntent entende respondi X vou responder Y', () => {
     assert.equal(intent.item.kind, 'sale');
     assert.equal(intent.alsoSkip?.[0]?.kind, 'purchase');
   }
+});
+
+test('número na oferta escolhe o item da lista, não um formulário já fechado', () => {
+  const agenda = [
+    item({ id: '1', kind: 'purchase', name: 'Compras · SEPARAÇÃO', sendTime: '08:00' }),
+    item({ id: '2', kind: 'sale', name: 'Fabricação · Produção de Fardos', sendTime: '09:00' }),
+    item({ id: '3', kind: 'sale', name: 'Vendas · Entrega de Fardos', sendTime: '10:00' }),
+    item({ id: '4', kind: 'product', name: 'Inventário · Separação de Bags', sendTime: '11:00' }),
+  ];
+  const picked = parseFormsBotAgendaIntent('4', agenda, { awaitingOffer: true });
+  assert.equal(picked.action, 'select');
+  if (picked.action === 'select') assert.equal(picked.item.kind, 'product');
+  const offer = formatFormsBotAgendaOffer(agenda);
+  assert.equal(outboundOffersFormsAgenda(`Perfeito! Anotei tudo, obrigado.\n\n${offer}`), true);
+  assert.equal(outboundOffersFormsAgenda('Anotei o produto SUCATA DE FERRO. Qual a quantidade?'), false);
 });
 
 test('parseFormsBotAgendaIntent oferta sim/não', () => {

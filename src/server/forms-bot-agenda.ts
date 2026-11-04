@@ -1,5 +1,6 @@
 import { getSetting, many, run, setSetting } from './db.js';
 import { minutesFromClock } from './clock.js';
+import { hasExplicitUnit, parseQtyProductChunks } from './forms-bot-fields.js';
 import { KIND_LABELS, isFormKind, type FormKind } from './forms-fields.js';
 import { runsOnWeekday } from './plans.js';
 import {
@@ -203,6 +204,12 @@ export function parseFormsBotAgendaIntent(
   if (options.awaitingOffer && isAcceptOffer(folded)) return { action: 'accept_offer' };
 
   return { action: 'none' };
+}
+
+/** A última fala do bot foi a oferta entre formulários (“Ainda posso registrar hoje”). */
+export function outboundOffersFormsAgenda(text: string): boolean {
+  const raw = String(text || '');
+  return raw.includes('Ainda posso registrar hoje:') || /Quer seguir com [“"']/.test(raw);
 }
 
 export function formatFormsBotAgendaOffer(remaining: FormsBotAgendaItem[]): string {
@@ -448,9 +455,20 @@ export async function applyFormsBotAgendaIntent(input: {
 
   if (intent.action === 'none') {
     if (!input.awaitingOffer) return { handled: false };
+    // “20 kg de banana” ainda é item do formulário, não escolha da lista.
+    if (hasExplicitUnit(input.inbound) || parseQtyProductChunks(input.inbound).length > 0) {
+      return { handled: false };
+    }
+    const remaining = remainingFormsBotAgendaItems(agenda);
+    if (input.conversationId && remaining.length) {
+      await setConversationCycleCandidates(
+        input.conversationId,
+        remaining.map((item) => item.cycleId),
+      );
+    }
     return {
       handled: true,
-      text: formatFormsBotAgendaOffer(remainingFormsBotAgendaItems(agenda)),
+      text: formatFormsBotAgendaOffer(remaining),
       detail: 'agenda Forms: seleção não reconhecida',
       completed: false,
     };

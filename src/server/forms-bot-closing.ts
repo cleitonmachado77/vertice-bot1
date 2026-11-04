@@ -7,6 +7,7 @@ import {
   isConfirmYesAnswer,
   isLinesMoreDoneAnswer,
   parseQtyProductChunks,
+  pendingProductName,
   unmarkNewValue,
 } from './forms-bot-fields.js';
 import { missingQuestions, type CycleAnswer } from './questionnaire-cycles.js';
@@ -20,6 +21,8 @@ const fieldOf = (question: QuestionnaireQuestion) => String(question.export_fiel
 
 /** JSON de linhas → “50 kg de abacate; 20 kg de mandioca”; texto livre fica como está. */
 export function describeLinesAnswer(text: string): string {
+  const pending = pendingProductName(text);
+  if (pending) return pending;
   const raw = unmarkNewValue(text);
   try {
     const rows = JSON.parse(raw) as Array<{ product?: string; quantity?: string }>;

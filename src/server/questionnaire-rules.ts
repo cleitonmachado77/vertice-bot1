@@ -1,9 +1,11 @@
 import {
   FORMS_BOT_CONFIRM_FIELD,
+  FORMS_BOT_LINES_FIELD,
   FORMS_BOT_LINES_MORE_FIELD,
   isConfirmYesAnswer,
   isMarkedNewValue,
   isUsableLinesMoreAnswer,
+  linesAnswerHasQuantity,
 } from './forms-bot-fields.js';
 import type { MediaUnderstanding } from './media-understand.js';
 import type { CycleAnswer } from './questionnaire-cycles.js';
@@ -207,6 +209,10 @@ export function isUsableAnswerForQuestion(
   // “sim” confirma o registro — também é ack, por isso vem antes da regra geral.
   if (String(question.export_field || '').trim() === FORMS_BOT_CONFIRM_FIELD) {
     return isConfirmYesAnswer(raw);
+  }
+  // “SUCATA DE FERRO” sem quantidade ainda não fecha a linha.
+  if (String(question.export_field || '').trim() === FORMS_BOT_LINES_FIELD) {
+    return linesAnswerHasQuantity(raw);
   }
   return !isUnusableQuestionnaireAnswer(raw);
 }

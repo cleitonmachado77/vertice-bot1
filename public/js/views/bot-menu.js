@@ -6,10 +6,10 @@ function previewText(settings) {
   const lines = [
     `Bom dia, Cleiton! ${settings.intro || 'O que deseja fazer hoje?'}`,
     '',
-    '1) Compras — pendente hoje',
-    '2) Inventário — pendente hoje',
-    '3) Fabricação',
-    '4) Vendas — em andamento',
+    '1) Separação — pendente hoje',
+    '2) Separação de Bags — pendente hoje',
+    '3) Produção de Fardos',
+    '4) Entrega de Fardos — em andamento',
   ];
   if (settings.attendant) lines.push('5) Falar com um atendente');
   lines.push('', 'Responda com o número da opção. Digite *menu* a qualquer momento para voltar aqui.');
@@ -26,7 +26,7 @@ export async function renderBotMenu(root, token) {
       <form class="card stack" id="bot-menu-form">
         <div class="card-head">
           <h2>Menu numerado no WhatsApp</h2>
-          <p class="muted">Abre cada atendimento com opções numeradas (Compras, Inventário, Fabricação, Vendas) montadas a partir dos padrões do Forms ligados ao contato. No horário padrão, o Bot envia só este menu — não os formulários — e o contato escolhe o que preencher. Se o contato chamar por conta própria, o menu aparece direto. Dentro do formulário, a coleta continua igual.</p>
+          <p class="muted">Abre cada atendimento com os nomes dos padrões do Forms ligados ao contato. No horário padrão, o Bot envia só este menu — não os formulários — e o contato escolhe o que preencher. Se o contato chamar por conta própria, o menu aparece direto. Dentro do formulário, a coleta continua igual.</p>
         </div>
         <label class="check"><input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}/> Menu ativo</label>
         <div class="grid-2">
@@ -67,7 +67,7 @@ export async function renderBotMenu(root, token) {
       <section class="card stack">
         <div class="card-head">
           <h2>Prévia</h2>
-          <p class="muted">Exemplo de abertura para um contato com padrões de Compras, Inventário, Fabricação e Vendas.</p>
+          <p class="muted">Exemplo de abertura: cada opção é o nome do padrão, não o da tela.</p>
         </div>
         <pre id="bot-menu-preview">${escapeHtml(previewText(settings))}</pre>
       </section>

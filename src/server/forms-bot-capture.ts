@@ -18,6 +18,8 @@ import {
   isLinesMoreDoneAnswer,
   isMarkedNewValue,
   isQuantityOnly,
+  linesProductAwaitingQuantity,
+  markPendingProduct,
   mentionsNoMoreLines,
   parseQtyProductChunks,
   unmarkNewValue,
@@ -103,9 +105,25 @@ export function tryFormsLinesCapture(input: {
     return accepted;
   }
 
+  // “3” escolheu SUCATA DE FERRO e o bot perguntou a quantidade → “20 kg”.
+  const savedLines = linesQ
+    ? String(input.alreadySaved.find((row) => row.question_id === linesQ.id)?.answer_text || '')
+    : '';
+  const chosenProduct = linesProductAwaitingQuantity(savedLines);
+  const linesAsked = pending ? pendingField === FORMS_BOT_LINES_FIELD : missing[0]?.id === linesQ?.id;
+  // Também quando o bot pulou para “Mais produtos?” sem ter gravado a quantidade.
+  if (!askingOtherField && linesQ && chosenProduct && isQuantityOnly(input.inbound)) {
+    return [
+      {
+        questionId: linesQ.id,
+        text: JSON.stringify([{ product: chosenProduct, quantity: input.inbound.trim() }]),
+        type: 'text',
+      },
+    ];
+  }
+
   // “Qtd de ABACATE?” → “50”: produto vem do padrão, só a quantidade é do usuário.
   const fixedProduct = fixedLinesProduct(linesQ);
-  const linesAsked = pending ? pendingField === FORMS_BOT_LINES_FIELD : missing[0]?.id === linesQ?.id;
   if (linesQ && fixedProduct && linesAsked && isQuantityOnly(input.inbound)) {
     return [
       {
@@ -131,6 +149,13 @@ export async function missingPromptFor(
 ): Promise<string> {
   if (!missing.length) return '';
   if (isFormsBotQuestionnaire(questionnaire)) {
+    const waitingProduct =
+      String(missing[0]?.export_field || '').trim() === FORMS_BOT_LINES_FIELD
+        ? linesProductAwaitingQuantity(
+            String(answers.find((row) => row.question_id === missing[0]?.id)?.answer_text || ''),
+          )
+        : '';
+    if (waitingProduct) return `Qual a quantidade de ${waitingProduct}?`;
     const pendingNew = markedAnswerFor(missing[0], answers);
     if (pendingNew) return newValuePrompt(questionnaire, missing[0], pendingNew);
     if (isConfirmQuestion(missing[0])) return confirmPromptText(questionnaire.questions, answers);
@@ -317,11 +342,19 @@ export async function tryFormsBotCapture(input: {
     pendingQuestionId,
   });
   if (catalogIndex) {
+    const question = input.questions.find((item) => item.id === catalogIndex.questionId);
+    const linesPick = String(question?.export_field || '').trim() === FORMS_BOT_LINES_FIELD;
     return {
       kind: 'answers',
-      accepted: [{ questionId: catalogIndex.questionId, text: catalogIndex.value, type: 'text' }],
+      accepted: [
+        {
+          questionId: catalogIndex.questionId,
+          text: linesPick ? markPendingProduct(catalogIndex.value) : catalogIndex.value,
+          type: 'text',
+        },
+      ],
       summary: catalogIndex.value,
-      detail: 'catálogo Forms por número',
+      detail: linesPick ? 'produto aguardando quantidade' : 'catálogo Forms por número',
     };
   }
   if (forceCatalogIndex) {
@@ -337,6 +370,25 @@ export async function tryFormsBotCapture(input: {
       pendingQuestionId:
         questionIdForCatalogList(input.questionnaire, again) ||
         promptQuestionId(missingQuestions(input.questions, input.alreadySaved)),
+    };
+  }
+
+  const linesQuestion = input.questions.find(
+    (item) => String(item.export_field || '').trim() === FORMS_BOT_LINES_FIELD,
+  );
+  const waitingProduct = linesProductAwaitingQuantity(
+    String(input.alreadySaved.find((row) => row.question_id === linesQuestion?.id)?.answer_text || ''),
+  );
+  const askedField = String(
+    input.questions.find((item) => item.id === pendingQuestionId)?.export_field || '',
+  ).trim();
+  const askingLines =
+    !askedField || askedField === FORMS_BOT_LINES_FIELD || askedField === FORMS_BOT_LINES_MORE_FIELD;
+  if (linesQuestion && waitingProduct && askingLines && isLinesMoreDoneAnswer(input.inbound)) {
+    return {
+      kind: 'reask',
+      text: `Ainda falta a quantidade de ${waitingProduct}.`,
+      pendingQuestionId: linesQuestion.id,
     };
   }
 

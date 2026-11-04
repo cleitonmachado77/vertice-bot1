@@ -205,6 +205,14 @@ export async function draftQuestionnaireReply(input: {
       promptQuestionId(persisted.missing),
       `agente: atalho Forms (${captured.detail})`,
     );
+    if (captured.detail === 'produto aguardando quantidade' && captured.summary) {
+      return {
+        text: [`Anotei o produto ${captured.summary}. Qual a quantidade?`, notice].filter(Boolean).join('\n\n'),
+        source: 'fallback',
+        detail: captured.detail,
+        completed: false,
+      };
+    }
     // Valor fora do catálogo não foi “anotado” ainda: o próximo prompt pergunta se é novo.
     const summary = persisted.pendingNew.length
       ? acceptedSummary(captured.accepted, persisted.pendingNew)

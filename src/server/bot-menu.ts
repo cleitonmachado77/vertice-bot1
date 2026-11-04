@@ -1,8 +1,10 @@
+import { completeChat } from './agent.js';
 import { getSetting, many, one, run } from './db.js';
 import { KIND_LABELS, isFormKind } from './forms-fields.js';
 import {
   buildFormsBotAgendaItems,
   formatFormsBotAgendaIntro,
+  outboundOffersFormsAgenda,
   unskipFormsBotQuestionnaire,
 } from './forms-bot-agenda.js';
 import { formsAnswersSummary } from './forms-bot-closing.js';
@@ -11,8 +13,11 @@ import {
   buildKindMenu,
   buildMainMenu,
   formatMenu,
+  isBotAsking,
+  isContactOpener,
+  isLikelyFormAnswer,
   isMenuKeyword,
-  isNewMenuSession,
+  parseMenuDecision,
   isShortMenuReply,
   matchMenuOption,
   menuGreeting,
@@ -72,6 +77,8 @@ type MenuInput = {
   mediaUrl: string;
   date: string;
   minutes: number;
+  /** Última mensagem do bot, para saber se o usuário está respondendo ou chamando. */
+  lastBotText?: string;
 };
 
 export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
@@ -100,14 +107,30 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
 
   if (isMenuKeyword(input.inbound)) return showMain();
 
-  const state = await readMenuState(input.conversationId, input.contactId);
+  const lastBotText = input.lastBotText || '';
+  const agendaOffer = outboundOffersFormsAgenda(lastBotText);
+  const answering =
+    isLikelyFormAnswer(input.inbound, lastBotText) ||
+    (Boolean(input.inboundType !== 'text' && input.mediaUrl) && isBotAsking(lastBotText)) ||
+    (Boolean(payload) && isBotAsking(lastBotText) && /\d/.test(input.inbound));
+
+  const state = agendaOffer ? undefined : await readMenuState(input.conversationId, input.contactId);
+  if (agendaOffer) await clearMenuState(input.conversationId);
   if (state) {
     const option = matchMenuOption(input.inbound, state.node);
     if (option) return runOption(option, state.node, { input, forms, cycles, settings, showMain });
-    if (payload || (input.inboundType !== 'text' && input.mediaUrl)) {
-      await clearMenuState(input.conversationId);
-      return { handled: false, detail: 'menu: registro direto' };
-    }
+  }
+
+  // Resposta da pergunta que o bot fez: segue o formulário. O resto, se parte do usuário, abre o menu.
+  if (answering) {
+    if (state) await clearMenuState(input.conversationId);
+    return { handled: false, detail: 'menu: resposta do formulário' };
+  }
+
+  const showMenu = await userIsReachingAgent(input.inbound, lastBotText);
+  if (showMenu) return showMain('', true);
+
+  if (state) {
     if (isShortMenuReply(input.inbound)) {
       await saveMenuState(input.conversationId, state.node);
       return {
@@ -117,16 +140,43 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
       };
     }
     await clearMenuState(input.conversationId);
-    return { handled: false, detail: 'menu: pergunta livre' };
   }
+  return { handled: false, detail: 'menu: resposta do formulário' };
+}
 
-  const previousInboundAt = await previousInboundTime(input.conversationId, input.messageId);
-  if (!isNewMenuSession(previousInboundAt, Date.now(), settings.sessionHours)) return { handled: false };
-  if (payload) return { handled: false, detail: 'menu: registro direto' };
-  if (answeringRecentPrompt(cycles, settings.sessionHours)) {
-    return { handled: false, detail: 'menu: formulário em andamento' };
+/**
+ * O modelo entende se a pessoa está chamando o agente (qualquer frase)
+ * ou só respondendo a pergunta pendente.
+ * Sem modelo: saudação e fala solta abrem o menu; pergunta pendente ambígua não.
+ */
+async function userIsReachingAgent(inbound: string, lastBotText: string): Promise<boolean> {
+  if (isContactOpener(inbound)) return true;
+  if (!isBotAsking(lastBotText)) return true;
+  if (getSetting('agent_active') !== '1' || !getSetting('agent_api_key')) return false;
+  try {
+    const raw = await completeChat(
+      [
+        {
+          role: 'system',
+          content: [
+            'Você decide se o menu de formulários deve aparecer.',
+            'A pessoa tem formulários disponíveis. Se a mensagem PARTE DELA — ela chama o agente, cumprimenta de qualquer jeito, pede ajuda, quer começar, mudar de assunto ou conversar — o menu aparece.',
+            'Se a mensagem RESPONDE o que o bot acabou de perguntar (número, quantidade, produto, sim/não, correção do que foi pedido), o menu não aparece.',
+            'Responda só JSON: {"menu": true} ou {"menu": false}.',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: `Última mensagem do bot:\n${lastBotText.slice(0, 800)}\n\nMensagem do usuário:\n${inbound.slice(0, 500)}`,
+        },
+      ],
+      { temperature: 0, timeoutMs: 12_000, maxTokens: 40 },
+    );
+    const decision = parseMenuDecision(raw);
+    return decision === true;
+  } catch {
+    return false;
   }
-  return showMain('', true);
 }
 
 /**
@@ -250,18 +300,6 @@ async function showNode(conversationId: string, node: MenuNode): Promise<BotMenu
   return { handled: true, text: formatMenu(node), detail: `menu: ${node.node}` };
 }
 
-/** Respondendo um lembrete/pergunta recente de um formulário já começado: não interrompe com menu. */
-function answeringRecentPrompt(cycles: MenuCycle[], gapHours: number): boolean {
-  const cutoff = Date.now() - gapHours * 3_600_000;
-  return cycles.some(
-    (cycle) =>
-      cycle.status === 'in_progress' &&
-      cycle.answers > 0 &&
-      Number.isFinite(Date.parse(cycle.lastPromptedAt)) &&
-      Date.parse(cycle.lastPromptedAt) >= cutoff,
-  );
-}
-
 async function openCycleContext(
   questionnaireId: string,
   contactId: string,
@@ -315,16 +353,6 @@ function menuStatus(status: string): MenuCycleStatus {
   if (status === 'in_progress') return 'in_progress';
   if (status === 'notified' || status === 'delivery_unknown') return 'notified';
   return 'open';
-}
-
-async function previousInboundTime(conversationId: string, messageId: string): Promise<string> {
-  const row = await one<{ created_at: string }>(
-    `SELECT created_at FROM messages
-     WHERE conversation_id = $1 AND direction = 'INBOUND' AND id <> $2
-     ORDER BY created_at DESC LIMIT 1`,
-    [conversationId, messageId],
-  );
-  return row?.created_at || '';
 }
 
 async function readMenuState(conversationId: string, contactId: string): Promise<MenuState | undefined> {

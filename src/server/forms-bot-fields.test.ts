@@ -4,6 +4,9 @@ import {
   hasExplicitUnit,
   isLinesMoreDoneAnswer,
   isUsableLinesMoreAnswer,
+  linesAnswerHasQuantity,
+  linesProductAwaitingQuantity,
+  markPendingProduct,
   mentionsNoMoreLines,
   parseQtyProductChunks,
   quantityNumber,
@@ -34,6 +37,25 @@ test('parseQtyProductChunks — quantidade antes ou depois do produto', () => {
   assert.deepEqual(parseQtyProductChunks('Recebi 60 kg'), []);
   assert.deepEqual(parseQtyProductChunks('3'), []);
   assert.deepEqual(parseQtyProductChunks('1'), []);
+});
+
+test('nome de produto sem quantidade não fecha a linha', () => {
+  assert.equal(linesAnswerHasQuantity('SUCATA DE FERRO'), false);
+  assert.equal(linesAnswerHasQuantity(markPendingProduct('SUCATA DE FERRO')), false);
+  assert.equal(linesAnswerHasQuantity('[{"product":"SUCATA DE FERRO","quantity":"20 kg"}]'), true);
+  assert.equal(linesProductAwaitingQuantity('SUCATA DE FERRO'), 'SUCATA DE FERRO');
+  assert.equal(linesProductAwaitingQuantity(markPendingProduct('SUCATA DE FERRO')), 'SUCATA DE FERRO');
+  assert.equal(linesProductAwaitingQuantity('[{"product":"SUCATA DE FERRO","quantity":"20 kg"}]'), '');
+  const lines = {
+    id: 'l',
+    questionnaire_id: 'q',
+    body: 'Produtos?',
+    expected_type: 'any' as const,
+    export_field: '__lines__',
+    sort_order: 1,
+  };
+  assert.equal(isUsableAnswerForQuestion(lines, 'SUCATA DE FERRO'), false);
+  assert.equal(isUsableAnswerForQuestion(lines, '[{"product":"SUCATA DE FERRO","quantity":"20 kg"}]'), true);
 });
 
 test('isLinesMoreDoneAnswer aceita variações naturais de “não”', () => {
