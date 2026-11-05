@@ -1,6 +1,5 @@
 import { getSetting, many, run, setSetting } from './db.js';
 import { minutesFromClock } from './clock.js';
-import { hasExplicitUnit, parseQtyProductChunks } from './forms-bot-fields.js';
 import { KIND_LABELS, isFormKind, type FormKind } from './forms-fields.js';
 import { runsOnWeekday } from './plans.js';
 import {
@@ -42,22 +41,6 @@ const KIND_ORDER: Record<FormKind, number> = {
   sale: 2,
   product: 3,
 };
-
-// “fornecedor”, “cliente” e “produto” são nomes de CAMPO do questionário
-// (ex.: “já respondi o fornecedor”) — nunca sinônimo de tipo de formulário.
-const KIND_ALIASES: Array<{ kind: FormKind; patterns: RegExp[] }> = [
-  { kind: 'purchase', patterns: [/\bcompras?\b/, /\bpurchase\b/] },
-  { kind: 'sale', patterns: [/\bvendas?\b/, /\bsale\b/] },
-  // “fardos” fica de fora: aparece nas respostas (“3 fardos de PET”) e roubaria a captura.
-  { kind: 'production', patterns: [/\bfabricacao\b/, /\bprensagem\b/, /\bprensa(do|dos|r)?\b/] },
-  {
-    kind: 'product',
-    patterns: [/\binventario\b/, /\bestoque\b/, /\bproducao\b/, /\bproduct\b/],
-  },
-];
-
-const FORM_MENTION_RE =
-  /\b(questionario|formulario|inventario|estoque|producao|fabricacao|prensagem|vendas?|compras?)\b/;
 
 export function isFormsBotQuestionnaire(
   questionnaire: Pick<Questionnaire, 'id' | 'sourcePresetId'>,
@@ -130,79 +113,32 @@ export function remainingFormsBotAgendaItems(items: FormsBotAgendaItem[]): Forms
   return items.filter((item) => item.status === 'pending' || item.status === 'in_progress');
 }
 
+/** Palavra no meio do formulário não troca de padrão. A oferta aberta trata o número em parseFormsBotAgendaIntent. */
 export function looksLikeFormsBotAgendaMeta(
-  inbound: string,
-  options: { awaitingOffer?: boolean } = {},
+  _inbound: string,
+  _options: { awaitingOffer?: boolean } = {},
 ): boolean {
-  const folded = fold(inbound);
-  if (!folded) return false;
-  // sim/não curtos só contam na oferta entre formulários (evita roubar “mais produtos?”).
-  if (
-    /^(nao|n|agora nao|por hoje|so isso|somente isso|apenas isso|obrigado|valeu|ok|sim|pode|vamos|quero)$/.test(
-      folded,
-    )
-  ) {
-    return Boolean(options.awaitingOffer);
-  }
-  // “já respondi o fornecedor”, “não tem mais” (em “Mais produtos?”) falam de um CAMPO,
-  // não da agenda. Só é meta quando cita pular/outro ou um formulário/tipo.
-  return /\b(pular|pule|pulando|outra|outro)\b/.test(folded) || FORM_MENTION_RE.test(folded);
+  return false;
 }
 
+/** Oferta aberta: um padrão pede 1 (seguir) ou 2 (encerrar); vários padrões pedem o número da lista. */
 export function parseFormsBotAgendaIntent(
   inbound: string,
   agenda: FormsBotAgendaItem[],
   options: { awaitingOffer?: boolean } = {},
 ): FormsBotAgendaIntent {
   const folded = fold(inbound);
-  if (!folded || !agenda.length) return { action: 'none' };
-
-  const selectable = agenda.filter((item) => item.status !== 'completed');
+  if (!/^\d{1,2}$/.test(folded) || !agenda.length) return { action: 'none' };
+  const choice = Number(folded);
   const remaining = remainingFormsBotAgendaItems(agenda);
+  const pool = options.awaitingOffer ? remaining : agenda.filter((item) => item.status !== 'completed');
 
-  if (options.awaitingOffer) {
-    if (isDeclineOffer(folded)) return { action: 'decline_offer' };
-    if (isAcceptOffer(folded)) return { action: 'accept_offer' };
+  if (options.awaitingOffer && remaining.length === 1) {
+    if (choice === 1) return { action: 'accept_offer' };
+    if (choice === 2) return { action: 'decline_offer' };
+    return { action: 'none' };
   }
-
-  const ordinal = Number(/(?:^|\s)(\d+)(?:\s|$)/.exec(folded)?.[1] || 0);
-  const ordinalPool = options.awaitingOffer ? remaining : selectable;
-  if (ordinal >= 1 && ordinal <= ordinalPool.length) {
-    return { action: 'select', item: ordinalPool[ordinal - 1] };
-  }
-
-  const compound = parseCompoundAgendaIntent(folded, selectable);
-  if (compound) return compound;
-
-  const mentioned = matchAgendaItemsByText(folded, selectable);
-  const skipMentioned = mentioned.filter((item) => item.status !== 'completed');
-  const wantsSkip = isSkipPhrase(folded);
-  const wantsOnly = /\b(so|somente|apenas)\b/.test(folded) && mentioned.length === 1;
-
-  if (wantsOnly && mentioned[0]) {
-    const skipOthers = selectable.filter(
-      (item) => item.questionnaireId !== mentioned[0].questionnaireId && item.status !== 'completed',
-    );
-    return { action: 'select', item: mentioned[0], alsoSkip: skipOthers };
-  }
-
-  if (wantsSkip && skipMentioned.length === 1) {
-    return { action: 'skip', item: skipMentioned[0] };
-  }
-  if (wantsSkip && skipMentioned.length > 1) {
-    return { action: 'skip_many', items: skipMentioned };
-  }
-  if (wantsSkip && !skipMentioned.length && remaining.length === 1 && options.awaitingOffer) {
-    return { action: 'decline_offer' };
-  }
-
-  if (mentioned.length === 1 && !wantsSkip) {
-    return { action: 'select', item: mentioned[0] };
-  }
-
-  if (options.awaitingOffer && isDeclineOffer(folded)) return { action: 'decline_offer' };
-  if (options.awaitingOffer && isAcceptOffer(folded)) return { action: 'accept_offer' };
-
+  if (choice >= 1 && choice <= pool.length) return { action: 'select', item: pool[choice - 1] };
   return { action: 'none' };
 }
 
@@ -217,13 +153,15 @@ export function formatFormsBotAgendaOffer(remaining: FormsBotAgendaItem[]): stri
   if (remaining.length === 1) {
     return [
       `Quer seguir com “${remaining[0].label}”?`,
-      'Responda sim, não, ou diga se prefere pular (ex.: “hoje não tem inventário”).',
+      '1) Sim, seguir',
+      '2) Não, encerrar',
+      'Digite o número da opção.',
     ].join('\n');
   }
   return [
     'Ainda posso registrar hoje:',
     ...remaining.map((item, index) => `${index + 1}) ${item.label}`),
-    'Responda o número, o nome, ou diga se prefere pular algum.',
+    'Digite o número da opção.',
   ].join('\n');
 }
 
@@ -455,10 +393,6 @@ export async function applyFormsBotAgendaIntent(input: {
 
   if (intent.action === 'none') {
     if (!input.awaitingOffer) return { handled: false };
-    // “20 kg de banana” ainda é item do formulário, não escolha da lista.
-    if (hasExplicitUnit(input.inbound) || parseQtyProductChunks(input.inbound).length > 0) {
-      return { handled: false };
-    }
     const remaining = remainingFormsBotAgendaItems(agenda);
     if (input.conversationId && remaining.length) {
       await setConversationCycleCandidates(
@@ -582,92 +516,6 @@ async function clearAwaitingSelection(conversationId: string): Promise<void> {
      WHERE conversation_id = $1`,
     [conversationId, new Date().toISOString()],
   );
-}
-
-function matchAgendaItemsByText(
-  folded: string,
-  items: FormsBotAgendaItem[],
-): FormsBotAgendaItem[] {
-  const byName = items.filter((item) => {
-    const label = fold(item.label);
-    const name = fold(item.name);
-    return (label && folded.includes(label)) || (name && folded.includes(name));
-  });
-  if (byName.length) return byName;
-
-  const byKind: FormsBotAgendaItem[] = [];
-  for (const alias of KIND_ALIASES) {
-    if (!alias.patterns.some((pattern) => pattern.test(folded))) continue;
-    byKind.push(...items.filter((item) => item.kind === alias.kind));
-  }
-  return uniqueItems(byKind);
-}
-
-/** Ex.: “respondi compras, vou responder vendas” ou “hoje só inventário”. */
-function parseCompoundAgendaIntent(
-  folded: string,
-  selectable: FormsBotAgendaItem[],
-): FormsBotAgendaIntent | undefined {
-  const selectMatch =
-    /\b(?:vou|quero|vamos)\s+responder\s+(.+)$/.exec(folded) ||
-    /\bresponder\s+(.+)$/.exec(folded);
-  if (selectMatch) {
-    const selectPart = fold(selectMatch[1] || '');
-    const selectItems = matchAgendaItemsByText(selectPart, selectable);
-    if (selectItems.length === 1) {
-      const alreadyDonePart = folded.slice(0, selectMatch.index);
-      const skipItems = matchAgendaItemsByText(alreadyDonePart, selectable).filter(
-        (item) =>
-          item.questionnaireId !== selectItems[0].questionnaireId &&
-          (/\b(ja )?respondi\b/.test(alreadyDonePart) ||
-            isSkipPhrase(alreadyDonePart) ||
-            /\bnao\b/.test(alreadyDonePart)),
-      );
-      return {
-        action: 'select',
-        item: selectItems[0],
-        alsoSkip: skipItems,
-      };
-    }
-  }
-
-  if (/\b(ja )?respondi\b/.test(folded)) {
-    const mentioned = matchAgendaItemsByText(folded, selectable);
-    if (mentioned.length === 1) return { action: 'skip', item: mentioned[0] };
-  }
-  return undefined;
-}
-
-function isSkipPhrase(folded: string): boolean {
-  return (
-    /\b(pular|pule|pulando)\b/.test(folded) ||
-    /\b(hoje )?nao (tem|terei|vamos|preciso|quero|terei)\b/.test(folded) ||
-    /\bnao temos\b/.test(folded) ||
-    /\bsem (novos? )?registros?\b/.test(folded) ||
-    /\bsem novidade\b/.test(folded) ||
-    /\b(ja )?respondi\b/.test(folded)
-  );
-}
-
-function isDeclineOffer(folded: string): boolean {
-  return /^(nao|n|agora nao|por hoje|por hoje (e|eh) so|so isso|somente isso|apenas isso|obrigado|valeu|depois)$/.test(
-    folded,
-  );
-}
-
-function isAcceptOffer(folded: string): boolean {
-  return /^(sim|s|pode|vamos|quero|ok|certo|bora|isso)$/.test(folded);
-}
-
-function uniqueItems(items: FormsBotAgendaItem[]): FormsBotAgendaItem[] {
-  const seen = new Set<string>();
-  const out: FormsBotAgendaItem[] = [];
-  for (const item of items) {
-    if (seen.has(item.questionnaireId)) continue;
-    seen.add(item.questionnaireId);
-    out.push(item);
-  }
-  return out;
 }
 
 function fold(value: string): string {

@@ -132,15 +132,8 @@ export function buildContextBrief(input: {
     }
   }
 
-  if (input.hints.pendingPreviousDays.length) {
-    lines.push('');
-    lines.push('Atenção — dias anteriores ainda incompletos:');
-    for (const day of input.hints.pendingPreviousDays) {
-      lines.push(
-        `- ${day.label} (“${day.questionnaireName}”, ${day.status}): faltam ${day.missingCount} pergunta(s). Avise o usuário.`,
-      );
-    }
-  }
+  lines.push('');
+  lines.push('Não cite dias anteriores incompletos na resposta ao contato.');
 
   if (input.hints.likelyQuestionnaireAck) {
     lines.push('');
@@ -193,14 +186,9 @@ export async function buildConversationContextPack(input: {
   };
 }
 
-/** Aviso curto para anexar na reply quando há dias anteriores faltando. */
-export function pendingPreviousDaysNotice(hints: ConversationHints): string {
-  if (!hints.pendingPreviousDays.length) return '';
-  const labels = hints.pendingPreviousDays.map((item) => item.label);
-  if (labels.length === 1) {
-    return `Obs.: ainda falta concluir o questionário de ${labels[0]}.`;
-  }
-  return `Obs.: ainda faltam questionários de ${labels.join(', ')}.`;
+/** Datas antigas ficam no histórico interno. A resposta do WhatsApp não lista esses dias. */
+export function pendingPreviousDaysNotice(_hints: ConversationHints): string {
+  return '';
 }
 
 /** Datas ISO dos últimos N dias a partir de today (inclui today). */

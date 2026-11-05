@@ -146,8 +146,7 @@ test('pendingDaysFromCycles lista dias anteriores incompletos', () => {
     hasPendingQuestionnaire: true,
     pendingPreviousDays: pending,
   });
-  assert.match(notice, /18\/10\/2026/);
-  assert.match(notice, /17\/10\/2026/);
+  assert.equal(notice, '');
 });
 
 test('buildConversationHints e contextBrief incluem hint de ack', () => {
@@ -179,7 +178,8 @@ test('buildConversationHints e contextBrief incluem hint de ack', () => {
   });
   assert.match(brief, /confirmação curta/i);
   assert.match(brief, /18\/10\/2026/);
-  assert.match(brief, /dias anteriores ainda incompletos/i);
+  assert.doesNotMatch(brief, /dias anteriores ainda incompletos/i);
+  assert.match(brief, /Não cite dias anteriores incompletos/);
 });
 
 test('encerramento real não gera likelyQuestionnaireAck', () => {

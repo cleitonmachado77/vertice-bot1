@@ -108,13 +108,15 @@ test('resumo e mensagens', () => {
   );
 });
 
-test('confirmação: “sim” registra, “corrigir” pede o ajuste, outra pergunta pendente não conta', () => {
+test('confirmação: 1 registra, 2 pede o ajuste, palavra não confirma', () => {
   const saved = [vendor, lines, answer('m', 'não')];
-  const yes = tryConfirmCapture({ inbound: 'sim', questions: withConfirm, alreadySaved: saved, pendingQuestionId: 'c' });
+  const yes = tryConfirmCapture({ inbound: '1', questions: withConfirm, alreadySaved: saved, pendingQuestionId: 'c' });
   assert.deepEqual(yes, { kind: 'yes', accepted: [{ questionId: 'c', text: 'sim', type: 'text' }] });
-  const fix = tryConfirmCapture({ inbound: 'corrigir', questions: withConfirm, alreadySaved: saved, pendingQuestionId: 'c' });
+  const fix = tryConfirmCapture({ inbound: '2', questions: withConfirm, alreadySaved: saved, pendingQuestionId: 'c' });
   assert.equal(fix?.kind, 'correct');
-  assert.equal(tryConfirmCapture({ inbound: 'sim', questions: withConfirm, alreadySaved: [vendor], pendingQuestionId: 'l' }), null);
+  assert.equal(tryConfirmCapture({ inbound: 'sim', questions: withConfirm, alreadySaved: saved, pendingQuestionId: 'c' }), null);
+  assert.equal(tryConfirmCapture({ inbound: 'corrigir', questions: withConfirm, alreadySaved: saved, pendingQuestionId: 'c' }), null);
+  assert.equal(tryConfirmCapture({ inbound: '1', questions: withConfirm, alreadySaved: [vendor], pendingQuestionId: 'l' }), null);
 });
 
 test('itens depois do encerramento entram em “Mais produtos?”', () => {

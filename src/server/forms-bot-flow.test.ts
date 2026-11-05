@@ -133,9 +133,10 @@ test('só a quantidade para o produto fixo do padrão', async () => {
   assert.deepEqual(plan.extra, [{ product: 'mandioca', quantity: '12' }]);
 });
 
-test('número do fornecedor e linhas na mesma mensagem', async () => {
+test('número do fornecedor e, na pergunta seguinte, as linhas', async () => {
   const answers = await runConversation([
-    { inbound: '3, 100 kg de manga e 20 de mandioca', pendingQuestionId: 'v' },
+    { inbound: '3', pendingQuestionId: 'v' },
+    { inbound: '100 kg de manga e 20 de mandioca', pendingQuestionId: 'l' },
     { inbound: 'nao', pendingQuestionId: 'm' },
   ]);
   assert.equal(answerFor(answers, 'v'), 'Marcio Luiz Pietsrzak');
@@ -155,15 +156,22 @@ test('número do fornecedor e linhas na mesma mensagem', async () => {
   ]);
 });
 
-test('“fornecedor 2, 50 kg de abacate” e “2 e 50 kg de abacate” gravam fornecedor e linha', async () => {
-  for (const inbound of ['fornecedor 2, 50 kg de abacate', '2 e 50 kg de abacate', 'Opção 2 - 50 kg de abacate']) {
-    const answers = await runConversation([{ inbound, pendingQuestionId: 'v' }]);
-    assert.equal(answerFor(answers, 'v'), 'Fornecedor Teste Vertice', inbound);
-    assert.deepEqual(JSON.parse(answerFor(answers, 'l')), [{ product: 'abacate', quantity: '50 kg' }], inbound);
+test('texto na lista numerada repete a lista em vez de gravar o nome', async () => {
+  for (const inbound of ['fornecedor teste vertice', 'fornecedor 2, 50 kg de abacate', '2 e 50 kg de abacate']) {
+    const captured = await tryFormsBotCapture({
+      inbound,
+      questionnaire,
+      questions,
+      alreadySaved: [],
+      history: [{ direction: 'OUTBOUND', text: invite }],
+      pendingQuestionId: 'v',
+    });
+    assert.equal(captured?.kind, 'reask', inbound);
+    assert.match(captured?.kind === 'reask' ? captured.text : '', /Digite o número da opção/);
   }
 });
 
-test('“4,5 kg de manga” é quantidade decimal, não fornecedor 4', async () => {
+test('“4,5 kg de manga” com a lista aberta pede o número, não vira fornecedor', async () => {
   const captured = await tryFormsBotCapture({
     inbound: '4,5 kg de manga',
     questionnaire,
@@ -172,8 +180,8 @@ test('“4,5 kg de manga” é quantidade decimal, não fornecedor 4', async () 
     history: [{ direction: 'OUTBOUND', text: invite }],
     pendingQuestionId: 'v',
   });
-  assert.equal(captured?.kind, 'answers');
-  assert.ok(captured?.kind === 'answers' && captured.accepted.every((item) => item.questionId !== 'v'));
+  assert.equal(captured?.kind, 'reask');
+  assert.match(captured?.kind === 'reask' ? captured.text : '', /escolha o número/i);
 });
 
 test('pergunta de linhas com produto fixo não mostra o catálogo de produtos', async () => {

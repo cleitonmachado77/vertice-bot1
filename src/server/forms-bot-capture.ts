@@ -3,6 +3,7 @@ import {
   buildFormsBotGuidedPrompt,
   buildFormsCatalogBrief,
   isFormsCatalogListAsk,
+  openCatalogListReply,
   parseCatalogListCursor,
   shouldForceCatalogIndexCapture,
   tryFormsCatalogListReply,
@@ -29,7 +30,9 @@ import { isFormKind } from './forms-fields.js';
 import {
   CONFIRM_CORRECTION_REPLY,
   confirmPromptText,
+  confirmQuestionAwaiting,
   describeLinesAnswer,
+  isConfirmCorrectionPrompt,
   isConfirmQuestion,
   tryConfirmCapture,
   tryLateLinesCapture,
@@ -208,7 +211,7 @@ async function newValuePrompt(
   const list = await buildFormsBotGuidedPrompt({ questionnaire, questions: [question] });
   return [
     `Não encontrei “${value}” entre os ${label === 'cliente' ? 'clientes' : 'fornecedores'} cadastrados.`,
-    `Se for um ${label} novo, responda *sim* para cadastrar. Se não, escolha na lista:`,
+    `Se for um ${label} novo, responda *sim* para cadastrar. Se não, escolha o número na lista:`,
     '',
     list,
   ].join('\n');
@@ -238,7 +241,7 @@ async function tryNewValueConfirm(input: {
     const text = isLinesField(target)
       ? `Certo! Então ${RESEND_LINES_HINT}.`
       : [
-          `Certo! Escolha o ${partnerLabel(target)} na lista ou digite o nome:`,
+          `Certo! Escolha o número do ${partnerLabel(target)} na lista:`,
           '',
           await buildFormsBotGuidedPrompt({ questionnaire: input.questionnaire, questions: [target] }),
         ].join('\n');
@@ -317,6 +320,25 @@ export async function tryFormsBotCapture(input: {
   }
   if (confirm?.kind === 'correct') {
     return { kind: 'reask', text: CONFIRM_CORRECTION_REPLY, pendingQuestionId: confirm.questionId };
+  }
+  const confirmQuestion = confirmQuestionAwaiting({ ...input, pendingQuestionId });
+  const lastBot = [...input.history].reverse().find((item) => item.direction === 'OUTBOUND')?.text || '';
+  if (confirmQuestion && !isConfirmCorrectionPrompt(lastBot)) {
+    return {
+      kind: 'reask',
+      text: confirmPromptText(input.questions, input.alreadySaved),
+      pendingQuestionId: confirmQuestion.id,
+    };
+  }
+  const listedAgain = openCatalogListReply({ inbound: input.inbound, history: input.history });
+  if (listedAgain) {
+    return {
+      kind: 'reask',
+      text: listedAgain,
+      pendingQuestionId:
+        questionIdForCatalogList(input.questionnaire, listedAgain) ||
+        promptQuestionId(missingQuestions(input.questions, input.alreadySaved)),
+    };
   }
   const late = tryLateLinesCapture(input);
   if (late) {

@@ -107,38 +107,18 @@ test('pickPrimaryFormsBotAgendaItem prioriza em andamento', () => {
   assert.equal(primary?.kind, 'sale');
 });
 
-test('parseFormsBotAgendaIntent entende só inventário e pular', () => {
+test('nome do padrão não escolhe a agenda; o número escolhe', () => {
   const agenda = [
     item({ id: '1', kind: 'purchase', name: 'Ademir - Compras', sendTime: '08:00' }),
     item({ id: '2', kind: 'sale', name: 'Vendas do Dia', sendTime: '18:00' }),
     item({ id: '3', kind: 'product', name: 'Produção do Dia', sendTime: '12:00' }),
   ];
-  const onlyInv = parseFormsBotAgendaIntent('hoje só inventário', agenda);
-  assert.equal(onlyInv.action, 'select');
-  if (onlyInv.action === 'select') {
-    assert.equal(onlyInv.item.kind, 'product');
-    assert.equal(onlyInv.alsoSkip?.length, 2);
-  }
-
-  const skip = parseFormsBotAgendaIntent('hoje não temos inventário', agenda);
-  assert.equal(skip.action, 'skip');
-  if (skip.action === 'skip') assert.equal(skip.item.kind, 'product');
-});
-
-test('parseFormsBotAgendaIntent entende respondi X vou responder Y', () => {
-  const agenda = [
-    item({ id: '1', kind: 'purchase', name: 'Ademir - Compras', sendTime: '08:00' }),
-    item({ id: '2', kind: 'sale', name: 'Vendas do Dia', sendTime: '18:00' }),
-  ];
-  const intent = parseFormsBotAgendaIntent(
-    'respondi compras, vou responder vendas',
-    agenda,
-  );
-  assert.equal(intent.action, 'select');
-  if (intent.action === 'select') {
-    assert.equal(intent.item.kind, 'sale');
-    assert.equal(intent.alsoSkip?.[0]?.kind, 'purchase');
-  }
+  assert.equal(parseFormsBotAgendaIntent('hoje só inventário', agenda).action, 'none');
+  assert.equal(parseFormsBotAgendaIntent('hoje não temos inventário', agenda).action, 'none');
+  assert.equal(parseFormsBotAgendaIntent('respondi compras, vou responder vendas', agenda).action, 'none');
+  const picked = parseFormsBotAgendaIntent('3', agenda, { awaitingOffer: true });
+  assert.equal(picked.action, 'select');
+  if (picked.action === 'select') assert.equal(picked.item.kind, 'product');
 });
 
 test('número na oferta escolhe o item da lista, não um formulário já fechado', () => {
@@ -156,14 +136,16 @@ test('número na oferta escolhe o item da lista, não um formulário já fechado
   assert.equal(outboundOffersFormsAgenda('Anotei o produto SUCATA DE FERRO. Qual a quantidade?'), false);
 });
 
-test('parseFormsBotAgendaIntent oferta sim/não', () => {
+test('oferta de um padrão aceita 1 e encerra com 2', () => {
   const agenda = [
     item({ id: '1', kind: 'sale', name: 'Vendas do Dia', sendTime: '18:00' }),
   ];
-  assert.equal(parseFormsBotAgendaIntent('sim', agenda, { awaitingOffer: true }).action, 'accept_offer');
-  assert.equal(parseFormsBotAgendaIntent('não', agenda, { awaitingOffer: true }).action, 'decline_offer');
+  assert.equal(parseFormsBotAgendaIntent('1', agenda, { awaitingOffer: true }).action, 'accept_offer');
+  assert.equal(parseFormsBotAgendaIntent('2', agenda, { awaitingOffer: true }).action, 'decline_offer');
+  assert.equal(parseFormsBotAgendaIntent('sim', agenda, { awaitingOffer: true }).action, 'none');
+  assert.equal(parseFormsBotAgendaIntent('sim, vamos', agenda, { awaitingOffer: true }).action, 'none');
   assert.equal(looksLikeFormsBotAgendaMeta('não'), false);
-  assert.equal(looksLikeFormsBotAgendaMeta('não', { awaitingOffer: true }), true);
+  assert.equal(looksLikeFormsBotAgendaMeta('pular vendas'), false);
 });
 
 test('“já respondi o fornecedor” fala de um campo — não pula o formulário', () => {
@@ -174,10 +156,7 @@ test('“já respondi o fornecedor” fala de um campo — não pula o formulár
   assert.equal(looksLikeFormsBotAgendaMeta('não tem mais'), false);
   assert.equal(looksLikeFormsBotAgendaMeta('não temos mais produtos para lançar'), false);
   assert.equal(parseFormsBotAgendaIntent('Já respondi o fornecedor', agenda).action, 'none');
-  // Meta de verdade continua funcionando.
-  assert.equal(looksLikeFormsBotAgendaMeta('já respondi compras'), true);
-  assert.equal(looksLikeFormsBotAgendaMeta('hoje não tem inventário'), true);
-  assert.equal(looksLikeFormsBotAgendaMeta('pular vendas'), true);
+  assert.equal(looksLikeFormsBotAgendaMeta('já respondi compras'), false);
 });
 
 test('formatFormsBotAgendaOffer lista pendentes', () => {
@@ -186,8 +165,9 @@ test('formatFormsBotAgendaOffer lista pendentes', () => {
     item({ id: '2', kind: 'sale', name: 'Vendas', sendTime: '18:00' }),
   ]);
   const text = formatFormsBotAgendaOffer(remaining);
-  assert.match(text, /Vendas/);
-  assert.match(text, /sim/i);
+  assert.match(text, /1\) Sim, seguir/);
+  assert.match(text, /2\) Não, encerrar/);
+  assert.match(text, /Digite o número da opção/);
 });
 
 test('buildFormsBotAgendaItems aplica skipped e completed', () => {

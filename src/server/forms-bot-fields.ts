@@ -3,9 +3,16 @@ import { headerFieldsFor, lineFieldsFor, type FormKind } from './forms-fields.js
 export const FORMS_BOT_LINES_FIELD = '__lines__';
 /** Confirmação: mais itens ou encerrar linhas do Forms Bot. */
 export const FORMS_BOT_LINES_MORE_FIELD = '__lines_more__';
-/** Confirmação final (“sim / corrigir”) quando o padrão pede revisão antes de registrar. */
+/** Confirmação final (1 confirmar, 2 corrigir) quando o padrão pede revisão antes de registrar. */
 export const FORMS_BOT_CONFIRM_FIELD = '__confirm__';
-export const CONFIRM_QUESTION_BODY = 'Confirma o registro? (sim / corrigir)';
+export const CONFIRM_QUESTION_BODY = ['1) Confirmar', '2) Corrigir', 'Digite o número da opção.'].join('\n');
+
+/** Mensagem que é só um número de opção. “2)” e “opção 2” não contam. */
+export function onlyOptionNumber(text: string): string {
+  const raw = String(text || '').trim();
+  if (!/^\d{1,3}$/.test(raw)) return '';
+  return String(Number(raw));
+}
 
 // Valor fora do catálogo (fornecedor/cliente/produto) aguardando “sim” do contato:
 // fica gravado com a marca e não conta como respondido, para não cadastrar lixo no Odoo.

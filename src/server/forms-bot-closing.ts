@@ -3,9 +3,8 @@ import {
   FORMS_BOT_CONFIRM_FIELD,
   FORMS_BOT_LINES_MORE_FIELD,
   hasExplicitUnit,
-  isConfirmCorrectionAnswer,
-  isConfirmYesAnswer,
   isLinesMoreDoneAnswer,
+  onlyOptionNumber,
   parseQtyProductChunks,
   pendingProductName,
   unmarkNewValue,
@@ -15,7 +14,7 @@ import { isCorrectionOrDeleteRequest } from './questionnaire-edits.js';
 import type { ExtractedAnswer } from './questionnaire-extraction.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
 
-// Encerramento do Forms Bot: resumo, confirmação “sim / corrigir” e itens que chegam depois.
+// Encerramento do Forms Bot: resumo, confirmação 1/2 e itens que chegam depois.
 
 const fieldOf = (question: QuestionnaireQuestion) => String(question.export_field || '').trim();
 
@@ -56,25 +55,40 @@ export function confirmPromptText(questions: QuestionnaireQuestion[], answers: C
 }
 
 export const CONFIRM_CORRECTION_REPLY =
-  'Certo! Me diga o que corrigir — ex.: “corrigir fornecedor para MUNICIPIO DE CAMBE” ou “corrigir manga para 30 kg”.';
+  'Certo! Me diga o que corrigir — ex.: “o fornecedor é MUNICIPIO DE CAMBE” ou “a manga é 30 kg”.';
 
-/** Resposta à confirmação: só quando ela é a pergunta da vez. */
+export function isConfirmCorrectionPrompt(text: string): boolean {
+  return String(text || '').includes('Me diga o que corrigir');
+}
+
+/** Confirmação é a pergunta da vez. A resposta guardada continua “sim”. */
+export function confirmQuestionAwaiting(input: {
+  questions: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+  pendingQuestionId?: string;
+}): QuestionnaireQuestion | null {
+  const missing = missingQuestions(input.questions, input.alreadySaved);
+  const confirm = missing.find(isConfirmQuestion);
+  if (!confirm) return null;
+  const pendingId = String(input.pendingQuestionId || '').trim();
+  const asked = pendingId ? pendingId === confirm.id : missing[0]?.id === confirm.id;
+  return asked ? confirm : null;
+}
+
+/** 1 confirma, 2 pede a correção. Qualquer outra frase repete a escolha. */
 export function tryConfirmCapture(input: {
   inbound: string;
   questions: QuestionnaireQuestion[];
   alreadySaved: CycleAnswer[];
   pendingQuestionId?: string;
 }): { kind: 'yes'; accepted: ExtractedAnswer[] } | { kind: 'correct'; questionId: string } | null {
-  const missing = missingQuestions(input.questions, input.alreadySaved);
-  const confirm = missing.find(isConfirmQuestion);
+  const confirm = confirmQuestionAwaiting(input);
   if (!confirm) return null;
-  const pendingId = String(input.pendingQuestionId || '').trim();
-  const asked = pendingId ? pendingId === confirm.id : missing[0]?.id === confirm.id;
-  if (!asked) return null;
-  if (isConfirmYesAnswer(input.inbound)) {
+  const choice = onlyOptionNumber(input.inbound);
+  if (choice === '1') {
     return { kind: 'yes', accepted: [{ questionId: confirm.id, text: 'sim', type: 'text' }] };
   }
-  if (isConfirmCorrectionAnswer(input.inbound)) return { kind: 'correct', questionId: confirm.id };
+  if (choice === '2') return { kind: 'correct', questionId: confirm.id };
   return null;
 }
 

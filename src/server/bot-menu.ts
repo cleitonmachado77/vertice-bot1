@@ -125,7 +125,7 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
     await saveMenuState(input.conversationId, state.node);
     return {
       handled: true,
-      text: formatMenu(state.node, { hint: 'Não entendi a opção.' }),
+      text: formatMenu(state.node, { hint: 'Digite o número da opção.' }),
       detail: 'menu: opção não reconhecida',
     };
   }

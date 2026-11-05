@@ -65,12 +65,13 @@ test('formatCatalogListPage pagina com numeração global e opção mais', () =>
   assert.match(page1, /^Fornecedor — escolha o número:/m);
   assert.match(page1, /^1\) Fornecedor 1$/m);
   assert.match(page1, new RegExp(`^${CATALOG_PAGE_SIZE}\\) Fornecedor ${CATALOG_PAGE_SIZE}$`, 'm'));
-  assert.match(page1, /Digite \*mais\* para ver 11–15/);
+  assert.match(page1, /0\) Ver mais \(11–15 de 15\)/);
+  assert.match(page1, /Digite o número da opção/);
   assert.equal(page1.includes('11)'), false);
 
   const page2 = formatCatalogListPage(vendor, options, CATALOG_PAGE_SIZE);
   assert.match(page2, /^11\) Fornecedor 11$/m);
-  assert.match(page2, /Fim da lista \(15\)/);
+  assert.match(page2, /0\) Voltar ao início/);
   assert.equal(isCatalogMoreAsk('mais'), true);
   assert.equal(isCatalogMoreAsk('ver mais'), true);
 });
@@ -94,7 +95,8 @@ test('parseCatalogListCursor não confunde “Mais produtos?” com campo produc
   assert.equal(cursor?.fieldKey, 'vendor');
   assert.equal(cursor?.offset, 0);
   assert.equal(extractCatalogIndexInbound('3'), '3');
-  assert.equal(extractCatalogIndexInbound('eu ja confirmei, é o fornecedor 3'), '3');
+  assert.equal(extractCatalogIndexInbound('eu ja confirmei, é o fornecedor 3'), null);
+  assert.equal(extractCatalogIndexInbound('0'), null);
   const options = optionsFromCatalogOutbound(invite);
   assert.equal(options.get(1), 'Associaçao Teste');
   assert.equal(options.get(3), 'Marcio Luiz Pietsrzak');

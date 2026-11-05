@@ -156,12 +156,11 @@ export function formatCatalogListPage(
   const parts = [`${field.label} — escolha o número:`, ...lines];
   if (end < options.length) {
     const nextEnd = Math.min(end + pageSize, options.length);
-    parts.push(`Digite *mais* para ver ${end + 1}–${nextEnd} (total ${options.length}).`);
+    parts.push(`0) Ver mais (${end + 1}–${nextEnd} de ${options.length})`);
   } else if (start > 0) {
-    parts.push(`Fim da lista (${options.length}). Digite *voltar* para o início, ou o nome.`);
-  } else {
-    parts.push('Responda com o número ou o nome.');
+    parts.push(`0) Voltar ao início`);
   }
+  parts.push('Digite o número da opção.');
   return parts.join('\n');
 }
 
@@ -186,7 +185,7 @@ export function parseCatalogListCursor(text: string): CatalogListCursor | null {
   if (!/\n\s*\d+\)/.test(listBlock)) return null;
   const folded = foldText(listBlock);
   const looksLikeList =
-    /escolha o numero|responda com o numero|digite \*mais\*|digite mais/.test(folded) ||
+    /escolha o numero|digite o numero da opcao|ver mais|voltar ao inicio|digite \*mais\*|digite mais/.test(folded) ||
     /^(fornecedor|cliente|produto)\b/.test(folded.trim()) ||
     /\n(fornecedor|cliente|produto)\s*[—\-:]/.test(`\n${folded}`);
   if (!looksLikeList) return null;
@@ -211,22 +210,11 @@ export function parseCatalogListCursor(text: string): CatalogListCursor | null {
   return { fieldKey, offset };
 }
 
-/** "3" ou "é o fornecedor 3" → índice. */
+/** A mensagem inteira é o número do item. 0 pagina a lista e não escolhe. */
 export function extractCatalogIndexInbound(inbound: string): string | null {
   const raw = String(inbound || '').trim();
-  if (/^\d{1,3}$/.test(raw)) return raw;
-  const folded = foldText(raw);
-  const match = folded.match(
-    /\b(?:fornecedor|cliente|produto|opcao|numero)\s*(\d{1,3})\b|\b(\d{1,3})\s*$/,
-  );
-  if (!match) return null;
-  if (
-    !/(fornecedor|cliente|produto|opcao|confirm|ja |escolh)/.test(folded) &&
-    !/^\d{1,3}$/.test(raw)
-  ) {
-    return null;
-  }
-  return match[1] || match[2] || null;
+  if (!/^\d{1,3}$/.test(raw) || raw === '0') return null;
+  return String(Number(raw));
 }
 
 /** Lista de produto do Forms Bot responde `__lines__` quando não há campo `product` separado. */
@@ -311,9 +299,11 @@ export function optionsFromCatalogOutbound(text: string): Map<number, string> {
   for (const line of block.split('\n')) {
     const match = /^\s*(\d{1,3})\)\s+(.+?)\s*$/.exec(line);
     if (!match) continue;
+    const index = Number(match[1]);
     const label = String(match[2] || '').trim();
-    if (!label || /digite|responda|escolha|total/i.test(label)) continue;
-    map.set(Number(match[1]), label);
+    if (index < 1 || !label || /^(ver mais|voltar ao início|voltar ao inicio)/i.test(label)) continue;
+    if (/digite|responda|escolha|total/i.test(label)) continue;
+    map.set(index, label);
   }
   return map;
 }
@@ -331,8 +321,7 @@ export async function tryFormsCatalogListReply(input: {
     ? catalogFieldsInQuestionnaire(kind, input.questionnaire.questions)
     : [];
 
-  const moreOrBack = isCatalogMoreAsk(folded) || isCatalogBackAsk(folded);
-  if (moreOrBack) {
+  if (folded === '0') {
     const listed = lastCatalogListOutbound(input.history || []);
     if (!listed) return null;
     const field =
@@ -344,12 +333,8 @@ export async function tryFormsCatalogListReply(input: {
           : VENDOR_FIELD);
     const kindForLookup: FormKind = kind || (field.key === 'customer' ? 'sale' : 'purchase');
     const options = await listCatalogOptionsForField(kindForLookup, field.key, companyId);
-    const nextOffset = isCatalogBackAsk(folded)
-      ? 0
-      : listed.cursor.offset + CATALOG_PAGE_SIZE;
-    if (isCatalogMoreAsk(folded) && nextOffset >= options.length) {
-      return formatCatalogListPage(field, options, Math.max(0, options.length - CATALOG_PAGE_SIZE));
-    }
+    const atEnd = listed.cursor.offset + CATALOG_PAGE_SIZE >= options.length;
+    const nextOffset = atEnd ? 0 : listed.cursor.offset + CATALOG_PAGE_SIZE;
     return formatCatalogListPage(field, options, nextOffset);
   }
 
@@ -363,6 +348,24 @@ export async function tryFormsCatalogListReply(input: {
   const kindForLookup: FormKind = kind || (field.key === 'customer' ? 'sale' : 'purchase');
   const options = await listCatalogOptionsForField(kindForLookup, field.key, companyId);
   return formatListReply(field, options, 0);
+}
+
+/**
+ * A última mensagem é uma lista numerada e o texto não é um número:
+ * repete a mesma página. 0 e o índice seguem nos outros atalhos.
+ */
+export function openCatalogListReply(input: {
+  inbound: string;
+  history?: { direction: string; text: string }[];
+}): string | null {
+  const raw = String(input.inbound || '').trim();
+  if (/^\d{1,3}$/.test(raw)) return null;
+  const last = lastOutboundText(input.history || []);
+  if (!parseCatalogListCursor(last)) return null;
+  const block = catalogListBlock(last).trim();
+  if (!block) return null;
+  if (block.includes('Digite o número da opção.')) return block;
+  return `${block}\nDigite o número da opção.`;
 }
 
 /**
@@ -536,7 +539,7 @@ export async function buildFormsCatalogBrief(questionnaire: Questionnaire): Prom
   return [
     'Catálogo Forms deste questionário (fonte oficial — USE ao listar opções):',
     ...lines,
-    'Se pedirem a lista/opções, responda com itens numerados desse catálogo (páginas de 10; “mais” / “voltar”).',
+    'Se pedirem a lista/opções, responda com itens numerados desse catálogo (páginas de 10; 0 vê a próxima página ou volta ao início). A escolha é só o número.',
     'NUNCA diga que não tem acesso à lista de fornecedores, clientes, produtos ou opções de catálogo.',
     'Pedido de lista NÃO é resposta: related:true, answers:[], complete:false.',
     'Não numere as perguntas do questionário com 1) 2) 3) no mesmo bloco da lista de opções — a numeração é só das opções.',

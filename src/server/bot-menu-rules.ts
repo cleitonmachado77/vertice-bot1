@@ -37,24 +37,6 @@ export type MenuCycle = {
 
 const KIND_ORDER: FormKind[] = ['purchase', 'product', 'production', 'sale'];
 
-const KIND_ALIASES: Record<FormKind, string[]> = {
-  purchase: ['compras', 'compra'],
-  product: ['inventario', 'estoque'],
-  production: ['fabricacao', 'prensagem'],
-  sale: ['vendas', 'venda'],
-};
-
-const ACTION_ALIASES: Partial<Record<MenuAction, string[]>> = {
-  human: ['atendente', 'humano', 'atendimento', 'pessoa'],
-  back: ['voltar', 'volta'],
-  register: ['registrar', 'responder', 'continuar', 'acrescentar', 'lancar'],
-  correct: ['corrigir', 'correcao', 'editar'],
-  view: ['ver', 'consultar', 'resumo'],
-};
-
-const YES_RE =
-  /^(sim|s|pode|posso|vamos|bora|ok|okay|claro|quero|certo|isso|manda)( (sim|pode|posso|vamos|la|ja|claro|agora|responder))*$/;
-
 export function foldMenuText(value: string): string {
   return String(value || '')
     .toLowerCase()
@@ -253,44 +235,17 @@ export function formatMenu(node: MenuNode, options: { greeting?: string; hint?: 
   if (back) lines.push(`0) ${back.label}`);
   const footer =
     node.node === 'main'
-      ? 'Responda com o número da opção. Digite *menu* a qualquer momento para voltar aqui.'
-      : 'Responda com o número da opção.';
+      ? 'Digite o número da opção. Digite *menu* a qualquer momento para voltar aqui.'
+      : 'Digite o número da opção.';
   const header = [options.greeting, node.title].filter(Boolean).join(' ');
   return [...(options.hint ? [options.hint] : []), header, '', ...lines, '', footer].join('\n');
 }
 
-/** Opção escolhida por número, nome ou “sim” (aceita o atalho do dia no menu principal). */
+/** A mensagem inteira é o número da opção. Nome, “sim” e “opção 3” não escolhem. */
 export function matchMenuOption(inbound: string, node: MenuNode): MenuOption | undefined {
   const folded = foldMenuText(inbound);
-  if (!folded) return undefined;
-
-  const number = /^(?:opcao\s*|op\s*|n\s*)?(\d{1,2})$/.exec(folded)?.[1];
-  if (number !== undefined) return node.options.find((option) => option.key === String(Number(number)));
-
-  const words = ` ${folded} `;
-  const hits = node.options.filter((option) => {
-    const aliases = [foldMenuText(option.label), ...optionAliases(option)].filter(Boolean);
-    return aliases.some((alias) => folded === alias || words.includes(` ${alias} `));
-  });
-  if (hits.length === 1) return hits[0];
-
-  // “sim” ao convite: abre o primeiro tipo pendente do dia.
-  if (node.node === 'main' && YES_RE.test(folded)) {
-    return node.options.find((option) => option.featured);
-  }
-  return undefined;
-}
-
-function optionAliases(option: MenuOption): string[] {
-  if (option.action === 'node' && option.target?.startsWith('kind:')) {
-    const kind = option.target.slice('kind:'.length);
-    return isFormKind(kind) ? [foldMenuText(KIND_LABELS[kind]), ...KIND_ALIASES[kind]] : [];
-  }
-  if (option.action === 'node' && option.target?.startsWith('form:')) {
-    const name = option.label.split(' — ')[0];
-    return name ? [foldMenuText(name)] : [];
-  }
-  return ACTION_ALIASES[option.action] || [];
+  if (!/^\d{1,2}$/.test(folded)) return undefined;
+  return node.options.find((option) => option.key === String(Number(folded)));
 }
 
 export function menuGreeting(contactName: string, minutes: number): string {

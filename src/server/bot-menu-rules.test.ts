@@ -74,20 +74,17 @@ test('estado do dia aparece no próprio padrão, sem duplicar opções', () => {
   );
 });
 
-test('“sim” abre o primeiro padrão pendente; nome do padrão e atendente casam por texto', () => {
+test('nome, sim e atendente por extenso não escolhem opção', () => {
   const cycles: MenuCycle[] = [
     { questionnaireId: 'forms-preset:p3', status: 'notified', answers: 0, lastPromptedAt: '' },
   ];
   const node = buildMainMenu({ forms, cycles, attendant: true, title: 'Menu' });
-  assert.equal(matchMenuOption('sim', node)?.target, 'form:forms-preset:p3');
-  assert.equal(matchMenuOption('pode sim', node)?.target, 'form:forms-preset:p3');
-  assert.equal(matchMenuOption('Bom, pode sim', node), undefined);
-  assert.equal(matchMenuOption('vendas do dia', node)?.target, 'form:forms-preset:p3');
-  assert.equal(matchMenuOption('feira', node)?.target, 'form:forms-preset:p4');
-  assert.equal(matchMenuOption('quero falar com atendente', node)?.action, 'human');
-
-  const nothingPending = buildMainMenu({ forms, cycles: none, attendant: true, title: 'Menu' });
-  assert.equal(matchMenuOption('sim', nothingPending), undefined);
+  assert.equal(matchMenuOption('sim', node), undefined);
+  assert.equal(matchMenuOption('pode sim', node), undefined);
+  assert.equal(matchMenuOption('vendas do dia', node), undefined);
+  assert.equal(matchMenuOption('feira', node), undefined);
+  assert.equal(matchMenuOption('quero falar com atendente', node), undefined);
+  assert.equal(matchMenuOption('5', node)?.action, 'human');
 });
 
 test('entra direto no formulário quando a única ação é registrar', () => {
@@ -105,7 +102,7 @@ test('número escolhe a opção; número inexistente não casa', () => {
   const node = buildMainMenu({ forms, cycles: none, attendant: true, title: 'Menu' });
   assert.equal(matchMenuOption('2', node)?.target, 'form:forms-preset:p2');
   assert.equal(matchMenuOption(' 2) ', node)?.target, 'form:forms-preset:p2');
-  assert.equal(matchMenuOption('opção 3', node)?.target, 'form:forms-preset:p3');
+  assert.equal(matchMenuOption('opção 3', node), undefined);
   assert.equal(matchMenuOption('9', node), undefined);
   assert.equal(matchMenuOption('50 kg de abacate', node), undefined);
 });
@@ -136,7 +133,8 @@ test('ações do formulário mudam com o estado do dia', () => {
     done.options.map((option) => option.action),
     ['register', 'correct', 'view', 'back'],
   );
-  assert.equal(matchMenuOption('corrigir', done)?.action, 'correct');
+  assert.equal(matchMenuOption('corrigir', done), undefined);
+  assert.equal(matchMenuOption('2', done)?.action, 'correct');
 
   const going = buildFormMenu(
     form,
@@ -153,7 +151,7 @@ test('formatação numerada com rodapé e “0) Voltar” no fim', () => {
   assert.equal(lines[0], 'Não entendi a opção.');
   assert.equal(lines[1], 'Vendas — escolha o formulário:');
   assert.equal(lines.at(-3), '0) Voltar');
-  assert.equal(lines.at(-1), 'Responda com o número da opção.');
+  assert.equal(lines.at(-1), 'Digite o número da opção.');
 
   const main = formatMenu(buildMainMenu({ forms, cycles: none, attendant: true, title: 'O que deseja?' }), {
     greeting: 'Bom dia, Cleiton!',
