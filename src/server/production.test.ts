@@ -123,8 +123,8 @@ test('padrão de Fabricação: pergunta a entrada (unidade do Odoo junto) e os p
     built.questions.map((item) => item.exportField),
     ['input_qty', FORMS_BOT_LINES_FIELD, FORMS_BOT_LINES_MORE_FIELD],
   );
-  assert.equal(built.questions[0].body, 'Quanto de Bag foi usado? (ex.: 2 bags ou 200 kg)');
-  assert.match(built.questions[1].body, /Quais produtos foram gerados/);
+  assert.equal(built.questions[0].body, 'Quanto de Bag foi usado? (ex.: 2 bags)');
+  assert.match(built.questions[1].body, /Quais fardos saíram/);
   assert.ok(!/Unidade/.test(built.questions[1].body));
   assert.match(built.questions[2].body, /Mais produtos gerados/);
   assert.equal(built.defaultValues.input_uom, 'Bag');
@@ -132,6 +132,39 @@ test('padrão de Fabricação: pergunta a entrada (unidade do Odoo junto) e os p
   const noUom = buildFormsBotQuestions(preset({ header: { input_product: 'Farinha' } }));
   assert.equal(noUom.questions[0].body, 'Quanto de Farinha foi usado? (ex.: 200 kg)');
   assert.ok(noUom.questions.every((item) => item.exportField !== 'input_uom'));
+});
+
+test('produto com nome fixo pergunta só a quantidade, sem peso', () => {
+  const built = buildFormsBotQuestions(
+    preset({
+      kind: 'product',
+      name: 'Separação de Bags',
+      header: { name: 'Bag', uom: 'Unidade', track_inventory: 'True' },
+      lines: [],
+      visible: { title: true, status: false, header: ['name', 'uom', 'qty_on_hand'], lines: [] },
+    }),
+  );
+  assert.deepEqual(
+    built.questions.map((item) => item.exportField),
+    ['qty_on_hand'],
+  );
+  assert.match(built.questions[0].body, /Quantas unidades de Bag/);
+  assert.doesNotMatch(built.questions[0].body, /kg/i);
+  assert.equal(built.defaultValues.name, 'Bag');
+});
+
+test('produto sem nome fixo continua pedindo o nome e não a quantidade', () => {
+  const built = buildFormsBotQuestions(
+    preset({
+      kind: 'product',
+      header: { name: '', uom: 'KG' },
+      visible: { title: true, status: false, header: ['name', 'uom', 'qty_on_hand'], lines: [] },
+    }),
+  );
+  assert.deepEqual(
+    built.questions.map((item) => item.exportField),
+    ['name'],
+  );
 });
 
 test('“PET 120 kg, papelão 60 kg” vira duas linhas de produto gerado', () => {

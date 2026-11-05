@@ -15,6 +15,7 @@ import {
   pushProductionToOdoo,
   type OdooStockProduct,
 } from './odoo-production.js';
+import { addBotStockCount } from './odoo-stock-count.js';
 import {
   findCategoryId,
   ensureIncomingPickingTypeId,
@@ -310,7 +311,9 @@ export async function pushProductToOdoo(doc: FormDocument): Promise<FormDocument
       odooId = await odooCreate('product.template', values);
     }
   }
-  return setDocOdooMeta(doc.id, odooId, {});
+  const saved = await setDocOdooMeta(doc.id, odooId, {});
+  await addBotStockCount(saved, odooId);
+  return (await getFormDocument(doc.id)) || saved;
 }
 
 async function taxLookupOptions(

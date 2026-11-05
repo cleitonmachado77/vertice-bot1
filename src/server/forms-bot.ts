@@ -62,17 +62,22 @@ import { hasOpenCustomerWindow } from './thread.js';
 
 export { FORMS_BOT_LINES_FIELD, formsBotQuestionnaireId, isFormsBotExportField } from './forms-bot-fields.js';
 
-/** “Bag” → “bags” (só para o exemplo da pergunta; o Odoo não tem plural). */
+/** “Bag” → “2 bags”. Unidade de contagem não sugere peso. */
 function uomExample(uom: string): string {
   const name = String(uom || '').trim().toLowerCase();
   if (!name || name === 'kg') return '200 kg';
-  return `2 ${name.endsWith('s') ? name : `${name}s`} ou 200 kg`;
+  const label = name.endsWith('s') ? name : `${name}s`;
+  return `2 ${label}`;
 }
 
 function questionBodyFor(field: FormField, preset: Pick<FormPreset, 'kind' | 'header'>): string {
   if (preset.kind === 'production' && field.key === 'input_qty') {
     const input = String(preset.header.input_product || '').trim() || 'produto de entrada';
     return `Quanto de ${input} foi usado? (ex.: ${uomExample(preset.header.input_uom || '')})`;
+  }
+  if (field.key === 'qty_on_hand') {
+    const product = String(preset.header.name || '').trim() || 'produto';
+    return `Quantas unidades de ${product}? (só o número, sem peso)`;
   }
   if (field.date) return `${field.label}? (dd/mm/aaaa)`;
   if (field.options?.length) {
@@ -98,7 +103,7 @@ function linesQuestionBody(
     return quantityOnlyLinesQuestion(productDefault);
   }
   if (kind === 'production') {
-    return 'Quais produtos foram gerados e quanto de cada? (ex.: produto A 120 kg, produto B 80 kg)';
+    return 'Quais fardos saíram e quantos de cada? (ex.: fardo de plástico 12, fardo de metal 4)';
   }
   if (productDefault && visibleLineKeys.includes('quantity')) {
     return `${hint}? (padrão: ${productDefault})`;
@@ -128,7 +133,10 @@ export function buildFormsBotQuestions(preset: FormPreset): {
   const questions: { id?: string; body: string; expectedType: string; exportField: string; fixedValue?: string }[] = [];
 
   for (const field of headerFieldsFor(preset.kind)) {
-    if (field.readonly) continue;
+    const fixedProduct = String(preset.header.name || '').trim();
+    const countOnHand =
+      preset.kind === 'product' && field.key === 'qty_on_hand' && Boolean(fixedProduct);
+    if (field.readonly && !countOnHand) continue;
     if (!visibleHeader.has(field.key)) continue;
     const presetValue = String(preset.header[field.key] || '').trim();
     if (presetValue) {
@@ -433,13 +441,11 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
      LIMIT 1`,
     [`%"source_cycle_id":"${cycleId}"%`],
   );
-  if (existingDoc && questionnaire.formKind === 'production') {
-    const current = await getFormDocument(existingDoc.id);
+  const previous = existingDoc ? await getFormDocument(existingDoc.id) : undefined;
+  if (previous && questionnaire.formKind === 'production' && isProductionLocked(previous)) {
     // Ordem concluída/cancelada não muda: a correção é “Desmontar” no Odoo + nova fabricação.
-    if (current && isProductionLocked(current)) {
-      console.warn(`forms-bot: fabricação ${current.id} já lançada no estoque — ciclo ${cycleId} não altera`);
-      return current;
-    }
+    console.warn(`forms-bot: fabricação ${previous.id} já lançada no estoque — ciclo ${cycleId} não altera`);
+    return previous;
   }
 
   const preset = await getFormPresetById(questionnaire.sourcePresetId);
@@ -486,6 +492,11 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     if (typed.uom) header.input_uom = typed.uom;
     header.production_date = header.production_date || cycle.occurrence_date;
   }
+  if (kind === 'product' && header.qty_on_hand) {
+    const typed = splitQuantityUnit(header.qty_on_hand);
+    if (typed.quantity) header.qty_on_hand = typed.quantity;
+  }
+  if (previous?.header.stock_applied) header.stock_applied = previous.header.stock_applied;
   header.source = 'bot';
   header.source_cycle_id = cycleId;
   header.source_preset_id = questionnaire.sourcePresetId;
