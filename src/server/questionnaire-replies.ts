@@ -122,6 +122,20 @@ export function editReply(contactName: string, action: EditAction): string {
   return name ? `Certo, ${name}! Registrei a alteração, obrigado.` : 'Certo! Registrei a alteração, obrigado.';
 }
 
+/** Detalhe do draft quando a edição pedida não foi compreendida — o contexto de edição deve permanecer. */
+export const EDIT_NOT_UNDERSTOOD_DETAIL = 'edição sem mudança clara';
+
+/** Correção não compreendida: avisa, mostra o registro atual e mantém a pergunta aberta. */
+export function editNotUnderstoodReply(currentSummary: string): string {
+  return [
+    'Não entendi a correção.',
+    currentSummary ? `Registro atual: ${currentSummary}.` : '',
+    'Diga o item e o novo valor — ex.: “corrigir bags para 50” ou “manga foi 30 kg”. Para sair, digite *menu*.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 export function mentionsUnderstoodAnswers(reply: string): boolean {
   const text = foldText(reply);
   return (

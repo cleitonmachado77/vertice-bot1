@@ -107,7 +107,7 @@ function getPool(): pg.Pool {
   pool = new pg.Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },
-    max: 5,
+    max: 10,
     connectionTimeoutMillis: 12000,
     idleTimeoutMillis: 30_000,
   });

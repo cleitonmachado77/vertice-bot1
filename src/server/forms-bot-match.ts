@@ -75,7 +75,23 @@ export async function listCatalogOptionsForField(
   return catalogOptions(kind, field, companyId);
 }
 
+const CATALOG_CACHE_MS = 30_000;
+const catalogCache = new Map<string, { at: number; items: MatchCandidate[] }>();
+
 async function catalogOptions(
+  kind: FormKind,
+  field: FormField,
+  companyId: string,
+): Promise<MatchCandidate[]> {
+  const cacheKey = `${kind}|${field.key}|${companyId}`;
+  const cached = catalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < CATALOG_CACHE_MS) return cached.items;
+  const items = await queryCatalogOptions(kind, field, companyId);
+  catalogCache.set(cacheKey, { at: Date.now(), items });
+  return items;
+}
+
+async function queryCatalogOptions(
   kind: FormKind,
   field: FormField,
   companyId: string,

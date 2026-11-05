@@ -31,7 +31,15 @@ export async function enqueueInboundJob(
      RETURNING id`,
     [id, eventId, messageId, conversationId, JSON.stringify(payload)],
   );
-  return { id: inserted[0]?.id || eventId, duplicate: inserted.length === 0 };
+  const queued = { id: inserted[0]?.id || eventId, duplicate: inserted.length === 0 };
+  if (!queued.duplicate) {
+    void import('./message-worker.js')
+      .then((mod) => mod.wakeMessageWorker())
+      .catch((error) => {
+        console.error(`filas: ${error instanceof Error ? error.message : error}`);
+      });
+  }
+  return queued;
 }
 
 export async function claimInboundJob(): Promise<InboundJob | undefined> {

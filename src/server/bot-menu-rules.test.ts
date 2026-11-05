@@ -52,7 +52,7 @@ test('menu principal lista o nome de cada padrão, sem a tela, + atendente', () 
   );
 });
 
-test('estado do dia aparece no próprio padrão, sem duplicar opções', () => {
+test('estado do dia não aparece no menu principal nem no menu por tipo', () => {
   const cycles: MenuCycle[] = [
     { questionnaireId: 'forms-preset:p1', status: 'notified', answers: 0, lastPromptedAt: '' },
     { questionnaireId: 'forms-preset:p2', status: 'completed', answers: 3, lastPromptedAt: '' },
@@ -61,16 +61,12 @@ test('estado do dia aparece no próprio padrão, sem duplicar opções', () => {
   const node = buildMainMenu({ forms, cycles, attendant: false, title: 'Menu' });
   assert.deepEqual(
     node.options.map((option) => `${option.key}) ${option.label}`),
-    [
-      '1) Ademir - Compras — pendente hoje',
-      '2) Estoque geral — concluído hoje',
-      '3) Vendas do Dia — em andamento',
-      '4) Feira',
-    ],
+    ['1) Ademir - Compras', '2) Estoque geral', '3) Vendas do Dia', '4) Feira'],
   );
+  const sales = buildKindMenu('sale', forms, cycles);
   assert.deepEqual(
-    node.options.map((option) => Boolean(option.featured)),
-    [true, false, true, false],
+    sales.options.map((option) => option.label),
+    ['Vendas do Dia', 'Feira', 'Voltar'],
   );
 });
 

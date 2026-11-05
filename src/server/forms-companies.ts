@@ -135,7 +135,9 @@ export async function companiesPayload(options?: {
   return { items, activeId: active?.id || activeId, active, canSwitchCompany };
 }
 
-export async function syncCompaniesFromOdoo(): Promise<FormsCompany[]> {
+export async function syncCompaniesFromOdoo(
+  options: { repairWarehouses?: boolean } = {},
+): Promise<FormsCompany[]> {
   await run(`ALTER TABLE forms_companies ADD COLUMN IF NOT EXISTS country_odoo_id TEXT NOT NULL DEFAULT ''`);
 
   const rows = await odooSearchRead<{
@@ -186,22 +188,24 @@ export async function syncCompaniesFromOdoo(): Promise<FormsCompany[]> {
     await setSetting('odoo_active_company_id', DEFAULT_COMPANY_ODOO_ID);
   }
 
-  // Garante depósito/recebimento no Odoo para cada empresa (necessário em compras).
-  for (const row of rows) {
-    try {
-      await ensureIncomingPickingTypeId(row.id);
-    } catch (error) {
-      console.warn(
-        `odoo-companies: warehouse empresa ${row.id}:`,
-        error instanceof Error ? error.message : error,
-      );
+  // O pull automático não tenta criar depósito: as empresas sem acesso falham toda vez e seguram a resposta.
+  if (options.repairWarehouses !== false) {
+    for (const row of rows) {
+      try {
+        await ensureIncomingPickingTypeId(row.id);
+      } catch (error) {
+        console.warn(
+          `odoo-companies: warehouse empresa ${row.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
     }
-  }
-  try {
-    const missing = await listCompaniesWithoutIncomingWarehouse();
-    await setSetting('odoo_companies_without_warehouse', JSON.stringify(missing));
-  } catch {
-    await setSetting('odoo_companies_without_warehouse', '[]');
+    try {
+      const missing = await listCompaniesWithoutIncomingWarehouse();
+      await setSetting('odoo_companies_without_warehouse', JSON.stringify(missing));
+    } catch {
+      await setSetting('odoo_companies_without_warehouse', '[]');
+    }
   }
 
   return listCompanies();

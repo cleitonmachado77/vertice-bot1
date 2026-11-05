@@ -491,7 +491,7 @@ export async function applyFormsBotAgendaIntent(input: {
       return {
         handled: true,
         cycle: item.context,
-        text: `${skippedNote}“${item.label}” já está concluído hoje. O que deseja corrigir? Informe a pergunta e a nova resposta.`,
+        text: `${skippedNote}“${item.label}” já tem registro hoje. O que deseja corrigir? Informe a pergunta e a nova resposta.`,
         detail: 'agenda Forms: selecionou concluído',
         completed: false,
       };

@@ -236,9 +236,12 @@ async function runOption(
 
   await clearMenuState(input.conversationId);
   await unskipFormsBotQuestionnaire(input.contactId, input.date, form.questionnaireId);
-  await setConversationCycleContext(input.conversationId, context.cycle.id);
+  const editing = option.action === 'correct' || context.cycle.status === 'completed';
+  // Correção/acréscimo em ciclo concluído: marca a conversa como “aguardando edição”
+  // para a próxima mensagem ir ao questionário, e não reabrir o menu.
+  await setConversationCycleContext(input.conversationId, context.cycle.id, editing);
 
-  if (option.action === 'correct' || context.cycle.status === 'completed') {
+  if (editing) {
     const ask =
       option.action === 'correct'
         ? 'O que deseja corrigir? Ex.: “corrigir fornecedor para MUNICIPIO DE CAMBE” ou “corrigir manga para 30 kg”.'

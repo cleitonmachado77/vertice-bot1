@@ -519,10 +519,13 @@ export async function buildFormsBotGuidedInvite(input: {
 }
 
 /** Bloco de contexto para o prompt do agente (nunca inventar “sem acesso”). */
-export async function buildFormsCatalogBrief(questionnaire: Questionnaire): Promise<string> {
+export async function buildFormsCatalogBrief(
+  questionnaire: Questionnaire,
+  questions: QuestionnaireQuestion[] = questionnaire.questions,
+): Promise<string> {
   const kind = resolveFormKind(questionnaire);
   if (!kind) return '';
-  const fields = catalogFieldsInQuestionnaire(kind, questionnaire.questions);
+  const fields = catalogFieldsInQuestionnaire(kind, questions);
   if (!fields.length) return '';
   const companyId = String(questionnaire.companyOdooId || '').trim() || '1';
   const lines: string[] = [];

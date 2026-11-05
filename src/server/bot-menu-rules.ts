@@ -10,7 +10,6 @@ export type MenuOption = {
   action: MenuAction;
   /** Nó de destino (action=node) ou questionário (register/correct/view). */
   target?: string;
-  featured?: boolean;
 };
 
 export type MenuNode = {
@@ -137,31 +136,21 @@ function formsInMenuOrder(forms: MenuForm[]): MenuForm[] {
   return KIND_ORDER.flatMap((kind) => forms.filter((form) => form.kind === kind));
 }
 
-function formDayStatus(cycle: MenuCycle): 'in_progress' | 'pending' | 'completed' | '' {
-  if (cycle.status === 'in_progress') return 'in_progress';
-  if (cycle.status === 'notified') return 'pending';
-  if (cycle.status === 'completed') return 'completed';
-  return '';
-}
-
-const KIND_STATUS_SUFFIX = { in_progress: ' — em andamento', pending: ' — pendente hoje', completed: ' — concluído hoje', '': '' };
-
-/** Menu principal: um item por padrão (nome que demos a ele) + atendente. */
+/**
+ * Menu principal: um item por padrão (nome que demos a ele) + atendente.
+ * Sem rótulo de estado do dia: o usuário pode enviar informações quantas vezes quiser.
+ */
 export function buildMainMenu(input: {
   forms: MenuForm[];
   cycles: MenuCycle[];
   attendant: boolean;
   title: string;
 }): MenuNode {
-  const options: Omit<MenuOption, 'key'>[] = formsInMenuOrder(input.forms).map((form) => {
-    const status = formDayStatus(cycleFor(input.cycles, form.questionnaireId));
-    return {
-      label: `${form.name}${KIND_STATUS_SUFFIX[status]}`,
-      action: 'node' as const,
-      target: `form:${form.questionnaireId}`,
-      featured: status === 'in_progress' || status === 'pending',
-    };
-  });
+  const options: Omit<MenuOption, 'key'>[] = formsInMenuOrder(input.forms).map((form) => ({
+    label: form.name,
+    action: 'node' as const,
+    target: `form:${form.questionnaireId}`,
+  }));
   if (input.attendant) options.push({ label: 'Falar com um atendente', action: 'human' });
   return { node: 'main', parent: '', title: input.title, options: numbered(options) };
 }
@@ -182,7 +171,7 @@ export function buildKindMenu(kind: FormKind, forms: MenuForm[], cycles: MenuCyc
     title: `${KIND_LABELS[kind]} — escolha o formulário:`,
     options: numbered([
       ...ofKind.map((form) => ({
-        label: `${form.name}${statusSuffix(cycleFor(cycles, form.questionnaireId))}`,
+        label: form.name,
         action: 'node' as const,
         target: `form:${form.questionnaireId}`,
       })),
@@ -210,21 +199,9 @@ export function buildFormMenu(form: MenuForm, cycles: MenuCycle[], parent: strin
   return {
     node: `form:${form.questionnaireId}`,
     parent,
-    title: `${kindLabel} · ${form.name} — ${statusLine(cycle)}`,
+    title: `${kindLabel} · ${form.name}`,
     options: numbered(options),
   };
-}
-
-function statusLine(cycle: MenuCycle): string {
-  if (cycle.status === 'completed') return 'registro de hoje concluído.';
-  if (cycle.status === 'in_progress') return 'registro de hoje em andamento.';
-  return 'ainda sem registro hoje.';
-}
-
-function statusSuffix(cycle: MenuCycle): string {
-  if (cycle.status === 'completed') return ' (concluído hoje)';
-  if (cycle.status === 'in_progress') return ' (em andamento)';
-  return '';
 }
 
 export function formatMenu(node: MenuNode, options: { greeting?: string; hint?: string } = {}): string {

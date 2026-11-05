@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   claimsCompleteWhileIncomplete,
+  editNotUnderstoodReply,
   ensureMissingAsked,
 } from './questionnaire-replies.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
@@ -77,6 +78,14 @@ test('ensureMissingAsked só usa template se reply vazia ou fingir conclusão', 
     questions,
   });
   assert.match(fakeDone, /ainda falta/i);
+});
+
+test('correção não entendida: avisa, mostra o registro atual e mantém a pergunta', () => {
+  const text = editNotUnderstoodReply('pet sete, sessenta bags');
+  assert.match(text, /^Não entendi a correção\./);
+  assert.match(text, /Registro atual: pet sete, sessenta bags\./);
+  assert.match(text, /digite \*menu\*/);
+  assert.doesNotMatch(editNotUnderstoodReply(''), /Registro atual/);
 });
 
 test('claimsCompleteWhileIncomplete ignora quando ainda pede mais', () => {

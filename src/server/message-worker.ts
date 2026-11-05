@@ -42,13 +42,28 @@ export async function startMessageWorker(): Promise<void> {
     console.warn(`filas: recuperados=${recovered} envios-incertos=${uncertain}`);
   }
   const tick = () => {
-    processMessageQueues().catch((error) => {
-      console.error(`filas: ${error instanceof Error ? error.message : error}`);
-    });
+    processMessageQueues()
+      .then((processed) => {
+        if (processed) setTimeout(tick, 0);
+      })
+      .catch((error) => {
+        console.error(`filas: ${error instanceof Error ? error.message : error}`);
+      });
   };
   timer = setInterval(tick, POLL_MS);
   timer.unref();
   tick();
+}
+
+/** Acorda a fila assim que uma mensagem entra, sem esperar o próximo ciclo de 300 ms. */
+export function wakeMessageWorker(): void {
+  processMessageQueues()
+    .then((processed) => {
+      if (processed) setTimeout(wakeMessageWorker, 0);
+    })
+    .catch((error) => {
+      console.error(`filas: ${error instanceof Error ? error.message : error}`);
+    });
 }
 
 export function stopMessageWorker(): void {

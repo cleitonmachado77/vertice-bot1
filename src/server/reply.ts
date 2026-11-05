@@ -19,6 +19,7 @@ import {
   weekdayFromIsoDate,
 } from './questionnaire-dates.js';
 import { draftMultiDayQuestionnaireReply } from './questionnaire-multi-day.js';
+import { EDIT_NOT_UNDERSTOOD_DETAIL } from './questionnaire-replies.js';
 import {
   looksLikeQuestionnaireEdit,
   looksLikeRfqOrRegisterPayload,
@@ -154,24 +155,30 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   const contactName =
     contact?.name || input.contactName || conversation?.contact_name || '';
   const historyRows = history.map((item) => ({ direction: item.direction, text: item.text }));
-  const contextPack: ConversationContextPack = contactId
-    ? await buildConversationContextPack({
-        contactId,
-        today: clock.date,
-        inbound: inboundText,
-        history: historyRows,
-        lookbackDays: 7,
-      })
-    : {
-        history: historyRows,
-        contextBrief: '',
-        hints: {
-          likelyQuestionnaireAck: false,
-          hasPendingQuestionnaire: false,
-          pendingPreviousDays: [],
-        },
-        pendingCycles: [],
-      };
+  // O pacote de 7 dias só entra quando a resposta vai ao modelo. Menu, agenda e número não esperam isso.
+  let contextPack: ConversationContextPack | undefined;
+  const loadContextPack = async (): Promise<ConversationContextPack> => {
+    if (contextPack) return contextPack;
+    contextPack = contactId
+      ? await buildConversationContextPack({
+          contactId,
+          today: clock.date,
+          inbound: inboundText,
+          history: historyRows,
+          lookbackDays: 7,
+        })
+      : {
+          history: historyRows,
+          contextBrief: '',
+          hints: {
+            likelyQuestionnaireAck: false,
+            hasPendingQuestionnaire: false,
+            pendingPreviousDays: [],
+          },
+          pendingCycles: [],
+        };
+    return contextPack;
+  };
 
   let cycle: ActiveCycleContext | undefined;
   let draft: QuestionnaireDraft | Draft | null = null;
@@ -390,7 +397,11 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
                 history: historyRows,
               });
               if (catalogList) {
-                const notice = pendingPreviousDaysNotice(contextPack.hints);
+                const notice = pendingPreviousDaysNotice({
+                  likelyQuestionnaireAck: false,
+                  hasPendingQuestionnaire: false,
+                  pendingPreviousDays: [],
+                });
                 await rememberCyclePrompt(
                   cycle.cycle.id,
                   questionIdForCatalogList(cycle.questionnaire, catalogList) ||
@@ -415,8 +426,6 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
                 history: historyRows,
                 forceCompletedEdit: resolution.completedEditContext,
                 today: clock.date,
-                contextBrief: contextPack.contextBrief,
-                hints: contextPack.hints,
               });
             })()
           : null;
@@ -427,7 +436,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     draft?.text &&
     'completed' in draft &&
     draft.completed &&
-    draft.detail !== 'edição sem mudança clara'
+    draft.detail !== EDIT_NOT_UNDERSTOOD_DETAIL
   ) {
     await clearConversationCompletedEditContext(input.conversationId);
   }
@@ -478,6 +487,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
 
   // Sem ciclo, ou questionário julgou fora de contexto → agente geral.
   if ((!cycle && !draft?.text) || questionnaireDeferred) {
+    const pack = await loadContextPack();
     draft = await draftReply({
       contactName: contact?.name || input.contactName || conversation?.contact_name || '',
       contactPhone: phone,
@@ -488,8 +498,8 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
       inbound: inboundText,
       hasText: true,
       allowReply: true,
-      contextBrief: contextPack.contextBrief,
-      hints: contextPack.hints,
+      contextBrief: pack.contextBrief,
+      hints: pack.hints,
     });
   }
 

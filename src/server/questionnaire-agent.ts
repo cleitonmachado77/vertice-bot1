@@ -46,11 +46,13 @@ import {
   claimsSavedAnswer,
   completionReply,
   defaultQuestionnaireReply,
+  EDIT_NOT_UNDERSTOOD_DETAIL,
+  editNotUnderstoodReply,
   ensureMissingAsked,
   formatAnswers,
-  mentionsUnderstoodAnswers,
 } from './questionnaire-replies.js';
 import {
+  buildConversationContextPack,
   pendingPreviousDaysNotice,
   type ConversationHints,
 } from './conversation-context.js';
@@ -317,7 +319,7 @@ export async function draftQuestionnaireReply(input: {
       contactName: input.contactName,
       occurrenceDate: input.context.cycle.occurrence_date,
     });
-    if (edited && edited.detail !== 'edição sem mudança clara') return edited;
+    if (edited && edited.detail !== EDIT_NOT_UNDERSTOOD_DETAIL) return edited;
 
     const capture = tryHeuristicQuestionnaireCapture({
       questions,
@@ -439,6 +441,19 @@ export async function draftQuestionnaireReply(input: {
     }
   }
 
+  let hints = input.hints;
+  let contextBrief = input.contextBrief || '';
+  if (!contextBrief && input.context.cycle.contact_id) {
+    const pack = await buildConversationContextPack({
+      contactId: input.context.cycle.contact_id,
+      today,
+      inbound: input.inbound,
+      history: input.history,
+    });
+    hints = pack.hints;
+    contextBrief = pack.contextBrief;
+  }
+
   const already = formatAnswers(questions, alreadySaved);
   const pendingMissing = missingQuestions(questions, alreadySaved);
   const pending = pendingMissing.map((item, index) => {
@@ -446,7 +461,10 @@ export async function draftQuestionnaireReply(input: {
     const fieldHint = field ? ` campo=${field};` : '';
     return `${index + 1}. [${item.id}]${fieldHint} ${item.body} (aceita: ${acceptedLabel(item.expected_type)})`;
   });
-  const formsCatalogBrief = await catalogContextBrief(input.context.questionnaire);
+  const formsCatalogBrief = await catalogContextBrief(
+    input.context.questionnaire,
+    pendingMissing.length ? pendingMissing : questions,
+  );
 
   const system = [
     'Você é um atendente humano da Vértice acompanhando um questionário no WhatsApp.',
@@ -506,7 +524,7 @@ export async function draftQuestionnaireReply(input: {
     '- Aceite texto, áudio (já transcrito), imagem (já descrita) e vídeo.',
     '- Não invente respostas. Não mencione que você é um modelo.',
     '',
-    input.contextBrief ? `Contexto da conversa (histórico + ciclos):\n${input.contextBrief}` : '',
+    contextBrief ? `Contexto da conversa (histórico + ciclos):\n${contextBrief}` : '',
     formsCatalogBrief,
     '',
     `Questionário: ${input.context.questionnaire.name}`,
@@ -569,9 +587,11 @@ export async function draftQuestionnaireReply(input: {
     }
 
     if (!extracted.related && extracted.answers.length === 0 && !seededFromHeuristic) {
+      // Edição pedida pelo menu: não desvia para o agente geral — avisa e mantém a pergunta.
+      if (input.forceCompletedEdit) return editNotUnderstoodDraft(input.context, alreadySaved);
       // Fallback leve: confirmação após convite → apresenta perguntas (modelo decide o resto).
-      if (input.hints?.likelyQuestionnaireAck && !amending) {
-        const notice = pendingPreviousDaysNotice(input.hints);
+      if (hints?.likelyQuestionnaireAck && !amending) {
+        const notice = pendingPreviousDaysNotice(hints);
         const base = await formsAwareMissingReply({
           questionnaire: input.context.questionnaire,
           questions,
@@ -620,9 +640,9 @@ export async function draftQuestionnaireReply(input: {
     // Se a heurística inicial já semeou respostas, não reextrai o mesmo texto.
     if (
       !seededFromHeuristic &&
+      accepted.length === 0 &&
       pendingAfterExtraction.length &&
-      looksLikeAnswerPayload(media, input.inbound) &&
-      (accepted.length < captureTargets.length || mentionsUnderstoodAnswers(extracted.reply))
+      looksLikeAnswerPayload(media, input.inbound)
     ) {
       const heuristicExtra = filterAccepted(
         normalizeExtractedAnswers(
@@ -641,10 +661,7 @@ export async function draftQuestionnaireReply(input: {
         );
       }
 
-      if (
-        pendingAfterExtraction.length &&
-        (accepted.length === 0 || mentionsUnderstoodAnswers(extracted.reply))
-      ) {
+      if (pendingAfterExtraction.length && accepted.length === 0) {
         const salvaged = await salvageExtractAnswers({
           missing: pendingAfterExtraction,
           userMessage: input.inbound,
@@ -657,6 +674,11 @@ export async function draftQuestionnaireReply(input: {
         );
         if (extra.length) accepted = mergeExtracted(accepted, extra);
       }
+    }
+
+    // Edição pedida pelo menu sem nenhuma mudança identificada: avisa e mantém a pergunta.
+    if (input.forceCompletedEdit && !accepted.length && !seededFromHeuristic) {
+      return editNotUnderstoodDraft(input.context, alreadySaved);
     }
 
     const persisted = await persistAcceptedAnswers({
@@ -700,7 +722,7 @@ export async function draftQuestionnaireReply(input: {
         claimsSavedAnswer(reply) &&
         looksLikeAnswerPayload(media, input.inbound) &&
         !isGreetingOrAck(input.inbound) &&
-        !input.hints?.likelyQuestionnaireAck
+        !hints?.likelyQuestionnaireAck
       ) {
         // O modelo disse “anotei…” mas não devolveu answers: não fingir que gravou.
         reply = [
@@ -724,7 +746,7 @@ export async function draftQuestionnaireReply(input: {
           defaultQuestionnaireReply(questions, answers, missing, false, media, input.contactName);
         reply = usedTemplate ? fallbackReply : ensured;
       }
-      const notice = input.hints ? pendingPreviousDaysNotice(input.hints) : '';
+      const notice = hints ? pendingPreviousDaysNotice(hints) : '';
       if (notice && !reply.includes(notice) && cycleDate === today) {
         reply = `${reply}\n\n${notice}`;
       }
@@ -740,6 +762,29 @@ export async function draftQuestionnaireReply(input: {
     const detail = error instanceof Error ? error.message : 'Falha no modelo';
     throw new QuestionnaireTemporarilyUnavailableError(detail || fallback || 'Falha no modelo');
   }
+}
+
+/**
+ * Correção pedida (via menu) que não resultou em mudança: avisa que não entendeu
+ * e mantém o contexto de edição — `completed:false` + detalhe próprio impedem o reply.ts de limpá-lo.
+ */
+function editNotUnderstoodDraft(
+  context: ActiveCycleContext,
+  answers: CycleAnswer[],
+): QuestionnaireDraft {
+  const { questionnaire } = context;
+  const summary = isFormsBotQuestionnaire(questionnaire)
+    ? formsAnswersSummary(
+        questionnaire.questions,
+        answers.filter((row) => !isMarkedNewValue(row.answer_text)),
+      )
+    : formatAnswers(questionnaire.questions, answers).replace(/\n/g, '; ');
+  return {
+    text: editNotUnderstoodReply(summary),
+    source: 'fallback',
+    detail: EDIT_NOT_UNDERSTOOD_DETAIL,
+    completed: false,
+  };
 }
 
 /** Gravou, mas ainda falta algo (ex.: valor fora do catálogo aguardando “é novo?”). */

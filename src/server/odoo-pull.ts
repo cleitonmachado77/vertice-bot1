@@ -1053,7 +1053,7 @@ export async function pullFromOdoo(
       }
 
       pushProgress('empresas', started);
-      const companies = await syncCompaniesFromOdoo();
+      const companies = await syncCompaniesFromOdoo({ repairWarehouses: !options.auto });
       pushProgress(`empresas ok (${companies.length})`, started);
 
       // Refs: full sempre; incremental só se passou o throttle.
