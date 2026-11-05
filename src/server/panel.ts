@@ -19,6 +19,8 @@ import {
   formsReminderSchedule,
   sanitizeReminderDays,
   sanitizeReminderTime,
+  saveContactReminderSchedules,
+  listFormsReminderContacts,
 } from './forms-reminder.js';
 import { syncContactsAndConversations, syncConversationMessages } from './sync.js';
 import {
@@ -270,14 +272,19 @@ export function registerPanelRoutes(): void {
     json(ctx.res, 200, await previewReply(sample));
   });
 
-  const botMenuPayload = () => {
+  const botMenuPayload = async () => {
     const schedule = formsReminderSchedule();
-    return { ...botMenuSettings(), reminderTime: schedule.sendTime, reminderDays: schedule.frequency };
+    return {
+      ...botMenuSettings(),
+      reminderTime: schedule.sendTime,
+      reminderDays: schedule.frequency,
+      contacts: await listFormsReminderContacts(),
+    };
   };
 
   route('GET', '/api/bot-menu', async (ctx) => {
     if (!(await requireUser(ctx))) return;
-    json(ctx.res, 200, botMenuPayload());
+    json(ctx.res, 200, await botMenuPayload());
   });
 
   route('PUT', '/api/bot-menu', async (ctx) => {
@@ -290,7 +297,10 @@ export function registerPanelRoutes(): void {
     await setSetting(REMINDER_TIME_SETTING, sanitizeReminderTime(input.reminderTime));
     await setSetting(REMINDER_DAYS_SETTING, sanitizeReminderDays(input.reminderDays));
     await applyFormsReminderSchedule();
-    json(ctx.res, 200, botMenuPayload());
+    if (Array.isArray(input.contactSchedules)) {
+      await saveContactReminderSchedules(input.contactSchedules);
+    }
+    json(ctx.res, 200, await botMenuPayload());
   });
 
   route('GET', '/api/contacts', async (ctx) => {

@@ -573,6 +573,14 @@ async function migrate(): Promise<void> {
     )`,
   );
   await run(
+    `CREATE TABLE IF NOT EXISTS contact_reminder_schedules (
+      contact_id TEXT PRIMARY KEY,
+      send_time TEXT NOT NULL,
+      days TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+  await run(
     `CREATE TABLE IF NOT EXISTS questionnaire_cycles (
       id TEXT PRIMARY KEY,
       questionnaire_id TEXT NOT NULL,

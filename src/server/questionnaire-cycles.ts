@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { many, one, run } from './db.js';
+import { effectiveReminder } from './forms-reminder.js';
 import { runsOnWeekday } from './plans.js';
 import {
   getQuestionnaire,
@@ -284,18 +285,48 @@ function fold(value: string): string {
 }
 
 export async function listDueQuestionnaireSends(weekday: number): Promise<DueQuestionnaireSend[]> {
-  const rows = await many<DueQuestionnaireSend>(
+  const rows = await many<
+    DueQuestionnaireSend & { source_preset_id: string; contact_send_time: string; contact_days: string }
+  >(
     `SELECT q.id AS questionnaire_id, q.name AS questionnaire_name, q.greeting, q.send_time,
-            q.frequency, q.weekday, q.template_id,
-            c.id AS contact_id, c.name, c.phone
+            q.frequency, q.weekday, q.template_id, COALESCE(q.source_preset_id, '') AS source_preset_id,
+            c.id AS contact_id, c.name, c.phone,
+            COALESCE(s.send_time, '') AS contact_send_time,
+            COALESCE(s.days, '') AS contact_days
      FROM questionnaire_assignments a
      JOIN questionnaires q ON q.id = a.questionnaire_id
      JOIN contacts c ON c.id = a.contact_id
+     LEFT JOIN contact_reminder_schedules s ON s.contact_id = c.id
      WHERE q.active = 1 AND q.deleted_at = ''
        AND c.bot_enabled = 1 AND c.blocked = 0 AND c.hidden = 0 AND c.phone <> ''
      ORDER BY q.send_time, q.name, c.name`,
   );
-  return rows.filter((row) => runsOnWeekday(row, weekday));
+  const due: DueQuestionnaireSend[] = [];
+  for (const row of rows) {
+    const formsBot = Boolean(row.source_preset_id) || row.questionnaire_id.startsWith('forms-preset:');
+    const schedule = formsBot
+      ? effectiveReminder({
+          defaultTime: row.send_time,
+          defaultDays: row.frequency,
+          contactTime: row.contact_send_time,
+          contactDays: row.contact_days,
+        })
+      : { sendTime: row.send_time, frequency: row.frequency };
+    if (!runsOnWeekday({ frequency: schedule.frequency, weekday: row.weekday }, weekday)) continue;
+    due.push({
+      questionnaire_id: row.questionnaire_id,
+      questionnaire_name: row.questionnaire_name,
+      greeting: row.greeting,
+      contact_id: row.contact_id,
+      name: row.name,
+      phone: row.phone,
+      send_time: schedule.sendTime,
+      frequency: schedule.frequency,
+      weekday: row.weekday,
+      template_id: row.template_id,
+    });
+  }
+  return due;
 }
 
 export async function getOrCreateCycle(
