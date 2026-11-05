@@ -178,8 +178,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
 
   const lastBotText = lastOutboundText(historyRows);
 
-  // Menu antes da agenda: se a fala parte do usuário e há formulário, o menu abre.
-  // Número, quantidade e “não” da pergunta seguem o formulário.
+  // Sem pergunta aberta, o menu abre. Com formulário ou agenda abertos, a mensagem é a resposta.
   if (contactId) {
     const menu = await tryBotMenu({
       contactId,

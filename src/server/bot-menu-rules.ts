@@ -65,57 +65,36 @@ export function foldMenuText(value: string): string {
     .trim();
 }
 
-/** A última fala do bot espera uma resposta (lista, quantidade, sim/não, agenda). */
-export function isBotAsking(lastBotText: string): boolean {
-  const bot = foldMenuText(lastBotText);
-  if (!bot) return false;
-  return /escolha o numero|qual a quantidade|quantidade de|mais produtos|confirma o registro|ainda posso registrar|responda o numero|responda com o numero|quer seguir|digite \*?mais/.test(
-    bot,
-  );
-}
+export type OpenQuestion = 'menu' | 'agenda' | 'form' | 'none';
 
 /**
- * Resposta direta ao que o bot acabou de pedir.
- * Fora isso, a fala parte do usuário e o menu entra se houver formulário.
+ * Uma pergunta aberta recebe a próxima mensagem.
+ * Agenda e formulário vencem o menu salvo; sem pergunta, o menu aparece.
  */
-export function isLikelyFormAnswer(inbound: string, lastBotText: string): boolean {
-  const folded = foldMenuText(inbound);
-  if (!folded || isContactOpener(inbound) || !isBotAsking(lastBotText)) return false;
-  const bot = foldMenuText(lastBotText);
-  if (/^\d{1,3}$/.test(folded)) return true;
-  if (
-    /^(sim|s|nao|n|ok|pode)$/.test(folded) &&
-    /mais produtos|confirma|quer seguir|ainda posso registrar/.test(bot)
-  ) {
-    return true;
-  }
-  if (/\bpular\b/.test(folded) && /ainda posso registrar|pular/.test(bot)) return true;
-  if (/\d/.test(folded) && /quantidade/.test(bot)) return true;
-  return false;
+export function classifyOpenQuestion(input: {
+  menuOpen: boolean;
+  agendaOpen: boolean;
+  formOpen: boolean;
+}): OpenQuestion {
+  if (input.agendaOpen) return 'agenda';
+  if (input.menuOpen) return 'menu';
+  if (input.formOpen) return 'form';
+  return 'none';
 }
 
-/** JSON {"menu": true|false} do modelo. null se não deu para ler. */
-export function parseMenuDecision(raw: string): boolean | null {
-  const text = String(raw || '').trim();
-  const body = text.match(/\{[\s\S]*\}/)?.[0] || text;
-  try {
-    const parsed = JSON.parse(body) as { menu?: unknown };
-    if (typeof parsed.menu === 'boolean') return parsed.menu;
-  } catch {
-    /* segue */
-  }
-  if (/^\s*true\s*$/i.test(text)) return true;
-  if (/^\s*false\s*$/i.test(text)) return false;
-  return null;
-}
-
-/** A pessoa está abrindo a conversa (“oi”, “bom dia”), não respondendo uma pergunta. */
-export function isContactOpener(inbound: string): boolean {
-  const folded = foldMenuText(inbound);
-  if (!folded || folded.length > 40) return false;
-  return /^(?:oi+|oie+|ola|opa|hey|eai|e ai|bom dia|boa tarde|boa noite|tudo bem|td bem)(?:\s+(?:oi+|oie+|ola|opa|tudo bem|td bem))?$/.test(
-    folded,
-  );
+/** Ciclo preso na conversa ainda espera a resposta de uma pergunta. */
+export function formCollectionIsOpen(input: {
+  cycleId: string;
+  status: string;
+  superseded: boolean;
+  awaiting: number;
+  pendingQuestionId: string;
+}): boolean {
+  if (!input.cycleId || input.superseded || input.awaiting === 1) return false;
+  if (input.awaiting === 2) return true;
+  if (input.status === 'completed' || input.status === 'failed') return false;
+  if (input.status === 'in_progress') return true;
+  return Boolean(input.pendingQuestionId) && ['open', 'notified', 'sending'].includes(input.status);
 }
 
 export function isMenuKeyword(inbound: string): boolean {
@@ -312,12 +291,6 @@ function optionAliases(option: MenuOption): string[] {
     return name ? [foldMenuText(name)] : [];
   }
   return ACTION_ALIASES[option.action] || [];
-}
-
-/** Texto curto que não é opção: reapresenta o menu em vez de mandar ao agente livre. */
-export function isShortMenuReply(inbound: string): boolean {
-  const folded = foldMenuText(inbound);
-  return Boolean(folded) && folded.split(' ').length <= 3;
 }
 
 export function menuGreeting(contactName: string, minutes: number): string {

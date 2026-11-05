@@ -1,4 +1,3 @@
-import { completeChat } from './agent.js';
 import { getSetting, many, one, run } from './db.js';
 import { KIND_LABELS, isFormKind } from './forms-fields.js';
 import {
@@ -12,13 +11,10 @@ import {
   buildFormMenu,
   buildKindMenu,
   buildMainMenu,
+  classifyOpenQuestion,
+  formCollectionIsOpen,
   formatMenu,
-  isBotAsking,
-  isContactOpener,
-  isLikelyFormAnswer,
   isMenuKeyword,
-  parseMenuDecision,
-  isShortMenuReply,
   matchMenuOption,
   menuGreeting,
   normalizeMenuForms,
@@ -37,7 +33,6 @@ import {
   toCycleContext,
   type ActiveCycleContext,
 } from './questionnaire-cycles.js';
-import { looksLikeRfqOrRegisterPayload } from './questionnaire-rules.js';
 import { setAwaitingHuman } from './store.js';
 
 /** Menu aberto vale por este tempo; depois, número volta a ser resposta comum. */
@@ -91,7 +86,6 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
     return { handled: false, detail: 'menu: contato sem formulários' };
   }
 
-  const payload = looksLikeRfqOrRegisterPayload(input.inboundType, input.inbound, input.mediaUrl);
   const cycles = await listTodayCycles(input.contactId, input.date);
   const mainTitle = settings.intro;
   const showMain = async (hint = '', greet = false): Promise<BotMenuResult> => {
@@ -108,75 +102,64 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
   if (isMenuKeyword(input.inbound)) return showMain();
 
   const lastBotText = input.lastBotText || '';
-  const agendaOffer = outboundOffersFormsAgenda(lastBotText);
-  const answering =
-    isLikelyFormAnswer(input.inbound, lastBotText) ||
-    (Boolean(input.inboundType !== 'text' && input.mediaUrl) && isBotAsking(lastBotText)) ||
-    (Boolean(payload) && isBotAsking(lastBotText) && /\d/.test(input.inbound));
-
+  const collection = await readFormCollection(input.conversationId);
+  const agendaOffer =
+    outboundOffersFormsAgenda(lastBotText) || collection.awaiting === 1;
   const state = agendaOffer ? undefined : await readMenuState(input.conversationId, input.contactId);
   if (agendaOffer) await clearMenuState(input.conversationId);
-  if (state) {
+
+  const open = classifyOpenQuestion({
+    menuOpen: Boolean(state),
+    agendaOpen: agendaOffer,
+    formOpen: formCollectionIsOpen(collection),
+  });
+
+  // Agenda ou formulário em aberto: a mensagem é a resposta, qualquer texto.
+  if (open === 'agenda' || open === 'form') {
+    return { handled: false, detail: open === 'agenda' ? 'menu: resposta da agenda' : 'menu: resposta do formulário' };
+  }
+
+  if (open === 'menu' && state) {
     const option = matchMenuOption(input.inbound, state.node);
     if (option) return runOption(option, state.node, { input, forms, cycles, settings, showMain });
+    await saveMenuState(input.conversationId, state.node);
+    return {
+      handled: true,
+      text: formatMenu(state.node, { hint: 'Não entendi a opção.' }),
+      detail: 'menu: opção não reconhecida',
+    };
   }
 
-  // Resposta da pergunta que o bot fez: segue o formulário. O resto, se parte do usuário, abre o menu.
-  if (answering) {
-    if (state) await clearMenuState(input.conversationId);
-    return { handled: false, detail: 'menu: resposta do formulário' };
-  }
-
-  const showMenu = await userIsReachingAgent(input.inbound, lastBotText);
-  if (showMenu) return showMain('', true);
-
-  if (state) {
-    if (isShortMenuReply(input.inbound)) {
-      await saveMenuState(input.conversationId, state.node);
-      return {
-        handled: true,
-        text: formatMenu(state.node, { hint: 'Não entendi a opção.' }),
-        detail: 'menu: opção não reconhecida',
-      };
-    }
-    await clearMenuState(input.conversationId);
-  }
-  return { handled: false, detail: 'menu: resposta do formulário' };
+  return showMain('', true);
 }
 
-/**
- * O modelo entende se a pessoa está chamando o agente (qualquer frase)
- * ou só respondendo a pergunta pendente.
- * Sem modelo: saudação e fala solta abrem o menu; pergunta pendente ambígua não.
- */
-async function userIsReachingAgent(inbound: string, lastBotText: string): Promise<boolean> {
-  if (isContactOpener(inbound)) return true;
-  if (!isBotAsking(lastBotText)) return true;
-  if (getSetting('agent_active') !== '1' || !getSetting('agent_api_key')) return false;
-  try {
-    const raw = await completeChat(
-      [
-        {
-          role: 'system',
-          content: [
-            'Você decide se o menu de formulários deve aparecer.',
-            'A pessoa tem formulários disponíveis. Se a mensagem PARTE DELA — ela chama o agente, cumprimenta de qualquer jeito, pede ajuda, quer começar, mudar de assunto ou conversar — o menu aparece.',
-            'Se a mensagem RESPONDE o que o bot acabou de perguntar (número, quantidade, produto, sim/não, correção do que foi pedido), o menu não aparece.',
-            'Responda só JSON: {"menu": true} ou {"menu": false}.',
-          ].join('\n'),
-        },
-        {
-          role: 'user',
-          content: `Última mensagem do bot:\n${lastBotText.slice(0, 800)}\n\nMensagem do usuário:\n${inbound.slice(0, 500)}`,
-        },
-      ],
-      { temperature: 0, timeoutMs: 12_000, maxTokens: 40 },
-    );
-    const decision = parseMenuDecision(raw);
-    return decision === true;
-  } catch {
-    return false;
-  }
+async function readFormCollection(conversationId: string): Promise<{
+  cycleId: string;
+  status: string;
+  superseded: boolean;
+  awaiting: number;
+  pendingQuestionId: string;
+}> {
+  const row = await one<{
+    active_cycle_id: string | null;
+    awaiting_selection: number | null;
+    status: string | null;
+    superseded_at: string | null;
+    pending_question_id: string | null;
+  }>(
+    `SELECT ctx.active_cycle_id, ctx.awaiting_selection, cyc.status, cyc.superseded_at, cyc.pending_question_id
+     FROM conversation_questionnaire_context ctx
+     LEFT JOIN questionnaire_cycles cyc ON cyc.id = ctx.active_cycle_id
+     WHERE ctx.conversation_id = $1`,
+    [conversationId],
+  );
+  return {
+    cycleId: String(row?.active_cycle_id || ''),
+    status: String(row?.status || ''),
+    superseded: Boolean(row?.superseded_at),
+    awaiting: Number(row?.awaiting_selection) || 0,
+    pendingQuestionId: String(row?.pending_question_id || ''),
+  };
 }
 
 /**

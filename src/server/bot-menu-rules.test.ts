@@ -4,14 +4,11 @@ import {
   buildFormMenu,
   buildKindMenu,
   buildMainMenu,
+  classifyOpenQuestion,
+  formCollectionIsOpen,
   formatMenu,
-  isBotAsking,
-  isContactOpener,
-  isLikelyFormAnswer,
   isMenuKeyword,
-  parseMenuDecision,
   isNewMenuSession,
-  isShortMenuReply,
   matchMenuOption,
   menuFormName,
   menuGreeting,
@@ -165,33 +162,19 @@ test('formatação numerada com rodapé e “0) Voltar” no fim', () => {
   assert.match(main, /Digite \*menu\*/);
 });
 
-test('fala do usuário abre o menu; resposta da pergunta não', () => {
-  const quantidade = 'Anotei o produto SUCATA DE FERRO. Qual a quantidade?';
-  const lista = 'Produto — escolha o número:\n1) FARDO\n2) Bag\n3) SUCATA DE FERRO';
-  const agenda = 'Ainda posso registrar hoje:\n1) Compras\n2) Vendas\nResponda o número, o nome, ou diga se prefere pular algum.';
-  assert.equal(isBotAsking(quantidade), true);
-  assert.equal(isBotAsking('Perfeito! Anotei tudo, obrigado.'), false);
-  assert.equal(isLikelyFormAnswer('20 kg', quantidade), true);
-  assert.equal(isLikelyFormAnswer('3', lista), true);
-  assert.equal(isLikelyFormAnswer('Não', agenda), true);
-  assert.equal(isLikelyFormAnswer('quero registrar as compras', quantidade), false);
-  assert.equal(isLikelyFormAnswer('me ajuda com o estoque de hoje', lista), false);
-  assert.equal(isLikelyFormAnswer('Oi', quantidade), false);
-  assert.equal(parseMenuDecision('{"menu": true}'), true);
-  assert.equal(parseMenuDecision('texto {"menu": false} fim'), false);
-  assert.equal(parseMenuDecision('não sei'), null);
-});
+test('pergunta aberta recebe a resposta; sem pergunta, o menu', () => {
+  assert.equal(classifyOpenQuestion({ menuOpen: false, agendaOpen: false, formOpen: false }), 'none');
+  assert.equal(classifyOpenQuestion({ menuOpen: true, agendaOpen: false, formOpen: true }), 'menu');
+  assert.equal(classifyOpenQuestion({ menuOpen: true, agendaOpen: true, formOpen: false }), 'agenda');
+  assert.equal(classifyOpenQuestion({ menuOpen: false, agendaOpen: false, formOpen: true }), 'form');
 
-test('saudação abre o contato; resposta de formulário não', () => {
-  assert.equal(isContactOpener('Oi'), true);
-  assert.equal(isContactOpener('Oie'), true);
-  assert.equal(isContactOpener('Olá!'), true);
-  assert.equal(isContactOpener('Bom dia'), true);
-  assert.equal(isContactOpener('boa tarde, tudo bem'), true);
-  assert.equal(isContactOpener('3'), false);
-  assert.equal(isContactOpener('20 kg'), false);
-  assert.equal(isContactOpener('Não'), false);
-  assert.equal(isContactOpener('sim'), false);
+  const nome = { cycleId: 'bags', status: 'notified', superseded: false, awaiting: 0, pendingQuestionId: 'q-nome' };
+  assert.equal(formCollectionIsOpen(nome), true);
+  assert.equal(formCollectionIsOpen({ ...nome, status: 'in_progress', pendingQuestionId: '' }), true);
+  assert.equal(formCollectionIsOpen({ ...nome, pendingQuestionId: '', status: 'notified' }), false);
+  assert.equal(formCollectionIsOpen({ ...nome, status: 'completed', pendingQuestionId: '' }), false);
+  assert.equal(formCollectionIsOpen({ ...nome, superseded: true }), false);
+  assert.equal(formCollectionIsOpen({ ...nome, awaiting: 2, status: 'completed', pendingQuestionId: '' }), true);
 });
 
 test('palavra “menu” e sessão nova', () => {
@@ -203,11 +186,6 @@ test('palavra “menu” e sessão nova', () => {
   assert.ok(isNewMenuSession('', now, 2));
   assert.ok(isNewMenuSession('2026-10-29T09:00:00Z', now, 2));
   assert.ok(!isNewMenuSession('2026-10-29T11:30:00Z', now, 2));
-});
-
-test('resposta curta reapresenta; texto longo segue para o agente', () => {
-  assert.ok(isShortMenuReply('não sei'));
-  assert.ok(!isShortMenuReply('qual o horário da coleta de amanhã?'));
 });
 
 test('saudação usa o primeiro nome e ignora nome que é telefone', () => {
