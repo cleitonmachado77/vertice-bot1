@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { tryFormsLinesCapture } from './forms-bot-capture.js';
 import { buildFormsBotQuestions, productionSummaryText } from './forms-bot.js';
+import { FARDO_PRODUCTION_PRESET_ID, FARDO_QUESTION } from './fardo-counts.js';
 import { FORMS_BOT_LINES_FIELD, FORMS_BOT_LINES_MORE_FIELD } from './forms-bot-fields.js';
 import { planBotLines } from './forms-bot-lines.js';
 import { documentTitle, productionBalance, shouldAutofillFormTitle } from './forms-fields.js';
@@ -129,12 +130,40 @@ test('padrão de Fabricação: pergunta a entrada (unidade do Odoo junto) e os p
   assert.match(built.questions[2].body, /Mais produtos gerados/);
   assert.equal(built.defaultValues.input_uom, 'Bag');
 
+  const fardos = buildFormsBotQuestions(
+    preset({ id: FARDO_PRODUCTION_PRESET_ID, name: 'Produção de Fardos' }),
+  );
+  assert.deepEqual(
+    fardos.questions.map((item) => item.exportField),
+    ['fardo_run'],
+  );
+  assert.equal(fardos.questions[0].body, FARDO_QUESTION);
+
   const noUom = buildFormsBotQuestions(preset({ header: { input_product: 'Farinha' } }));
   assert.equal(noUom.questions[0].body, 'Quanto de Farinha foi usado? (ex.: 200 kg)');
   assert.ok(noUom.questions.every((item) => item.exportField !== 'input_uom'));
 });
 
 test('produto com nome fixo pergunta só a quantidade, sem peso', () => {
+  const built = buildFormsBotQuestions(
+    preset({
+      kind: 'product',
+      name: 'Contagem de caixas',
+      header: { name: 'Caixa', uom: 'Unidade', track_inventory: 'True' },
+      lines: [],
+      visible: { title: true, status: false, header: ['name', 'uom', 'qty_on_hand'], lines: [] },
+    }),
+  );
+  assert.deepEqual(
+    built.questions.map((item) => item.exportField),
+    ['qty_on_hand'],
+  );
+  assert.match(built.questions[0].body, /Quantas unidades de Caixa/);
+  assert.doesNotMatch(built.questions[0].body, /kg/i);
+  assert.equal(built.defaultValues.name, 'Caixa');
+});
+
+test('separação de bags pede quantidade e sigla, sem gravar o nome Bag', () => {
   const built = buildFormsBotQuestions(
     preset({
       kind: 'product',
@@ -148,9 +177,10 @@ test('produto com nome fixo pergunta só a quantidade, sem peso', () => {
     built.questions.map((item) => item.exportField),
     ['qty_on_hand'],
   );
-  assert.match(built.questions[0].body, /Quantas unidades de Bag/);
+  assert.match(built.questions[0].body, /50 pts/);
   assert.doesNotMatch(built.questions[0].body, /kg/i);
-  assert.equal(built.defaultValues.name, 'Bag');
+  assert.equal(built.defaultValues.name, undefined);
+  assert.equal(built.defaultValues.uom, 'Unidade');
 });
 
 test('produto sem nome fixo continua pedindo o nome e não a quantidade', () => {

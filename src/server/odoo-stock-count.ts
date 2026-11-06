@@ -1,3 +1,4 @@
+import { bagVariantRef, ensureBagMaterials } from './bag-materials.js';
 import { run } from './db.js';
 import type { FormDocument } from './forms.js';
 import { odooCreate, odooExecuteKw, odooSearchRead, odooWrite } from './odoo-client.js';
@@ -29,7 +30,30 @@ export async function addBotStockCount(doc: FormDocument, templateId: number): P
   );
   const variantId = many2oneId(template?.product_variant_id);
   if (!variantId) throw new Error('Produto sem variante para lançar o estoque');
+  const balance = await applyInventoryDelta(companyId, variantId, add);
 
+  const header = {
+    ...doc.header,
+    qty_on_hand: String(balance),
+    stock_applied: doc.header.source_cycle_id || '1',
+  };
+  await run(`UPDATE forms_documents SET header_json = $2 WHERE id = $1`, [doc.id, JSON.stringify(header)]);
+}
+
+/** Soma unidades no tipo do produto Bag (variante da sigla). */
+export async function addBagTypeStock(
+  companyId: number,
+  code: string,
+  add: number,
+): Promise<{ templateId: number; variantId: number; balance: number }> {
+  if (!bagVariantRef(companyId, code)) await ensureBagMaterials(companyId);
+  const ref = bagVariantRef(companyId, code);
+  if (!ref) throw new Error(`Tipo ${code} não está no produto Bag`);
+  const balance = await applyInventoryDelta(companyId, ref.variantId, add);
+  return { ...ref, balance };
+}
+
+async function applyInventoryDelta(companyId: number, variantId: number, add: number): Promise<number> {
   const [warehouse] = await odooSearchRead<{ lot_stock_id: unknown }>(
     'stock.warehouse',
     [['company_id', '=', companyId]],
@@ -61,11 +85,5 @@ export async function addBotStockCount(doc: FormDocument, templateId: number): P
     await odooWrite('stock.quant', [quant.id], { inventory_quantity: balance });
   }
   await odooExecuteKw('stock.quant', 'action_apply_inventory', [[quantId]], { context });
-
-  const header = {
-    ...doc.header,
-    qty_on_hand: String(balance),
-    stock_applied: doc.header.source_cycle_id || '1',
-  };
-  await run(`UPDATE forms_documents SET header_json = $2 WHERE id = $1`, [doc.id, JSON.stringify(header)]);
+  return balance;
 }

@@ -1,3 +1,6 @@
+import { BAG_SEPARATION_PRESET_ID, bagClarification, interpretBagCounts, type BagCount } from './bag-materials.js';
+import { FARDO_PRODUCTION_PRESET_ID, fardoClarification, interpretFardoRuns, type FardoRun } from './fardo-counts.js';
+import { answerFardoSale } from './fardo-sale.js';
 import { isFormsBotQuestionnaire } from './forms-bot-agenda.js';
 import {
   buildFormsBotGuidedPrompt,
@@ -12,6 +15,7 @@ import {
 import {
   FORMS_BOT_LINES_FIELD,
   FORMS_BOT_LINES_MORE_FIELD,
+  FARDO_RUN_FIELD,
   fixedLinesProduct,
   hasExplicitUnit,
   isConfirmCorrectionAnswer,
@@ -19,6 +23,7 @@ import {
   isLinesMoreDoneAnswer,
   isMarkedNewValue,
   isQuantityOnly,
+  markNewValue,
   linesProductAwaitingQuantity,
   markPendingProduct,
   mentionsNoMoreLines,
@@ -294,6 +299,13 @@ export async function tryFormsBotCapture(input: {
 }): Promise<FormsBotCapture | null> {
   if (!isFormsBotQuestionnaire(input.questionnaire)) return null;
 
+  const bagCapture = captureBagCount(input);
+  if (bagCapture) return bagCapture;
+  const fardoCapture = captureFardoRun(input);
+  if (fardoCapture) return fardoCapture;
+  const saleCapture = await answerFardoSale(input);
+  if (saleCapture) return saleCapture;
+
   const catalogListReply = await tryFormsCatalogListReply({
     inbound: input.inbound,
     questionnaire: input.questionnaire,
@@ -532,6 +544,148 @@ async function tryLeadingIndexWithLines(input: {
     ].join('; '),
     detail: 'catálogo Forms por número + linhas',
   };
+}
+
+/** Separação de Bags: só “50 pts” (quantidade e sigla). Não passa pelo modelo. */
+function captureBagCount(input: {
+  inbound: string;
+  questionnaire: Questionnaire;
+  questions: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+  pendingQuestionId?: string;
+}): FormsBotCapture | null {
+  const question = input.questions.find((item) => String(item.export_field || '').trim() === 'qty_on_hand');
+  if (!question) return null;
+  const isBag =
+    String(input.questionnaire.sourcePresetId || '') === BAG_SEPARATION_PRESET_ID ||
+    String(question.body || '').startsWith('Quantidade e sigla');
+  if (!isBag) return null;
+  const missing = missingQuestions(input.questions, input.alreadySaved);
+  if (!missing.some((item) => item.id === question.id)) return null;
+  const pendingId = String(input.pendingQuestionId || '').trim();
+  const answering = pendingId ? pendingId === question.id : missing[0]?.id === question.id;
+  if (!answering) return null;
+
+  const saved = String(input.alreadySaved.find((row) => row.question_id === question.id)?.answer_text || '');
+  const reading = interpretBagCounts(input.inbound);
+  const understood = mergeBagCounts(readBagPartial(saved), reading.understood);
+  if (!reading.understood.length && !reading.unknown.length) {
+    return {
+      kind: 'reask',
+      text: bagClarification([], ['informe a quantidade e o tipo. Ex.: 50 pts, 20 lat']),
+      pendingQuestionId: question.id,
+    };
+  }
+  if (reading.unknown.length) {
+    const text = bagClarification(understood, reading.unknown);
+    if (!understood.length) return { kind: 'reask', text, pendingQuestionId: question.id };
+    return {
+      kind: 'answers',
+      accepted: [{ questionId: question.id, text: markNewValue(JSON.stringify({ understood })), type: 'text' }],
+      summary: text,
+      detail: 'separação de bags parcial',
+    };
+  }
+  const summary = understood.map((item) => `${item.quantity} ${item.code}`).join(', ');
+  return {
+    kind: 'answers',
+    accepted: [
+      {
+        questionId: question.id,
+        text: JSON.stringify(understood.map((item) => ({ code: item.code, quantity: item.quantity }))),
+        type: 'text',
+      },
+    ],
+    summary,
+    detail: 'separação de bags',
+  };
+}
+
+/** Produção de Fardos: “10 pts, 1 fardo” — o fardo sai no mesmo tipo do bag. */
+function captureFardoRun(input: {
+  inbound: string;
+  questionnaire: Questionnaire;
+  questions: QuestionnaireQuestion[];
+  alreadySaved: CycleAnswer[];
+  pendingQuestionId?: string;
+}): FormsBotCapture | null {
+  const question = input.questions.find((item) => String(item.export_field || '').trim() === FARDO_RUN_FIELD);
+  if (!question) return null;
+  const isFardo =
+    String(input.questionnaire.sourcePresetId || '') === FARDO_PRODUCTION_PRESET_ID ||
+    String(question.body || '').startsWith('Quantos bags');
+  if (!isFardo) return null;
+  const missing = missingQuestions(input.questions, input.alreadySaved);
+  if (!missing.some((item) => item.id === question.id)) return null;
+  const pendingId = String(input.pendingQuestionId || '').trim();
+  const answering = pendingId ? pendingId === question.id : missing[0]?.id === question.id;
+  if (!answering) return null;
+
+  const saved = String(input.alreadySaved.find((row) => row.question_id === question.id)?.answer_text || '');
+  const reading = interpretFardoRuns(input.inbound);
+  const understood = mergeFardoRuns(readFardoPartial(saved), reading.understood);
+  if (!reading.understood.length && !reading.unknown.length) {
+    return {
+      kind: 'reask',
+      text: fardoClarification([], ['informe os bags e os fardos. Ex.: 10 pts, 1 fardo']),
+      pendingQuestionId: question.id,
+    };
+  }
+  if (reading.unknown.length) {
+    const text = fardoClarification(understood, reading.unknown);
+    if (!understood.length) return { kind: 'reask', text, pendingQuestionId: question.id };
+    return {
+      kind: 'answers',
+      accepted: [{ questionId: question.id, text: markNewValue(JSON.stringify({ understood })), type: 'text' }],
+      summary: text,
+      detail: 'produção de fardos parcial',
+    };
+  }
+  const summary = understood.map((item) => `${item.bags} bags ${item.code} → ${item.fardos} fardo`).join(', ');
+  return {
+    kind: 'answers',
+    accepted: [
+      {
+        questionId: question.id,
+        text: JSON.stringify(understood.map((item) => ({ code: item.code, bags: item.bags, fardos: item.fardos }))),
+        type: 'text',
+      },
+    ],
+    summary,
+    detail: 'produção de fardos',
+  };
+}
+
+function readFardoPartial(text: string): FardoRun[] {
+  if (!isMarkedNewValue(text)) return [];
+  try {
+    const parsed = JSON.parse(unmarkNewValue(text)) as { understood?: FardoRun[] };
+    return Array.isArray(parsed.understood) ? parsed.understood : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergeFardoRuns(previous: FardoRun[], next: FardoRun[]): FardoRun[] {
+  const byCode = new Map<string, FardoRun>();
+  for (const item of [...previous, ...next]) byCode.set(item.code, item);
+  return [...byCode.values()];
+}
+
+function readBagPartial(text: string): BagCount[] {
+  if (!isMarkedNewValue(text)) return [];
+  try {
+    const parsed = JSON.parse(unmarkNewValue(text)) as { understood?: BagCount[] };
+    return Array.isArray(parsed.understood) ? parsed.understood : [];
+  } catch {
+    return [];
+  }
+}
+
+function mergeBagCounts(previous: BagCount[], next: BagCount[]): BagCount[] {
+  const byCode = new Map<string, BagCount>();
+  for (const item of [...previous, ...next]) byCode.set(item.code, item);
+  return [...byCode.values()];
 }
 
 /**

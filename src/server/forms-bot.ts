@@ -10,11 +10,19 @@ import { resolveCatalogValue } from './forms-bot-match.js';
 import {
   FORMS_BOT_LINES_FIELD,
   FORMS_BOT_LINES_MORE_FIELD,
+  FARDO_RUN_FIELD,
+  FARDO_SALE_FIELD,
   CONFIRM_QUESTION_BODY,
   FORMS_BOT_CONFIRM_FIELD,
   formsBotQuestionnaireId,
   quantityOnlyLinesQuestion,
 } from './forms-bot-fields.js';
+import { materializeBagSeparation } from './bag-separation.js';
+import { BAG_COUNT_QUESTION, ensureBagMaterials, isBagSeparationPreset } from './bag-materials.js';
+import { materializeFardoProduction } from './fardo-production.js';
+import { FARDO_QUESTION, isFardoProductionPreset } from './fardo-counts.js';
+import { FARDO_SALE_QUESTION, isFardoDeliveryPreset } from './fardo-sale.js';
+import { materializeFardoSale } from './fardo-sale-order.js';
 import { planBotLines } from './forms-bot-lines.js';
 import {
   KIND_LABELS,
@@ -127,17 +135,42 @@ export function buildFormsBotQuestions(preset: FormPreset): {
   questions: { id?: string; body: string; expectedType: string; exportField: string; fixedValue?: string }[];
   defaultValues: Record<string, string>;
 } {
+  if (isFardoProductionPreset(preset)) {
+    return {
+      questions: [{ body: FARDO_QUESTION, expectedType: 'any', exportField: FARDO_RUN_FIELD }],
+      defaultValues: { input_product: 'Bag', input_uom: 'Unidade' },
+    };
+  }
+  if (isFardoDeliveryPreset(preset)) {
+    const questions: { body: string; expectedType: string; exportField: string }[] = [];
+    if ((preset.visible.header || []).includes('customer') && !String(preset.header.customer || '').trim()) {
+      questions.push({ body: 'Cliente?', expectedType: 'any', exportField: 'customer' });
+    }
+    questions.push({ body: FARDO_SALE_QUESTION, expectedType: 'any', exportField: FARDO_SALE_FIELD });
+    return { questions, defaultValues: {} };
+  }
   const visibleHeader = new Set(preset.visible.header || []);
   const visibleLines = new Set(preset.visible.lines || []);
   const defaultValues: Record<string, string> = {};
   const questions: { id?: string; body: string; expectedType: string; exportField: string; fixedValue?: string }[] = [];
 
   for (const field of headerFieldsFor(preset.kind)) {
+    const bagSeparation = isBagSeparationPreset(preset);
+    if (bagSeparation && field.key === 'name') continue;
     const fixedProduct = String(preset.header.name || '').trim();
     const countOnHand =
       preset.kind === 'product' && field.key === 'qty_on_hand' && Boolean(fixedProduct);
-    if (field.readonly && !countOnHand) continue;
+    const bagQty = bagSeparation && field.key === 'qty_on_hand';
+    if (field.readonly && !countOnHand && !bagQty) continue;
     if (!visibleHeader.has(field.key)) continue;
+    if (bagQty) {
+      questions.push({
+        body: BAG_COUNT_QUESTION,
+        expectedType: 'any',
+        exportField: field.key,
+      });
+      continue;
+    }
     const presetValue = String(preset.header[field.key] || '').trim();
     if (presetValue) {
       defaultValues[field.key] = presetValue;
@@ -264,6 +297,14 @@ export async function syncFormsBotQuestionnaire(preset: FormPreset): Promise<Que
        WHERE questionnaire_id = $1 AND status IN ('open', 'notified', 'in_progress')`,
       [questionnaireId, latestRevision.id, new Date().toISOString()],
     );
+  }
+  if (isBagSeparationPreset(preset) || isFardoProductionPreset(preset) || isFardoDeliveryPreset(preset)) {
+    const companyId = Number(preset.company_odoo_id || 0);
+    if (companyId) {
+      void ensureBagMaterials(companyId).catch((error) => {
+        console.error('bags:', error instanceof Error ? error.message : error);
+      });
+    }
   }
   return saved;
 }
@@ -442,7 +483,12 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     [`%"source_cycle_id":"${cycleId}"%`],
   );
   const previous = existingDoc ? await getFormDocument(existingDoc.id) : undefined;
-  if (previous && questionnaire.formKind === 'production' && isProductionLocked(previous)) {
+  if (
+    previous &&
+    questionnaire.formKind === 'production' &&
+    isProductionLocked(previous) &&
+    !isFardoProductionPreset({ id: questionnaire.sourcePresetId, kind: questionnaire.formKind })
+  ) {
     // Ordem concluída/cancelada não muda: a correção é “Desmontar” no Odoo + nova fabricação.
     console.warn(`forms-bot: fabricação ${previous.id} já lançada no estoque — ciclo ${cycleId} não altera`);
     return previous;
@@ -457,6 +503,53 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
   const kind = questionnaire.formKind;
   const companyOdooId = questionnaire.companyOdooId || preset.company_odoo_id;
   const answers = await listCycleAnswers(cycleId);
+  if (isFardoDeliveryPreset(preset)) {
+    const customer = answers.find((row) =>
+      questionnaire.questions.some(
+        (question) => question.id === row.question_id && question.export_field === 'customer',
+      ),
+    );
+    const sale = answers.find((row) =>
+      questionnaire.questions.some(
+        (question) => question.id === row.question_id && question.export_field === FARDO_SALE_FIELD,
+      ),
+    );
+    return materializeFardoSale({
+      cycleId,
+      companyOdooId,
+      sourcePresetId: questionnaire.sourcePresetId,
+      occurrenceDate: cycle.occurrence_date,
+      customerRaw: String(customer?.answer_text || ''),
+      answer: String(sale?.answer_text || ''),
+    });
+  }
+  if (isFardoProductionPreset(preset)) {
+    const answer = answers.find((row) =>
+      questionnaire.questions.some(
+        (question) => question.id === row.question_id && question.export_field === FARDO_RUN_FIELD,
+      ),
+    );
+    return materializeFardoProduction({
+      cycleId,
+      companyOdooId,
+      sourcePresetId: questionnaire.sourcePresetId,
+      occurrenceDate: cycle.occurrence_date,
+      answer: String(answer?.answer_text || ''),
+    });
+  }
+  if (isBagSeparationPreset(preset)) {
+    const qty = answers.find((row) =>
+      questionnaire.questions.some(
+        (question) => question.id === row.question_id && question.export_field === 'qty_on_hand',
+      ),
+    );
+    return materializeBagSeparation({
+      cycleId,
+      companyOdooId,
+      sourcePresetId: questionnaire.sourcePresetId,
+      answer: String(qty?.answer_text || ''),
+    });
+  }
   const answersByField: Record<string, string> = {};
   for (const question of questionnaire.questions) {
     const answer = answers.find((row) => row.question_id === question.id);
@@ -580,6 +673,21 @@ export async function formsBotCompletionNote(cycleId: string): Promise<string> {
   );
   const doc = row ? await getFormDocument(row.id) : undefined;
   if (!doc) return '';
+  if (String(doc.header.bag_type || '').trim()) {
+    const rows = await many<{ id: string }>(
+      `SELECT id FROM forms_documents
+       WHERE kind = 'production' AND header_json LIKE $1
+       ORDER BY created_at ASC`,
+      [`%"source_cycle_id":"${cycleId}"%`],
+    );
+    const refs: string[] = [];
+    for (const item of rows) {
+      const production = await getFormDocument(item.id);
+      const ref = String(production?.header.order_reference || '').trim();
+      if (ref) refs.push(ref);
+    }
+    return refs.length ? `Ordem no Odoo: ${refs.join(', ')}` : '';
+  }
   const names = [doc.header.input_product || '', ...doc.lines.map((line) => line.values.product || '')]
     .map((name) => name.trim().toLowerCase())
     .filter(Boolean);

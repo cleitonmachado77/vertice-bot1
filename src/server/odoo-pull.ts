@@ -388,7 +388,7 @@ async function applyStockToProductDocs(stockMap: Map<string, number>): Promise<n
   for (const row of rows) {
     const header = parseHeader(row.header_json);
     const odooId = String(header.odoo_id || '').trim();
-    if (!odooId) continue;
+    if (!odooId || String(header.bag_type || '').trim()) continue;
     const qty = stockMap.get(`${row.company_odoo_id || DEFAULT_COMPANY_ODOO_ID}:${odooId}`);
     if (qty == null && header.track_inventory === 'False' && !header.qty_on_hand) continue;
     const next = fromOdooNumber(qty ?? 0);

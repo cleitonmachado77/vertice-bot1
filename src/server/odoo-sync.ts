@@ -16,6 +16,7 @@ import {
   type OdooStockProduct,
 } from './odoo-production.js';
 import { addBotStockCount } from './odoo-stock-count.js';
+import { ensureBagMaterials, fardoVariantRef } from './bag-materials.js';
 import {
   findCategoryId,
   ensureIncomingPickingTypeId,
@@ -216,6 +217,13 @@ async function findPartnerId(name: string, as: 'customer' | 'vendor'): Promise<n
   return odooCreate('res.partner', values);
 }
 
+async function fardoVariantId(companyId: number, code: string): Promise<number> {
+  if (!fardoVariantRef(companyId, code)) await ensureBagMaterials(companyId);
+  const ref = fardoVariantRef(companyId, code);
+  if (!ref) throw new Error(`Tipo ${code} não está no Fardo`);
+  return ref.variantId;
+}
+
 async function findProductVariantId(
   productName: string,
   unitPrice?: string,
@@ -289,21 +297,38 @@ export async function pushProductToOdoo(doc: FormDocument): Promise<FormDocument
 
   const existingId = num(doc.header.odoo_id, 0);
   let odooId = existingId;
+  const code = String(doc.header.internal_ref || '').trim();
   if (existingId > 0) {
     await odooWrite('product.template', [existingId], values);
   } else {
-    const found = await odooSearchRead<{ id: number }>(
-      'product.template',
-      [
-        '&',
-        ['name', '=', name],
-        '|',
-        ['company_id', '=', companyId],
-        ['company_id', '=', false],
-      ],
-      ['id'],
-      { limit: 1 },
-    );
+    const byCode = code
+      ? await odooSearchRead<{ id: number }>(
+          'product.template',
+          [
+            '&',
+            ['default_code', '=', code],
+            '|',
+            ['company_id', '=', companyId],
+            ['company_id', '=', false],
+          ],
+          ['id'],
+          { limit: 1 },
+        )
+      : [];
+    const found = byCode[0]?.id
+      ? byCode
+      : await odooSearchRead<{ id: number }>(
+          'product.template',
+          [
+            '&',
+            ['name', '=', name],
+            '|',
+            ['company_id', '=', companyId],
+            ['company_id', '=', false],
+          ],
+          ['id'],
+          { limit: 1 },
+        );
     if (found[0]?.id) {
       odooId = found[0].id;
       await odooWrite('product.template', [odooId], values);
@@ -360,12 +385,16 @@ async function buildSaleLines(
   for (const line of doc.lines) {
     const productName = line.values.product || '';
     if (!productName.trim()) continue;
-    const productId = await findProductVariantId(productName, line.values.unit_price, 'sale', companyId);
+    const fardoCode = String(line.values.fardo_type || '').trim().toUpperCase();
+    const productId = fardoCode
+      ? await fardoVariantId(companyId, fardoCode)
+      : await findProductVariantId(productName, line.values.unit_price, 'sale', companyId);
+    const weight = String(line.values.weight || '').trim();
     const lineVals: Record<string, unknown> = {
       product_id: productId,
       product_uom_qty: num(line.values.quantity, 1),
       price_unit: num(line.values.unit_price),
-      name: productName,
+      name: fardoCode ? `Fardo ${fardoCode}${weight ? ` — ${weight} kg` : ''}` : productName,
     };
     const uomId = await lineUomIdForOdoo(productId, productName, line.values.uom || '');
     if (uomId > 0) lineVals.product_uom_id = uomId;

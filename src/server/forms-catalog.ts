@@ -335,6 +335,7 @@ export async function syncSharedCatalog(doc: FormDocument): Promise<void> {
   }
 
   if (doc.kind === 'production') {
+    if (String(doc.header.bag_type || '').trim()) return;
     const names = [doc.header.input_product || '', ...doc.lines.map((line) => line.values.product || '')];
     for (const name of names) {
       if (name.trim()) await ensureProductByName(name, {}, companyId);

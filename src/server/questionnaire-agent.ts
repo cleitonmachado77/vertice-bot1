@@ -189,14 +189,33 @@ export async function draftQuestionnaireReply(input: {
     const notice = input.hints ? pendingPreviousDaysNotice(input.hints) : '';
     if (persisted.complete) {
       // Itens depois do encerramento: o documento já existe e é atualizado (markCycleCompleted).
-      const done = amending && captured.summary
-        ? `Anotei: ${captured.summary}. Atualizei o registro.`
+    const done = amending && captured.summary
+      ? `Anotei: ${captured.summary}. Atualizei o registro.`
+      : (captured.detail === 'separação de bags' || captured.detail === 'produção de fardos' || captured.detail === 'entrega de fardos') && captured.summary
+        ? completionReply(input.contactName).replace('Anotei tudo', `Anotei ${captured.summary}`)
         : completionReply(input.contactName);
       return {
         text: [done, notice].filter(Boolean).join('\n\n'),
         source: 'fallback',
         detail: `${captured.detail} (completo)`,
         completed: true,
+      };
+    }
+    if (
+      captured.detail === 'separação de bags parcial' ||
+      captured.detail === 'produção de fardos parcial' ||
+      captured.detail === 'entrega de fardos parcial'
+    ) {
+      await rememberCyclePrompt(
+        input.context.cycle.id,
+        promptQuestionId(persisted.missing),
+        'agente: separação parcial',
+      );
+      return {
+        text: [captured.summary, notice].filter(Boolean).join('\n\n'),
+        source: 'fallback',
+        detail: captured.detail,
+        completed: false,
       };
     }
     const nextPrompt = persisted.missing.length

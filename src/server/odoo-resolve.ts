@@ -45,21 +45,22 @@ export async function findSalesTeamId(name: string): Promise<number> {
 
 export async function findCategoryId(name: string): Promise<number> {
   for (const clean of odooLookupNames(name).map(cleanName).filter(Boolean)) {
-    const found = await odooSearchRead<{ id: number }>(
+    const exact = await odooSearchRead<{ id: number }>(
       'product.category',
-      [
-        '|',
-        '|',
-        ['complete_name', '=', clean],
-        ['name', '=', clean],
-        '|',
-        ['complete_name', 'ilike', clean],
-        ['name', 'ilike', clean],
-      ],
+      [['name', '=', clean]],
       ['id'],
       { limit: 1 },
     );
-    if (found[0]?.id) return found[0].id;
+    if (exact[0]?.id) return exact[0].id;
+  }
+  for (const clean of odooLookupNames(name).map(cleanName).filter(Boolean)) {
+    const fuzzy = await odooSearchRead<{ id: number }>(
+      'product.category',
+      [['name', 'ilike', clean]],
+      ['id'],
+      { limit: 1 },
+    );
+    if (fuzzy[0]?.id) return fuzzy[0].id;
   }
   return 0;
 }
