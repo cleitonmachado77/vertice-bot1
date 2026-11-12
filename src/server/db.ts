@@ -407,6 +407,7 @@ const SCHEMA = `
     bot_send_time TEXT NOT NULL DEFAULT '08:00',
     bot_template_id TEXT NOT NULL DEFAULT '',
     bot_contact_id TEXT NOT NULL DEFAULT '',
+    bot_also_contact_ids TEXT NOT NULL DEFAULT '[]',
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -508,6 +509,7 @@ async function migrate(): Promise<void> {
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_send_time TEXT NOT NULL DEFAULT '08:00'`);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_template_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_contact_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_also_contact_ids TEXT NOT NULL DEFAULT '[]'`);
   await run(`ALTER TABLE forms_presets ADD COLUMN IF NOT EXISTS bot_rules_json TEXT NOT NULL DEFAULT '{}'`);
   await run(`ALTER TABLE panel_users ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE questionnaires ADD COLUMN IF NOT EXISTS source_preset_id TEXT NOT NULL DEFAULT ''`);

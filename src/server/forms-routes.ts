@@ -84,6 +84,11 @@ function text(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+function alsoContactIds(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.map((item) => text(item)).filter(Boolean);
+}
+
 function asRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object') return {};
   const out: Record<string, string> = {};
@@ -541,6 +546,7 @@ export function registerFormsRoutes(): void {
             bot_send_time: raw.bot_send_time != null ? text(raw.bot_send_time) : undefined,
             bot_template_id: raw.bot_template_id != null ? text(raw.bot_template_id) : undefined,
             bot_contact_id: raw.bot_contact_id != null ? text(raw.bot_contact_id) : undefined,
+            bot_also_contact_ids: alsoContactIds(raw.bot_also_contact_ids),
             bot_rules: raw.bot_rules != null ? raw.bot_rules : undefined,
             sort_order: raw.sort_order != null ? Number(raw.sort_order) : undefined,
           }),
@@ -577,6 +583,7 @@ export function registerFormsRoutes(): void {
             bot_send_time: raw.bot_send_time != null ? text(raw.bot_send_time) : undefined,
             bot_template_id: raw.bot_template_id != null ? text(raw.bot_template_id) : undefined,
             bot_contact_id: raw.bot_contact_id != null ? text(raw.bot_contact_id) : undefined,
+            bot_also_contact_ids: alsoContactIds(raw.bot_also_contact_ids),
             bot_rules: raw.bot_rules != null ? raw.bot_rules : undefined,
             sort_order: raw.sort_order != null ? Number(raw.sort_order) : undefined,
           }),

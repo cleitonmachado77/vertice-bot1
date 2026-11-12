@@ -111,6 +111,7 @@ const preset = (partial: Partial<FormPreset>): FormPreset => ({
   bot_send_time: '17:00',
   bot_template_id: '',
   bot_contact_id: '',
+  bot_also_contact_ids: [],
   bot_rules: { idle_reminder_minutes: null, idle_close_minutes: null, confirm_before_close: false },
   sort_order: 0,
   created_at: '',

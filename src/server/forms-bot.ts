@@ -217,19 +217,46 @@ export function buildFormsBotQuestions(preset: FormPreset): {
 }
 
 async function resolvePresetBotContact(preset: FormPreset): Promise<{ id: string; name: string; phone: string }> {
-  const contactId = String(preset.bot_contact_id || '').trim();
-  if (!contactId) {
+  const [recipient] = await resolvePresetBotContacts(preset);
+  return recipient;
+}
+
+/** Contato principal e quem também responde. Cada um recebe o menu e grava o próprio ciclo. */
+async function resolvePresetBotContacts(
+  preset: FormPreset,
+): Promise<Array<{ id: string; name: string; phone: string }>> {
+  const ids = [
+    ...new Set(
+      [preset.bot_contact_id, ...(preset.bot_also_contact_ids || [])]
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!ids.length) {
     throw new Error('Selecione o contato que receberá o questionário neste padrão');
   }
-  const contact = await getContact(contactId);
-  if (!contact || Number(contact.hidden) === 1) {
-    throw new Error('Contato do Bot não encontrado. Cadastre ou selecione outro no padrão.');
+  const recipients: Array<{ id: string; name: string; phone: string }> = [];
+  for (const [index, contactId] of ids.entries()) {
+    const contact = await getContact(contactId);
+    const extra = index > 0;
+    if (!contact || Number(contact.hidden) === 1) {
+      throw new Error(
+        extra
+          ? 'O contato que também responde não foi encontrado. Selecione outro no padrão.'
+          : 'Contato do Bot não encontrado. Cadastre ou selecione outro no padrão.',
+      );
+    }
+    const phone = normalizeWhatsappPhone(contact.phone || '');
+    if (!phone) {
+      throw new Error(
+        extra
+          ? 'O contato que também responde não tem WhatsApp válido'
+          : 'O contato selecionado não tem WhatsApp válido',
+      );
+    }
+    recipients.push({ id: contact.id, name: contact.name || phone, phone });
   }
-  const phone = normalizeWhatsappPhone(contact.phone || '');
-  if (!phone) {
-    throw new Error('O contato selecionado não tem WhatsApp válido');
-  }
-  return { id: contact.id, name: contact.name || phone, phone };
+  return recipients;
 }
 
 export async function syncFormsBotQuestionnaire(preset: FormPreset): Promise<Questionnaire | null> {
@@ -256,8 +283,8 @@ export async function syncFormsBotQuestionnaire(preset: FormPreset): Promise<Que
     throw new Error('Todos os campos visíveis já têm valor padrão — deixe algum vazio para o Bot perguntar');
   }
 
-  const recipient = await resolvePresetBotContact(preset);
-  const contactIds = [recipient.id];
+  const recipients = await resolvePresetBotContacts(preset);
+  const contactIds = recipients.map((recipient) => recipient.id);
 
   const kindLabel = KIND_LABELS[preset.kind];
   const greeting = `Oi {{1}}! ${kindLabel} — ${preset.name}`;

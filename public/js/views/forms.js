@@ -732,7 +732,7 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
 
   bindPresetBotControls(form);
   loadPresetBotTemplates(form, preset?.bot_template_id || '');
-  loadPresetBotContacts(form, preset?.bot_contact_id || '');
+  loadPresetBotContacts(form, preset?.bot_contact_id || '', preset?.bot_also_contact_ids?.[0] || '');
   if (preset?.id) loadPresetBotActivity(form, preset.id);
   bindPresetBotSendNow(form, preset);
   bindPresetBotNewContact(form);
@@ -758,6 +758,7 @@ function bindPresetEditor(root, kind, schema, catalog, items, token, preset, onS
         bot_enabled: data.get('bot_enabled') === '1',
         bot_template_id: String(data.get('bot_template_id') || ''),
         bot_contact_id: String(data.get('bot_contact_id') || ''),
+        ...alsoContactPayload(form, data),
         bot_rules: collectBotRules(data),
       };
       if (body.bot_enabled && !body.bot_contact_id) {
@@ -842,6 +843,7 @@ function bindPresetBotSendNow(form, preset) {
           bot_enabled: true,
           bot_template_id: String(data.get('bot_template_id') || ''),
           bot_contact_id: contactId,
+          ...alsoContactPayload(form, data),
           bot_rules: collectBotRules(data),
         },
       });
@@ -908,29 +910,51 @@ async function loadPresetBotTemplates(form, selectedId = '') {
   }
 }
 
-async function loadPresetBotContacts(form, selectedId = '') {
+function contactOptions(items, selectedId, emptyLabel) {
+  return [
+    `<option value="">${emptyLabel}</option>`,
+    ...items.map((item) => {
+      const selected = item.id === selectedId ? ' selected' : '';
+      const label = `${item.name || 'Sem nome'} · ${item.phone || 'sem número'}`;
+      return `<option value="${escapeHtml(item.id)}"${selected}>${escapeHtml(label)}</option>`;
+    }),
+  ].join('');
+}
+
+function alsoContactPayload(form, data) {
+  const select = form.querySelector('[data-bot-also-contact-select]');
+  const first = select?.querySelector('option')?.textContent || '';
+  if (!select || first.includes('Carregando') || first.includes('Falha')) return {};
+  const alsoId = String(data.get('bot_also_contact_id') || '');
+  return { bot_also_contact_ids: alsoId ? [alsoId] : [] };
+}
+
+async function loadPresetBotContacts(form, selectedId = '', alsoId = '') {
   const select = form.querySelector('[data-bot-contact-select]');
+  const also = form.querySelector('[data-bot-also-contact-select]');
   if (!select) return;
   try {
     const data = await api('/api/contacts');
     const items = Array.isArray(data.items) ? data.items : [];
-    const options = [
-      `<option value="">Selecione o contato…</option>`,
-      ...items.map((item) => {
-        const selected = item.id === selectedId ? ' selected' : '';
-        const label = `${item.name || 'Sem nome'} · ${item.phone || 'sem número'}`;
-        return `<option value="${escapeHtml(item.id)}"${selected}>${escapeHtml(label)}</option>`;
-      }),
-    ];
-    select.innerHTML = options.join('');
+    select.innerHTML = contactOptions(items, selectedId, 'Selecione o contato…');
     if (selectedId && !items.some((item) => item.id === selectedId)) {
       select.insertAdjacentHTML(
         'beforeend',
         `<option value="${escapeHtml(selectedId)}" selected>Contato salvo (não listado)</option>`,
       );
     }
+    if (also) {
+      also.innerHTML = contactOptions(items, alsoId, 'Ninguém');
+      if (alsoId && !items.some((item) => item.id === alsoId)) {
+        also.insertAdjacentHTML(
+          'beforeend',
+          `<option value="${escapeHtml(alsoId)}" selected>Contato salvo (não listado)</option>`,
+        );
+      }
+    }
   } catch (error) {
     select.innerHTML = `<option value="">Falha ao carregar contatos</option>`;
+    if (also) also.innerHTML = `<option value="">Falha ao carregar contatos</option>`;
     toast(error.message || 'Não foi possível listar contatos');
   }
 }
@@ -1270,6 +1294,12 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
               <option value="">Carregando contatos…</option>
             </select>
           </label>
+          <label>Também responde
+            <select name="bot_also_contact_id" data-bot-also-contact-select>
+              <option value="">Carregando contatos…</option>
+            </select>
+          </label>
+          <p class="muted">Mesmas perguntas do padrão. As respostas deste contato ficam no ciclo dele e não alteram as do destinatário.</p>
           <div class="forms-bot-contact-actions">
             <button class="btn-ghost" type="button" data-bot-toggle-new-contact>Novo contato</button>
           </div>

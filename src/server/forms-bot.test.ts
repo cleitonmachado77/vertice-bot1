@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FORMS_BOT_LINES_FIELD, buildFormsBotQuestions } from './forms-bot.js';
-import type { FormPreset } from './forms-presets.js';
+import { sanitizeAlsoContactIds, type FormPreset } from './forms-presets.js';
 
 function preset(partial: Partial<FormPreset> & Pick<FormPreset, 'kind'>): FormPreset {
   return {
@@ -19,6 +19,7 @@ function preset(partial: Partial<FormPreset> & Pick<FormPreset, 'kind'>): FormPr
     bot_send_time: '08:00',
     bot_template_id: '',
     bot_contact_id: '',
+    bot_also_contact_ids: [],
     bot_rules: { idle_reminder_minutes: null, idle_close_minutes: null, confirm_before_close: false },
     sort_order: 0,
     created_at: '',
@@ -26,6 +27,11 @@ function preset(partial: Partial<FormPreset> & Pick<FormPreset, 'kind'>): FormPr
     ...partial,
   };
 }
+
+test('contato que também responde não repete o principal', () => {
+  assert.deepEqual(sanitizeAlsoContactIds(['a', 'a', 'b', ''], 'a'), ['b']);
+  assert.deepEqual(sanitizeAlsoContactIds('nope', 'a'), []);
+});
 
 test('buildFormsBotQuestions gera header e bloco de linhas', () => {
   const built = buildFormsBotQuestions(
