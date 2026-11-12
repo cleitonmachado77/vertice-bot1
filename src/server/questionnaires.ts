@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { many, one, run, withTransaction } from './db.js';
+import { isAgroBotField, isAgroBotKind } from './agro-bot-fields.js';
 import { isFormsBotExportField } from './forms-bot-fields.js';
 import { isFormKind, type FormKind } from './forms-fields.js';
 import { isRfqFieldKey } from './rfq-fields.js';
@@ -97,7 +98,9 @@ export function normalizeDefaultValues(
   for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
     const field = String(key || '').trim();
     if (!field) continue;
-    if (kind) {
+    if (isAgroBotKind(formKind)) {
+      if (!isAgroBotField(formKind, field)) continue;
+    } else if (kind) {
       if (!isFormsBotExportField(kind, field)) continue;
     } else if (!isRfqFieldKey(field)) {
       continue;
@@ -214,14 +217,18 @@ async function saveQuestionnaireTransaction(input: QuestionnaireInput): Promise<
   if (input.weekday < 0 || input.weekday > 6) throw new Error('Dia da semana inválido');
 
   const formKindRaw = String(input.formKind || '').trim();
-  const formKind: FormKind | '' = isFormKind(formKindRaw) ? formKindRaw : '';
+  const formKind = isFormKind(formKindRaw) || isAgroBotKind(formKindRaw) ? formKindRaw : '';
   const sourcePresetId = String(input.sourcePresetId || '').trim();
   const companyOdooId = String(input.companyOdooId || '').trim();
 
   const questions = input.questions
     .map((item) => {
       const exportField = String(item.exportField || '').trim();
-      if (formKind) {
+      if (isAgroBotKind(formKind)) {
+        if (exportField && !isAgroBotField(formKind, exportField)) {
+          throw new Error(`Campo Agro inválido: ${exportField}`);
+        }
+      } else if (isFormKind(formKind)) {
         if (!isFormsBotExportField(formKind, exportField)) {
           throw new Error(`Campo Forms inválido: ${exportField}`);
         }

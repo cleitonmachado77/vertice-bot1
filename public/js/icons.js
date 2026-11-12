@@ -35,6 +35,10 @@ const PATHS = {
   chart: '<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/>',
   search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  sprout:
+    '<path d="M7 20h10"/><path d="M12 20v-8"/><path d="M12 12C8 12 6 9 6 6c4 0 6 2 6 6"/><path d="M12 12c4 0 6-3 6-6-4 0-6 2-6 6"/>',
+  harvest:
+    '<path d="M12 22V8"/><path d="M12 8c-2-2-2-5 0-6 2 1 2 4 0 6"/><path d="M8 13c-2-1-4-3-4-5 3 0 5 2 4 5"/><path d="M16 13c2-1 4-3 4-5-3 0-5 2-4 5"/>',
 };
 
 export function icon(name) {

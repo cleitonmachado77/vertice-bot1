@@ -1,4 +1,5 @@
-import { KIND_LABELS, isFormKind, type FormKind } from './forms-fields.js';
+import { AGRO_BOT_KINDS, AGRO_BOT_LABELS, isAgroBotKind } from './agro-bot-fields.js';
+import { KIND_LABELS, isFormKind } from './forms-fields.js';
 
 // Menu numerado do WhatsApp: só guia até o formulário certo; a coleta segue no fluxo do questionário.
 
@@ -21,9 +22,19 @@ export type MenuNode = {
 
 export type MenuForm = {
   questionnaireId: string;
-  kind: FormKind;
+  kind: string;
   name: string;
 };
+
+export function menuKindLabel(kind: string): string {
+  if (isFormKind(kind)) return KIND_LABELS[kind];
+  if (isAgroBotKind(kind)) return AGRO_BOT_LABELS[kind];
+  return kind;
+}
+
+export function isMenuFormKind(kind: string): boolean {
+  return isFormKind(kind) || isAgroBotKind(kind);
+}
 
 export type MenuCycleStatus = 'none' | 'open' | 'notified' | 'in_progress' | 'completed';
 
@@ -34,7 +45,7 @@ export type MenuCycle = {
   lastPromptedAt: string;
 };
 
-const KIND_ORDER: FormKind[] = ['purchase', 'product', 'production', 'sale'];
+const KIND_ORDER = ['purchase', 'product', 'production', 'sale', ...AGRO_BOT_KINDS];
 
 export function foldMenuText(value: string): string {
   return String(value || '')
@@ -104,20 +115,22 @@ export function isNewMenuSession(previousInboundAt: string, nowMs: number, gapHo
 }
 
 /** Nome do padrão sem o prefixo “[Forms] Compras · ”. */
-export function menuFormName(rawName: string, kind: FormKind): string {
-  const withoutTag = String(rawName || '').replace(/^\[Forms\]\s*/i, '').trim();
-  const prefix = `${KIND_LABELS[kind]} · `;
+export function menuFormName(rawName: string, kind: string): string {
+  const withoutTag = String(rawName || '')
+    .replace(/^\[(Forms|Agro)\]\s*/i, '')
+    .trim();
+  const prefix = `${menuKindLabel(kind)} · `;
   const name = withoutTag.startsWith(prefix) ? withoutTag.slice(prefix.length).trim() : withoutTag;
-  return name || KIND_LABELS[kind];
+  return name || menuKindLabel(kind);
 }
 
 export function normalizeMenuForms(
   rows: Array<{ questionnaire_id: string; name: string; form_kind: string }>,
 ): MenuForm[] {
   return rows
-    .filter((row) => isFormKind(String(row.form_kind || '')))
+    .filter((row) => isMenuFormKind(String(row.form_kind || '')))
     .map((row) => {
-      const kind = row.form_kind as FormKind;
+      const kind = row.form_kind;
       return { questionnaireId: row.questionnaire_id, kind, name: menuFormName(row.name, kind) };
     });
 }
@@ -173,13 +186,13 @@ export function singleRegisterOption(node: MenuNode): MenuOption | undefined {
 }
 
 /** Tipo com vários padrões → escolhe o padrão; com um só → vai direto às ações dele. */
-export function buildKindMenu(kind: FormKind, forms: MenuForm[], cycles: MenuCycle[]): MenuNode {
+export function buildKindMenu(kind: string, forms: MenuForm[], cycles: MenuCycle[]): MenuNode {
   const ofKind = forms.filter((form) => form.kind === kind);
   if (ofKind.length === 1) return buildFormMenu(ofKind[0], cycles, 'main');
   return {
     node: `kind:${kind}`,
     parent: 'main',
-    title: `${KIND_LABELS[kind]} — escolha o formulário:`,
+    title: `${menuKindLabel(kind)} — escolha o formulário:`,
     options: numbered([
       ...ofKind.map((form) => ({
         label: form.name,
@@ -193,7 +206,7 @@ export function buildKindMenu(kind: FormKind, forms: MenuForm[], cycles: MenuCyc
 
 export function buildFormMenu(form: MenuForm, cycles: MenuCycle[], parent: string): MenuNode {
   const cycle = cycleFor(cycles, form.questionnaireId);
-  const kindLabel = KIND_LABELS[form.kind];
+  const kindLabel = menuKindLabel(form.kind);
   const options: Omit<MenuOption, 'key'>[] = [];
   if (cycle.status === 'completed') {
     options.push({ label: 'Acrescentar itens ao registro de hoje', action: 'register', target: form.questionnaireId });

@@ -45,6 +45,7 @@ const KIND_ORDER: Record<FormKind, number> = {
 export function isFormsBotQuestionnaire(
   questionnaire: Pick<Questionnaire, 'id' | 'sourcePresetId'>,
 ): boolean {
+  if (String(questionnaire.id || '').startsWith('agro-preset:')) return false;
   if (String(questionnaire.sourcePresetId || '').trim()) return true;
   return String(questionnaire.id || '').startsWith('forms-preset:');
 }

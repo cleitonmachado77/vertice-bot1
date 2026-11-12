@@ -7,6 +7,7 @@ import { clearCompaniesCache, mountCompanySwitcher, mountEntityBadge } from './c
 import { renderHub, stopHubDashboard } from './views/hub.js';
 import { renderWebSettings } from './views/web-settings.js';
 import { FORMS_TABS, renderForms, tabFromSlug } from './views/forms.js';
+import { AGRO_TABS, agroTabFromSlug, closeAgroModal, renderAgro } from './views/agro.js';
 import { renderOverview, stopOverview } from './views/overview.js';
 import { renderContacts, stopContacts } from './views/contacts.js';
 import { renderContact } from './views/contact.js';
@@ -45,6 +46,13 @@ const APPS = {
     shellClass: 'bot-shell',
     mainClass: 'main',
     mainId: 'view',
+  },
+  agro: {
+    crumb: 'Vertice Agro',
+    logo: '/logo-vertice-web.png',
+    shellClass: 'agro-shell',
+    mainClass: 'main agro-main',
+    mainId: 'agro-view',
   },
 };
 
@@ -117,6 +125,21 @@ function currentRoute() {
       key: `forms|${slug}`,
     };
   }
+  if (raw === 'agro' || raw.startsWith('agro/')) {
+    const slug = raw === 'agro' ? 'plantio' : raw.slice('agro/'.length).split('/')[0] || 'plantio';
+    if (raw === 'agro') location.replace('#/agro/plantio');
+    const agroTab = agroTabFromSlug(slug);
+    return {
+      contactId: '',
+      inboxFocus: null,
+      settingsTab: '',
+      formsKind: '',
+      formsSlug: '',
+      agroTab,
+      name: 'agro',
+      key: `agro|${agroTab}`,
+    };
+  }
   if (LEGACY[raw]) {
     const tab = LEGACY[raw];
     if (location.hash !== `#/settings/${tab}`) location.replace(`#/settings/${tab}`);
@@ -148,7 +171,10 @@ async function draw() {
   const current = currentRoute();
   if (
     drawnKey === current.key &&
-    (document.querySelector('#view') || document.querySelector('#hub-view') || document.querySelector('#forms-view'))
+    (document.querySelector('#view') ||
+      document.querySelector('#hub-view') ||
+      document.querySelector('#forms-view') ||
+      document.querySelector('#agro-view'))
   ) {
     return;
   }
@@ -158,9 +184,14 @@ async function draw() {
     current.name === 'forms' &&
     String(prevKey).startsWith('forms|') &&
     Boolean(document.querySelector('#forms-view .forms-pane'));
+  const softAgro =
+    current.name === 'agro' &&
+    String(prevKey).startsWith('agro|') &&
+    Boolean(document.querySelector('#agro-view .agro-pane'));
 
   const token = nextNavToken();
-  if (!softForms) stopViews();
+  if (!softForms && !softAgro) stopViews();
+  if (current.name !== 'agro') closeAgroModal();
   drawnKey = current.key;
 
   const me = await ensureSession();
@@ -211,6 +242,15 @@ async function draw() {
     return;
   }
 
+  if (current.name === 'agro') {
+    const agroTab = AGRO_TABS.find((tab) => tab.id === current.agroTab);
+    await mountChrome('agro', me, current.agroTab || 'plantio', agroTab?.label || 'Vertice Agro');
+    const view = document.querySelector('#agro-view');
+    if (!view || !isNavActive(token)) return;
+    await renderAgro(view, current.agroTab || 'plantio', token, { soft: softAgro });
+    return;
+  }
+
   if (!isAdmSession(me)) {
     location.replace('#/web');
     return;
@@ -247,11 +287,20 @@ function navItems(appKey, me) {
       { key: 'web', href: '#/web', label: 'Dashboard', icon: 'dashboard' },
       adm && { key: 'bot', href: '#/overview', label: 'Vertice Bot', icon: 'bot' },
       { key: 'forms', href: '#/forms/compras', label: 'Vértice RSU', icon: 'forms' },
+      { key: 'agro', href: '#/agro/plantio', label: 'Vertice Agro', icon: 'sprout' },
       adm && { key: 'web-settings', href: '#/web/settings/usuarios', label: 'Configurações', icon: 'settings' },
     ].filter(Boolean);
   }
   if (appKey === 'forms') {
     return FORMS_TABS.map((tab) => ({ key: tab.id, href: tab.href, label: tab.label, icon: tab.icon }));
+  }
+  if (appKey === 'agro') {
+    return AGRO_TABS.map((tab) => ({
+      key: tab.id,
+      href: `#/agro/${tab.slug}`,
+      label: tab.label,
+      icon: tab.icon,
+    }));
   }
   return Object.entries(botRoutes).map(([key, route]) => ({
     key,

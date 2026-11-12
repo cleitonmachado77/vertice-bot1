@@ -409,6 +409,8 @@ async function buildSaleLines(
 export type PushOptions = {
   /** Gravação feita no Vertice: confirma no Odoo e valida recebimento/entrega (sem rascunho). */
   confirm?: boolean;
+  /** Local interno de onde a venda deve sair (talhão). 0 usa o depósito do pedido. */
+  sourceLocationId?: number;
 };
 
 type OrderModel = 'sale.order' | 'purchase.order';
@@ -469,7 +471,12 @@ async function confirmedOrderLineCommands(
 }
 
 /** Valida as transferências abertas do pedido (recebimento/entrega) com as quantidades pedidas. */
-async function validateOrderPickings(model: OrderModel, orderId: number, companyId: number): Promise<void> {
+async function validateOrderPickings(
+  model: OrderModel,
+  orderId: number,
+  companyId: number,
+  sourceLocationId = 0,
+): Promise<void> {
   const context = orderContext(companyId);
   const [order] = await odooSearchRead<{ picking_ids: number[] }>(model, [['id', '=', orderId]], ['picking_ids'], {
     limit: 1,
@@ -490,8 +497,14 @@ async function validateOrderPickings(model: OrderModel, orderId: number, company
       ['id', 'product_uom_qty'],
     );
     if (!moves.some((move) => Number(move.product_uom_qty) > 0)) continue;
+    if (sourceLocationId > 0) {
+      await odooExecuteKw('stock.picking', 'do_unreserve', [[picking.id]], { context }).catch(() => undefined);
+      await odooWrite('stock.picking', [picking.id], { location_id: sourceLocationId }).catch(() => undefined);
+    }
     for (const move of moves) {
-      await odooWrite('stock.move', [move.id], { quantity: Number(move.product_uom_qty), picked: true });
+      const values: Record<string, unknown> = { quantity: Number(move.product_uom_qty), picked: true };
+      if (sourceLocationId > 0) values.location_id = sourceLocationId;
+      await odooWrite('stock.move', [move.id], values);
     }
     await odooExecuteKw('stock.picking', 'button_validate', [[picking.id]], {
       context: { ...context, skip_backorder: true, picking_ids_not_to_backorder: [picking.id], skip_sms: true },
@@ -523,6 +536,9 @@ export async function pushSaleToOdoo(doc: FormDocument, options: PushOptions = {
     client_order_ref: doc.header.customer_reference || false,
     company_id: companyId,
   };
+  if (doc.header.source === 'agro' && doc.header.source_delivery_id) {
+    values.origin = `AGRO:${doc.header.source_delivery_id}`;
+  }
   if (doc.header.order_date) values.date_order = doc.header.order_date;
   if (doc.header.expiration) values.validity_date = doc.header.expiration;
 
@@ -558,7 +574,7 @@ export async function pushSaleToOdoo(doc: FormDocument, options: PushOptions = {
     if (isDraftOrderState(order.state)) {
       await odooExecuteKw('sale.order', 'action_confirm', [[odooId]], { context: orderContext(companyId) });
     }
-    await validateOrderPickings('sale.order', odooId, companyId);
+    await validateOrderPickings('sale.order', odooId, companyId, options.sourceLocationId || 0);
   }
   return setDocOdooMeta(doc.id, odooId, { orderModel: 'sale.order' });
 }

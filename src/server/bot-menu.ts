@@ -1,6 +1,5 @@
 import { zonedNow } from './clock.js';
 import { getSetting, many, one, run } from './db.js';
-import { KIND_LABELS, isFormKind } from './forms-fields.js';
 import {
   buildFormsBotAgendaItems,
   formatFormsBotAgendaIntro,
@@ -18,6 +17,8 @@ import {
   isMenuKeyword,
   matchMenuOption,
   menuGreeting,
+  menuKindLabel,
+  isMenuFormKind,
   normalizeMenuForms,
   singleRegisterOption,
   type MenuCycle,
@@ -229,7 +230,7 @@ async function runOption(
   if (!form) return ctx.showMain('Esse formulário não está mais disponível.');
   const context = await openCycleContext(form.questionnaireId, input.contactId, input.date);
   if (!context) return ctx.showMain('Esse formulário está sem perguntas configuradas.');
-  const label = `${KIND_LABELS[form.kind]} · ${form.name}`;
+  const label = `${menuKindLabel(form.kind)} · ${form.name}`;
   const summary = formsAnswersSummary(context.questionnaire.questions, context.answers);
 
   if (option.action === 'view') {
@@ -280,7 +281,7 @@ function resolveNode(
 ): MenuNode {
   if (target.startsWith('kind:')) {
     const kind = target.slice('kind:'.length);
-    if (isFormKind(kind)) return buildKindMenu(kind, forms, cycles);
+    if (isMenuFormKind(kind)) return buildKindMenu(kind, forms, cycles);
   }
   if (target.startsWith('form:')) {
     const form = forms.find((item) => item.questionnaireId === target.slice('form:'.length));

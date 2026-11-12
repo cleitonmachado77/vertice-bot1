@@ -830,6 +830,16 @@ export async function onQuestionnaireCycleCompleted(cycleId: string): Promise<vo
       error instanceof Error ? error.message : error,
     );
   }
+  try {
+    const { materializeAgroFromCycle } = await import('./agro-bot.js');
+    await materializeAgroFromCycle(cycleId);
+  } catch (error) {
+    console.error(
+      'agro-bot: falha ao materializar Agro',
+      cycleId,
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 export type { CycleAnswer };

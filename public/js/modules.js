@@ -18,6 +18,15 @@ export const modules = [
     accent: 'forms',
     available: true,
   },
+  {
+    id: 'agro',
+    name: 'Vertice Agro',
+    description: 'Plantio, colheita e entrega da empresa ativa',
+    href: '#/agro/plantio',
+    logo: '/logo-vertice-web.png',
+    accent: 'agro',
+    available: true,
+  },
 ];
 
 export function availableModules() {

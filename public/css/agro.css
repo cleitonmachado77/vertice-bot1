@@ -1,0 +1,150 @@
+.agro-pane .stat-row {
+  margin-top: 4px;
+}
+
+.agro-panel .forms-filters {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
+.agro-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.agro-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.agro-mini {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 0.75rem;
+}
+
+.agro-form textarea {
+  min-height: 72px;
+}
+
+.agro-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.agro-preset-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agro-preset-head,
+.agro-preset-field {
+  display: grid;
+  grid-template-columns: 72px minmax(140px, 200px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.agro-preset-head span:first-child {
+  text-align: center;
+}
+
+.agro-preset-head {
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agro-preset-field {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface, var(--card));
+}
+
+.agro-preset-field .forms-preset-show {
+  justify-content: center;
+  margin: 0;
+}
+
+.agro-preset-name {
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.agro-preset-field input:not([type='checkbox']) {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .agro-preset-head {
+    display: none;
+  }
+
+  .agro-preset-field {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 6px;
+  }
+}
+
+.agro-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: var(--ink);
+  font-size: 0.875rem;
+}
+
+.agro-check input {
+  width: auto;
+  margin: 0;
+}
+
+.agro-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agro-status--planejado {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.agro-status--em_colheita {
+  background: var(--amber-soft);
+  color: var(--orange-strong);
+}
+
+.agro-status--colhido {
+  background: var(--green-soft);
+  color: var(--green-strong);
+}
+
+body.agro-modal-open {
+  overflow: hidden;
+}
+
+body.agro-modal-open .topbar,
+body.agro-modal-open .sidebar {
+  z-index: 1;
+  pointer-events: none;
+}

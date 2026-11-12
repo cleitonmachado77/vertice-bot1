@@ -62,7 +62,18 @@ async function applyInventoryDelta(companyId: number, variantId: number, add: nu
   );
   const locationId = many2oneId(warehouse?.lot_stock_id);
   if (!locationId) throw new Error(`Empresa Odoo ${companyId} sem depósito interno`);
+  return addProductStockAtLocation(companyId, variantId, locationId, add);
+}
 
+/** Soma ou tira quantidade num local interno. O ajuste usa o saldo atual, então não zera outras movimentações. */
+export async function addProductStockAtLocation(
+  companyId: number,
+  variantId: number,
+  locationId: number,
+  delta: number,
+): Promise<number> {
+  if (!locationId) throw new Error('Local de estoque não informado');
+  if (!variantId) throw new Error('Produto sem variante no Odoo');
   const context = { inventory_mode: true, allowed_company_ids: [companyId] };
   const [quant] = await odooSearchRead<{ id: number; quantity: number }>(
     'stock.quant',
@@ -73,7 +84,9 @@ async function applyInventoryDelta(companyId: number, variantId: number, add: nu
     ['id', 'quantity'],
     { limit: 1 },
   );
-  const balance = Math.round(((Number(quant?.quantity) || 0) + add) * 1000) / 1000;
+  const current = Number(quant?.quantity) || 0;
+  if (!delta) return current;
+  const balance = Math.round((current + delta) * 1000) / 1000;
   const quantId = quant?.id
     ? quant.id
     : await odooCreate(
