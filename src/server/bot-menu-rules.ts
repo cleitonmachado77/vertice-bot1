@@ -70,8 +70,19 @@ export function formCollectionIsOpen(input: {
   superseded: boolean;
   awaiting: number;
   pendingQuestionId: string;
+  /** Data do ciclo (YYYY-MM-DD). Fora do dia de hoje não recebe resposta. */
+  occurrenceDate?: string;
+  today?: string;
 }): boolean {
   if (!input.cycleId || input.superseded || input.awaiting === 1) return false;
+  if (
+    input.occurrenceDate &&
+    input.today &&
+    input.occurrenceDate < input.today &&
+    input.awaiting !== 2
+  ) {
+    return false;
+  }
   if (input.awaiting === 2) return true;
   if (input.status === 'completed' || input.status === 'failed') return false;
   if (input.status === 'in_progress') return true;

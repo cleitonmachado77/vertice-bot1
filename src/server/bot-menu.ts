@@ -1,3 +1,4 @@
+import { zonedNow } from './clock.js';
 import { getSetting, many, one, run } from './db.js';
 import { KIND_LABELS, isFormKind } from './forms-fields.js';
 import {
@@ -139,15 +140,20 @@ async function readFormCollection(conversationId: string): Promise<{
   superseded: boolean;
   awaiting: number;
   pendingQuestionId: string;
+  occurrenceDate: string;
+  today: string;
 }> {
+  const today = zonedNow().date;
   const row = await one<{
     active_cycle_id: string | null;
     awaiting_selection: number | null;
     status: string | null;
     superseded_at: string | null;
     pending_question_id: string | null;
+    occurrence_date: string | null;
   }>(
-    `SELECT ctx.active_cycle_id, ctx.awaiting_selection, cyc.status, cyc.superseded_at, cyc.pending_question_id
+    `SELECT ctx.active_cycle_id, ctx.awaiting_selection, cyc.status, cyc.superseded_at,
+            cyc.pending_question_id, cyc.occurrence_date
      FROM conversation_questionnaire_context ctx
      LEFT JOIN questionnaire_cycles cyc ON cyc.id = ctx.active_cycle_id
      WHERE ctx.conversation_id = $1`,
@@ -159,6 +165,8 @@ async function readFormCollection(conversationId: string): Promise<{
     superseded: Boolean(row?.superseded_at),
     awaiting: Number(row?.awaiting_selection) || 0,
     pendingQuestionId: String(row?.pending_question_id || ''),
+    occurrenceDate: String(row?.occurrence_date || ''),
+    today,
   };
 }
 

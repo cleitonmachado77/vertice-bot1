@@ -72,15 +72,31 @@ export async function resolveActiveCycleForConversation(input: {
 
   if (stored?.awaiting_selection === 2 && stored.active_cycle_id) {
     const [selected] = await getCycleContextsByIds([stored.active_cycle_id]);
-    if (selected && ['completed', 'in_progress'].includes(selected.cycle.status)) {
+    if (
+      selected &&
+      selected.cycle.occurrence_date === input.date &&
+      ['completed', 'in_progress'].includes(selected.cycle.status)
+    ) {
       return { context: selected, ambiguous: [], completedEditContext: true };
     }
   }
 
   if (stored?.active_cycle_id && input.includeCompletedContext) {
     const [selected] = await getCycleContextsByIds([stored.active_cycle_id]);
-    if (selected?.cycle.status === 'completed') {
+    if (selected?.cycle.status === 'completed' && selected.cycle.occurrence_date === input.date) {
       return { context: selected, ambiguous: [] };
+    }
+  }
+
+  // Ciclo de outro dia na conversa: não recebe mais resposta.
+  if (stored?.active_cycle_id) {
+    const [selected] = await getCycleContextsByIds([stored.active_cycle_id]);
+    if (
+      selected &&
+      (selected.cycle.occurrence_date < input.date || selected.cycle.status === 'failed') &&
+      selected.cycle.status !== 'completed'
+    ) {
+      await setConversationCycleContext(input.conversationId, '');
     }
   }
 
@@ -157,6 +173,7 @@ export function preferPromptedRecentCycle(
   const openPrompted = candidates
     .filter(
       (item) =>
+        item.cycle.occurrence_date === today &&
         item.missing.length > 0 &&
         ['notified', 'in_progress'].includes(item.cycle.status) &&
         Boolean(item.cycle.last_prompted_at),
@@ -168,21 +185,6 @@ export function preferPromptedRecentCycle(
   if (!openPrompted.length) return undefined;
 
   const best = openPrompted[0];
-  // Se o melhor prompt é de dia anterior, prefere-o a um "open" de hoje sem prompt.
-  if (best.cycle.occurrence_date < today) {
-    const todayUnprompted = candidates.filter(
-      (item) =>
-        item.cycle.occurrence_date === today &&
-        item.cycle.status === 'open' &&
-        !item.cycle.last_prompted_at &&
-        item.questionnaire.id === best.questionnaire.id,
-    );
-    if (todayUnprompted.length || candidates.some((c) => c.cycle.id === best.cycle.id)) {
-      return best;
-    }
-  }
-
-  // Mesmo dia: se há um prompted único mais recente, use-o.
   if (
     openPrompted.length === 1 ||
     openPrompted[0].cycle.last_prompted_at !== openPrompted[1]?.cycle.last_prompted_at
@@ -192,7 +194,7 @@ export function preferPromptedRecentCycle(
   return undefined;
 }
 
-/** Une ciclos de hoje com pendentes recentes, sem duplicar id. */
+/** Une ciclos de hoje com pendentes do mesmo dia, sem duplicar id. */
 export function mergeCycleCandidates(
   todayCandidates: ActiveCycleContext[],
   recentPending: ActiveCycleContext[],
@@ -201,7 +203,8 @@ export function mergeCycleCandidates(
   const byId = new Map<string, ActiveCycleContext>();
   for (const item of todayCandidates) byId.set(item.cycle.id, item);
   for (const item of recentPending) {
-    if (item.cycle.occurrence_date > today) continue;
+    // Resposta só no ciclo do dia; dias anteriores fecham à meia-noite.
+    if (item.cycle.occurrence_date !== today) continue;
     if (!byId.has(item.cycle.id)) byId.set(item.cycle.id, item);
   }
   return [...byId.values()];

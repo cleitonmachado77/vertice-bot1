@@ -213,7 +213,7 @@ export async function listPendingCycleContextsNearDate(
      WHERE cyc.contact_id = $1
        AND cyc.occurrence_date = ANY($2::text[])
        AND cyc.superseded_at = ''
-       AND cyc.status IN ('open', 'notified', 'in_progress', 'sending', 'failed')
+       AND cyc.status IN ('open', 'notified', 'in_progress', 'sending')
      ORDER BY cyc.occurrence_date DESC, cyc.last_prompted_at DESC NULLS LAST`,
     [contactId, dates],
   );

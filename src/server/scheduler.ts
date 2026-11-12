@@ -32,6 +32,9 @@ export function startScheduler(): void {
               : '') +
             (result.idle && result.idle.closed + result.idle.reminded + result.idle.alerted
               ? ` | forms parados: encerrados=${result.idle.closed} lembretes=${result.idle.reminded} alertas=${result.idle.alerted}`
+              : '') +
+            (result.dayClose && result.dayClose.closed + result.dayClose.clearedContexts
+              ? ` | dia: fechados=${result.dayClose.closed} contextos=${result.dayClose.clearedContexts}`
               : ''),
         );
         for (const item of result.items.slice(0, 20)) {

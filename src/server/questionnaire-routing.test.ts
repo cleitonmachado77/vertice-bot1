@@ -62,7 +62,7 @@ function ctx(
   };
 }
 
-test('preferPromptedRecentCycle prefere notified de ontem a open de hoje (Cleiton)', () => {
+test('preferPromptedRecentCycle ignora ciclo de ontem (fecha à meia-noite)', () => {
   const today = ctx('today', '2026-10-19', 'open');
   const yesterday = ctx(
     'yest',
@@ -71,17 +71,17 @@ test('preferPromptedRecentCycle prefere notified de ontem a open de hoje (Cleito
     '2026-10-18T23:53:23.619Z',
   );
   const preferred = preferPromptedRecentCycle([today, yesterday], '2026-10-19');
-  assert.equal(preferred?.cycle.id, 'yest');
+  assert.equal(preferred, undefined);
 });
 
-test('preferPromptedRecentCycle escolhe o last_prompted_at mais recente', () => {
-  const older = ctx('a', '2026-10-17', 'notified', '2026-10-17T23:53:23.000Z');
-  const newer = ctx('b', '2026-10-18', 'notified', '2026-10-18T23:53:23.000Z');
+test('preferPromptedRecentCycle escolhe o last_prompted_at mais recente do dia', () => {
+  const older = ctx('a', '2026-10-19', 'notified', '2026-10-19T12:00:00.000Z');
+  const newer = ctx('b', '2026-10-19', 'notified', '2026-10-19T18:00:00.000Z');
   const preferred = preferPromptedRecentCycle([older, newer], '2026-10-19');
   assert.equal(preferred?.cycle.id, 'b');
 });
 
-test('mergeCycleCandidates une sem duplicar', () => {
+test('mergeCycleCandidates une só o dia atual, sem duplicar', () => {
   const today = ctx('today', '2026-10-19', 'open');
   const yesterday = ctx(
     'yest',
@@ -90,7 +90,6 @@ test('mergeCycleCandidates une sem duplicar', () => {
     '2026-10-18T23:53:23.619Z',
   );
   const merged = mergeCycleCandidates([today], [yesterday, today], '2026-10-19');
-  assert.equal(merged.length, 2);
-  assert.ok(merged.some((item) => item.cycle.id === 'today'));
-  assert.ok(merged.some((item) => item.cycle.id === 'yest'));
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].cycle.id, 'today');
 });

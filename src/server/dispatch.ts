@@ -3,6 +3,7 @@ import { minutesFromClock, zonedNow } from './clock.js';
 import { NevoaError, sendWhatsappText } from './nevoa.js';
 import { dispatchStatus, listDueMessages, markDispatch, runsOnWeekday } from './plans.js';
 import { runFormsBotIdleRules } from './forms-bot-idle-close.js';
+import { expirePastDayCycles } from './questionnaire-day-close.js';
 import { runQuestionnaireDispatches } from './questionnaire-dispatch.js';
 import { ensureConversation, recordOutbound } from './thread.js';
 
@@ -22,6 +23,8 @@ export type DispatchRun = {
   };
   /** Forms Bot parado: encerrados, lembretes enviados e alertas no painel nesta rodada. */
   idle?: { closed: number; reminded: number; alerted: number };
+  /** Ciclos incompletos de dias anteriores fechados ao virar o dia. */
+  dayClose?: { closed: number; clearedContexts: number };
 };
 
 export async function runDueDispatches(): Promise<DispatchRun> {
@@ -37,6 +40,16 @@ async function runDispatchBody(): Promise<DispatchRun> {
   const clock = zonedNow();
   const result = emptyRun(clock.date);
   const channelId = getSetting('nevoa_channel_id');
+
+  const dayClose = await expirePastDayCycles(clock.date);
+  result.dayClose = { closed: dayClose.closed, clearedContexts: dayClose.clearedContexts };
+  if (dayClose.closed || dayClose.clearedContexts) {
+    result.items.push({
+      phone: '-',
+      status: 'closed',
+      detail: `ciclos do dia anterior: fechados=${dayClose.closed} contextos=${dayClose.clearedContexts}`,
+    });
+  }
 
   for (const message of await listDueMessages()) {
     if (!runsOnWeekday(message, clock.weekday)) {

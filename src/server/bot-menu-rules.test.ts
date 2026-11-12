@@ -169,6 +169,22 @@ test('pergunta aberta recebe a resposta; sem pergunta, o menu', () => {
   assert.equal(formCollectionIsOpen({ ...nome, status: 'completed', pendingQuestionId: '' }), false);
   assert.equal(formCollectionIsOpen({ ...nome, superseded: true }), false);
   assert.equal(formCollectionIsOpen({ ...nome, awaiting: 2, status: 'completed', pendingQuestionId: '' }), true);
+  assert.equal(
+    formCollectionIsOpen({
+      ...nome,
+      occurrenceDate: '2026-11-10',
+      today: '2026-11-12',
+    }),
+    false,
+  );
+  assert.equal(
+    formCollectionIsOpen({
+      ...nome,
+      occurrenceDate: '2026-11-12',
+      today: '2026-11-12',
+    }),
+    true,
+  );
 });
 
 test('palavra “menu” e sessão nova', () => {
