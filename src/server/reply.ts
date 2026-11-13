@@ -682,7 +682,6 @@ async function routeExclusiveMode(input: {
     ) {
       mode = undefined;
     } else return null;
-    else return null;
   }
   if (mode?.kind === 'menu') return null;
   if (mode?.kind === 'day') {
