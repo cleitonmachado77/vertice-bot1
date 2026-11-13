@@ -428,7 +428,9 @@ export async function draftQuestionnaireReply(input: {
         formKind: input.context.questionnaire.formKind,
         companyOdooId: input.context.questionnaire.companyOdooId,
       });
-      if (!persisted.complete) return pendingNewDraft(input.context, capture.accepted, persisted, 'atalho heuristico');
+      if (!persisted.complete || persisted.pendingNew.length) {
+        return pendingNewDraft(input.context, capture.accepted, persisted, 'atalho heuristico');
+      }
       return {
         text: capture.reply.slice(0, 1500),
         source: 'fallback',
@@ -437,7 +439,7 @@ export async function draftQuestionnaireReply(input: {
       };
     }
     if (capture?.accepted.length) {
-      // Parcial: grava o que a heurística pegou; a IA redige o pedido do restante.
+      // Parcial: grava e pede o que falta sem esperar o modelo redigir.
       const persisted = await persistAcceptedAnswers({
         cycleId: input.context.cycle.id,
         questions,
@@ -448,15 +450,15 @@ export async function draftQuestionnaireReply(input: {
         formKind: input.context.questionnaire.formKind,
         companyOdooId: input.context.questionnaire.companyOdooId,
       });
-      alreadySaved = persisted.answers;
-      seededFromHeuristic = true;
-      captureTargets =
-        amending || input.forceCompletedEdit ? questions : missingQuestions(questions, alreadySaved);
-      await rememberCyclePrompt(
-        input.context.cycle.id,
-        promptQuestionId(captureTargets),
-        'agente: heurística parcial',
-      );
+      if (persisted.complete && !persisted.pendingNew.length) {
+        return {
+          text: capture.reply.slice(0, 1500),
+          source: 'fallback',
+          detail: 'atalho heuristico concluido',
+          completed: true,
+        };
+      }
+      return pendingNewDraft(input.context, capture.accepted, persisted, 'atalho heuristico');
     }
   }
 

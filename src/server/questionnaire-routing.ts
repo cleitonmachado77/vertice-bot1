@@ -70,27 +70,31 @@ export async function resolveActiveCycleForConversation(input: {
     return { ambiguous: pendingSelection };
   }
 
-  if (stored?.awaiting_selection === 2 && stored.active_cycle_id) {
+  if (stored?.active_cycle_id && stored.awaiting_selection !== 1) {
     const [selected] = await getCycleContextsByIds([stored.active_cycle_id]);
     if (
+      stored.awaiting_selection === 2 &&
       selected &&
       selected.cycle.occurrence_date === input.date &&
       ['completed', 'in_progress'].includes(selected.cycle.status)
     ) {
       return { context: selected, ambiguous: [], completedEditContext: true };
     }
-  }
-
-  if (stored?.active_cycle_id && input.includeCompletedContext) {
-    const [selected] = await getCycleContextsByIds([stored.active_cycle_id]);
-    if (selected?.cycle.status === 'completed' && selected.cycle.occurrence_date === input.date) {
+    // Resposta no meio da coleta: o ciclo já está na conversa. Não recria os outros formulários.
+    if (
+      selected &&
+      reusableOpenCycle(selected.cycle, input.date, selected.missing.length)
+    ) {
       return { context: selected, ambiguous: [] };
     }
-  }
-
-  // Ciclo de outro dia na conversa: não recebe mais resposta.
-  if (stored?.active_cycle_id) {
-    const [selected] = await getCycleContextsByIds([stored.active_cycle_id]);
+    if (
+      input.includeCompletedContext &&
+      selected?.cycle.status === 'completed' &&
+      !selected.cycle.superseded_at &&
+      selected.cycle.occurrence_date === input.date
+    ) {
+      return { context: selected, ambiguous: [] };
+    }
     if (
       selected &&
       (selected.cycle.occurrence_date < input.date || selected.cycle.status === 'failed') &&
@@ -158,6 +162,20 @@ export async function resolveActiveCycleForConversation(input: {
     );
   }
   return { ambiguous: candidates };
+}
+
+const OPEN_ANSWER_STATUSES = new Set(['open', 'sending', 'notified', 'in_progress']);
+
+/** Ciclo de hoje, ainda com pergunta em aberto, já preso na conversa. */
+export function reusableOpenCycle(
+  cycle: { status: string; occurrence_date: string; superseded_at?: string },
+  today: string,
+  missingCount: number,
+): boolean {
+  if (cycle.superseded_at) return false;
+  if (cycle.occurrence_date !== today) return false;
+  if (missingCount <= 0) return false;
+  return OPEN_ANSWER_STATUSES.has(cycle.status);
 }
 
 /**

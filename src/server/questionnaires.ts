@@ -166,30 +166,34 @@ export async function getQuestionnaire(
   id: string,
   includeDeleted = false,
 ): Promise<Questionnaire | undefined> {
-  const row = await one<QuestionnaireRow>(
-    `SELECT id, name, greeting, frequency, weekday, send_time, template_id, version,
-            active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json,
-            COALESCE(source_preset_id, '') AS source_preset_id,
-            COALESCE(form_kind, '') AS form_kind,
-            COALESCE(company_odoo_id, '') AS company_odoo_id
-     FROM questionnaires WHERE id = $1 AND ($2::boolean OR deleted_at = '')`,
-    [id, includeDeleted],
-  );
-  if (!row) return undefined;
-  const questions = await many<QuestionnaireQuestion>(
-    `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order,
-            fixed_value
-     FROM questionnaire_questions WHERE questionnaire_id = $1
-     ORDER BY sort_order, created_at`,
-    [id],
-  );
-  const contactIds = (
-    await many<{ contact_id: string }>(
+  const [row, questions, contactRows] = await Promise.all([
+    one<QuestionnaireRow>(
+      `SELECT id, name, greeting, frequency, weekday, send_time, template_id, version,
+              active, created_at, updated_at, COALESCE(default_values_json, '{}') AS default_values_json,
+              COALESCE(source_preset_id, '') AS source_preset_id,
+              COALESCE(form_kind, '') AS form_kind,
+              COALESCE(company_odoo_id, '') AS company_odoo_id
+       FROM questionnaires WHERE id = $1 AND ($2::boolean OR deleted_at = '')`,
+      [id, includeDeleted],
+    ),
+    many<QuestionnaireQuestion>(
+      `SELECT id, questionnaire_id, body, expected_type, COALESCE(export_field, '') AS export_field, sort_order,
+              fixed_value
+       FROM questionnaire_questions WHERE questionnaire_id = $1
+       ORDER BY sort_order, created_at`,
+      [id],
+    ),
+    many<{ contact_id: string }>(
       'SELECT contact_id FROM questionnaire_assignments WHERE questionnaire_id = $1',
       [id],
-    )
-  ).map((item) => item.contact_id);
-  return hydrateQuestionnaire(row, questions, contactIds);
+    ),
+  ]);
+  if (!row) return undefined;
+  return hydrateQuestionnaire(
+    row,
+    questions,
+    contactRows.map((item) => item.contact_id),
+  );
 }
 
 export async function saveQuestionnaire(input: QuestionnaireInput): Promise<Questionnaire> {
@@ -372,7 +376,7 @@ async function syncAssignments(questionnaireId: string, contactIds: string[], st
 }
 
 export async function getQuestionnaireRevision(revisionId: string): Promise<Questionnaire | undefined> {
-  const row = await one<{
+  const revisionQuery = one<{
     id: string;
     questionnaire_id: string;
     version: number;
@@ -389,14 +393,16 @@ export async function getQuestionnaireRevision(revisionId: string): Promise<Ques
      FROM questionnaire_revisions WHERE id = $1`,
     [revisionId],
   );
-  if (!row) return undefined;
-  const questions = await many<QuestionnaireQuestion>(
-    `SELECT question_id AS id, $2::text AS questionnaire_id, body, expected_type,
-            export_field, sort_order, fixed_value
+  const questionsQuery = many<QuestionnaireQuestion>(
+    `SELECT question_id AS id,
+            (SELECT questionnaire_id FROM questionnaire_revisions WHERE id = $1) AS questionnaire_id,
+            body, expected_type, export_field, sort_order, fixed_value
      FROM questionnaire_revision_questions
      WHERE revision_id = $1 ORDER BY sort_order`,
-    [revisionId, row.questionnaire_id],
+    [revisionId],
   );
+  const [row, questions] = await Promise.all([revisionQuery, questionsQuery]);
+  if (!row) return undefined;
   return {
     id: row.questionnaire_id,
     revisionId: row.id,

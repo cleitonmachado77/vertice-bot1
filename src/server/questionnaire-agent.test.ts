@@ -50,7 +50,7 @@ test('atalho heurístico cobre kg + produto sem LLM', () => {
   );
 });
 
-test('atalho heurístico parcial captura só o que veio (reply fica com a IA no fluxo)', () => {
+test('atalho heurístico parcial captura só o que veio', () => {
   const qty = question('kg', 'Quantos kg vc recebeu?', 'quantity');
   const product = question('produto', 'Qual produto vc recebeu?', 'products');
   const result = tryHeuristicQuestionnaireCapture({

@@ -846,6 +846,32 @@ export async function sendFormsBotPresetNow(input: {
   };
 }
 
+const materializeInflight = new Map<string, Promise<void>>();
+
+/** Materializa o ciclo uma vez, mesmo se o chat e o agendamento pedirem juntos. */
+export function ensureCycleMaterialized(cycleId: string): Promise<void> {
+  const current = materializeInflight.get(cycleId);
+  if (current) return current;
+  const job = onQuestionnaireCycleCompleted(cycleId).finally(() => {
+    materializeInflight.delete(cycleId);
+  });
+  materializeInflight.set(cycleId, job);
+  return job;
+}
+
+/** Depois do commit da resposta: não prende a transação nem o envio do WhatsApp. */
+export function scheduleCycleMaterialize(cycleId: string): void {
+  setImmediate(() => {
+    void ensureCycleMaterialized(cycleId).catch((error) => {
+      console.error(
+        'forms-bot: falha ao materializar ciclo',
+        cycleId,
+        error instanceof Error ? error.message : error,
+      );
+    });
+  });
+}
+
 /** Usado por markCycleCompleted — ignora ciclos sem preset Forms. */
 export async function onQuestionnaireCycleCompleted(cycleId: string): Promise<void> {
   try {

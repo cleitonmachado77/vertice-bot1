@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   mergeCycleCandidates,
   preferPromptedRecentCycle,
+  reusableOpenCycle,
 } from './questionnaire-routing.js';
 import type { ActiveCycleContext } from './questionnaire-cycles.js';
 import type { QuestionnaireQuestion } from './questionnaires.js';
@@ -61,6 +62,19 @@ function ctx(
     missing: questions,
   };
 }
+
+test('reusableOpenCycle reaproveita a coleta de hoje e ignora ciclo encerrado ou de outro dia', () => {
+  const open = {
+    status: 'in_progress',
+    occurrence_date: '2026-11-13',
+    superseded_at: '',
+  };
+  assert.equal(reusableOpenCycle(open, '2026-11-13', 2), true);
+  assert.equal(reusableOpenCycle(open, '2026-11-13', 0), false);
+  assert.equal(reusableOpenCycle({ ...open, occurrence_date: '2026-11-12' }, '2026-11-13', 2), false);
+  assert.equal(reusableOpenCycle({ ...open, status: 'completed' }, '2026-11-13', 1), false);
+  assert.equal(reusableOpenCycle({ ...open, superseded_at: '2026-11-13T10:00:00.000Z' }, '2026-11-13', 2), false);
+});
 
 test('preferPromptedRecentCycle ignora ciclo de ontem (fecha à meia-noite)', () => {
   const today = ctx('today', '2026-10-19', 'open');

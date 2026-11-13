@@ -6,7 +6,7 @@ import {
   pendingPreviousDaysNotice,
   type ConversationContextPack,
 } from './conversation-context.js';
-import { formsBotCompletionNote } from './forms-bot.js';
+import { ensureCycleMaterialized, formsBotCompletionNote } from './forms-bot.js';
 import { questionIdForCatalogList } from './forms-bot-capture.js';
 import { tryFormsCatalogListReply } from './forms-bot-catalog-context.js';
 import {
@@ -182,6 +182,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
 
   let cycle: ActiveCycleContext | undefined;
   let draft: QuestionnaireDraft | Draft | null = null;
+  let formReply = false;
 
   const lastBotText = lastOutboundText(historyRows);
 
@@ -199,6 +200,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
       minutes: clock.minutes,
       lastBotText,
     });
+    formReply = menu.detail === 'menu: resposta do formulário';
     if (menu.handled) {
       draft = { text: menu.text, source: 'fallback', detail: menu.detail, completed: false };
       if (menu.cycle) cycle = menu.cycle;
@@ -279,9 +281,9 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     });
   }
 
-  // Sempre carrega ciclos do dia alvo (inclui concluídos): o agente de questionário decide pelo contexto.
+  // Coleta aberta já sabe o ciclo. A lista de concluídos só entra quando a mensagem pode citar outro.
   const completed =
-    !draft && contactId ? await listCompletedCycleContexts(contactId, [targetDate]) : [];
+    !draft && contactId && !formReply ? await listCompletedCycleContexts(contactId, [targetDate]) : [];
   const explicitlyNamed = !draft ? selectExplicitlyNamedCycle(completed, inboundText) : undefined;
   cycle = cycle || explicitlyNamed;
 
@@ -450,6 +452,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     cycle.cycle.status !== 'completed' &&
     cycle.questionnaire.formKind === 'production'
   ) {
+    await ensureCycleMaterialized(cycle.cycle.id);
     const note = await formsBotCompletionNote(cycle.cycle.id).catch(() => '');
     if (note) draft = { ...draft, text: `${draft.text}\n\n${note}` };
   }

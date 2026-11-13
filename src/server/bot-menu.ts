@@ -82,6 +82,17 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
   const settings = botMenuSettings();
   if (!settings.enabled || !input.contactId || !input.conversationId) return { handled: false };
 
+  // Coleta aberta: a mensagem é a resposta. Não lista todos os formulários do contato.
+  if (!isMenuKeyword(input.inbound)) {
+    const lastBotText = input.lastBotText || '';
+    const collection = await readFormCollection(input.conversationId);
+    const agendaOffer = outboundOffersFormsAgenda(lastBotText) || collection.awaiting === 1;
+    if (!agendaOffer && formCollectionIsOpen(collection)) {
+      const state = await readMenuState(input.conversationId, input.contactId);
+      if (!state) return { handled: false, detail: 'menu: resposta do formulário' };
+    }
+  }
+
   const forms = await listMenuForms(input.contactId);
   if (!forms.length) {
     await clearMenuState(input.conversationId);

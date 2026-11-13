@@ -129,7 +129,8 @@ export async function persistAcceptedAnswers(input: {
 
 async function syncCycleProgress(cycleId: string, complete: boolean, engaged: boolean): Promise<void> {
   if (complete) {
-    await markCycleCompleted(cycleId);
+    // O documento e o push ao Odoo não seguram a resposta no WhatsApp.
+    await markCycleCompleted(cycleId, { materialize: 'later' });
     return;
   }
   if (engaged) await markCycleInProgress(cycleId);

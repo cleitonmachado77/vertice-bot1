@@ -543,7 +543,10 @@ export async function markCycleFailed(cycleId: string, error: string): Promise<v
   );
 }
 
-export async function markCycleCompleted(cycleId: string): Promise<void> {
+export async function markCycleCompleted(
+  cycleId: string,
+  options?: { materialize?: 'now' | 'later' },
+): Promise<void> {
   const stamp = now();
   await run(
     `UPDATE questionnaire_cycles
@@ -551,6 +554,11 @@ export async function markCycleCompleted(cycleId: string): Promise<void> {
      WHERE id = $2`,
     [stamp, cycleId],
   );
+  if (options?.materialize === 'later') {
+    const { scheduleCycleMaterialize } = await import('./forms-bot.js');
+    scheduleCycleMaterialize(cycleId);
+    return;
+  }
   const { onQuestionnaireCycleCompleted } = await import('./forms-bot.js');
   await onQuestionnaireCycleCompleted(cycleId);
 }
