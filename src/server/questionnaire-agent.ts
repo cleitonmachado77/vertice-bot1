@@ -41,14 +41,10 @@ import {
   rfqSeparationPromptLines,
 } from './rfq-answer-dictionary.js';
 import {
-  asksConfirmation,
-  asksForMore,
-  claimsSavedAnswer,
   completionReply,
   defaultQuestionnaireReply,
   EDIT_NOT_UNDERSTOOD_DETAIL,
   editNotUnderstoodReply,
-  ensureMissingAsked,
   formatAnswers,
 } from './questionnaire-replies.js';
 import {
@@ -71,6 +67,7 @@ import { formsBotDisplayName, isFormsBotQuestionnaire } from './forms-bot-agenda
 import { formsAnswersSummary } from './forms-bot-closing.js';
 import { isMarkedNewValue } from './forms-bot-fields.js';
 import { persistAcceptedAnswers } from './questionnaire-persist.js';
+import { looseConfirmPrompt, saveBotMode, shouldConfirmLoose } from './conversation-mode.js';
 
 export type QuestionnaireDraft = {
   text: string;
@@ -97,6 +94,7 @@ export async function draftQuestionnaireReply(input: {
   contextBrief?: string;
   /** Hints determinísticos — orientam, não decidem sozinhos. */
   hints?: ConversationHints;
+  conversationId?: string;
 }): Promise<QuestionnaireDraft> {
   const fallback = getSetting('agent_fallback');
   const questions = input.context.questionnaire.questions;
@@ -168,6 +166,14 @@ export async function draftQuestionnaireReply(input: {
     };
   }
   if (captured?.kind === 'answers') {
+    const loose = await holdLooseConfirmation({
+      conversationId: input.conversationId,
+      context: input.context,
+      questions,
+      accepted: captured.accepted,
+      inbound: input.inbound,
+    });
+    if (loose) return loose;
     const mediaStub = {
       type: 'text',
       summary: captured.summary || input.inbound,
@@ -349,6 +355,14 @@ export async function draftQuestionnaireReply(input: {
       contactName: input.contactName,
     });
     if (capture?.complete) {
+      const loose = await holdLooseConfirmation({
+        conversationId: input.conversationId,
+        context: input.context,
+        questions,
+        accepted: capture.accepted,
+        inbound: input.inbound,
+      });
+      if (loose) return loose;
       const persisted = await persistAcceptedAnswers({
         cycleId: input.context.cycle.id,
         questions,
@@ -418,6 +432,14 @@ export async function draftQuestionnaireReply(input: {
       contactName: input.contactName,
     });
     if (capture?.complete) {
+      const loose = await holdLooseConfirmation({
+        conversationId: input.conversationId,
+        context: input.context,
+        questions,
+        accepted: capture.accepted,
+        inbound: input.inbound,
+      });
+      if (loose) return loose;
       const persisted = await persistAcceptedAnswers({
         cycleId: input.context.cycle.id,
         questions,
@@ -439,6 +461,14 @@ export async function draftQuestionnaireReply(input: {
       };
     }
     if (capture?.accepted.length) {
+      const loose = await holdLooseConfirmation({
+        conversationId: input.conversationId,
+        context: input.context,
+        questions,
+        accepted: capture.accepted,
+        inbound: input.inbound,
+      });
+      if (loose) return loose;
       // Parcial: grava e pede o que falta sem esperar o modelo redigir.
       const persisted = await persistAcceptedAnswers({
         cycleId: input.context.cycle.id,
@@ -633,12 +663,21 @@ export async function draftQuestionnaireReply(input: {
           completed: false,
         };
       }
+      const repeat = await missingPromptFor(
+        input.context.questionnaire,
+        pendingMissing.length ? pendingMissing : questions,
+        alreadySaved,
+      );
+      await rememberCyclePrompt(
+        input.context.cycle.id,
+        promptQuestionId(pendingMissing),
+        'agente: repetir pergunta',
+      );
       return {
-        text: '',
-        source: 'model',
-        detail: 'contexto fora do questionário',
-        completed: amending,
-        deferToFree: true,
+        text: ['Não entendi como resposta desta pergunta.', repeat].filter(Boolean).join('\n\n'),
+        source: 'fallback',
+        detail: 'pergunta repetida',
+        completed: false,
       };
     }
 
@@ -702,6 +741,32 @@ export async function draftQuestionnaireReply(input: {
       return editNotUnderstoodDraft(input.context, alreadySaved);
     }
 
+    const loose = await holdLooseConfirmation({
+      conversationId: input.conversationId,
+      context: input.context,
+      questions,
+      accepted,
+      inbound: input.inbound,
+    });
+    if (loose) return loose;
+    if (!accepted.length && !seededFromHeuristic) {
+      const repeat = await missingPromptFor(
+        input.context.questionnaire,
+        pendingMissing.length ? pendingMissing : questions,
+        alreadySaved,
+      );
+      await rememberCyclePrompt(
+        input.context.cycle.id,
+        promptQuestionId(pendingMissing),
+        'agente: extração vazia',
+      );
+      return {
+        text: ['Não consegui registrar essa resposta. Pode repetir?', repeat].filter(Boolean).join('\n\n'),
+        source: 'fallback',
+        detail: 'pergunta repetida',
+        completed: false,
+      };
+    }
     const persisted = await persistAcceptedAnswers({
       cycleId: input.context.cycle.id,
       questions,
@@ -717,60 +782,21 @@ export async function draftQuestionnaireReply(input: {
       await rememberCyclePrompt(input.context.cycle.id, promptQuestionId(missing), 'agente: resposta do modelo');
     }
 
-    let reply =
-      extracted.reply.trim() ||
-      defaultQuestionnaireReply(questions, answers, missing, complete, media, input.contactName);
-    if (complete && (accepted.length > 0 || seededFromHeuristic)) {
-      reply = completionReply(input.contactName);
-    } else if (complete) {
-      // Já estava completo sem novo save — não inventar "anotei tudo" de novo.
-      reply = asksForMore(reply) || asksConfirmation(reply) ? completionReply(input.contactName) : reply;
-    } else {
-      const nothingSaved = accepted.length === 0 && !seededFromHeuristic;
-      const fallbackReply = await formsAwareMissingReply({
-        questionnaire: input.context.questionnaire,
-        questions,
-        answers,
-        missing,
-        media,
-        contactName: input.contactName,
-      });
-      if (persisted.pendingNew.length) {
-        // O modelo não sabe que o valor ficou fora do catálogo: a pergunta “é novo?” é determinística.
-        reply = await pendingReplyText(input.context, accepted, persisted);
-      } else if (
-        nothingSaved &&
-        claimsSavedAnswer(reply) &&
-        looksLikeAnswerPayload(media, input.inbound) &&
-        !isGreetingOrAck(input.inbound) &&
-        !hints?.likelyQuestionnaireAck
-      ) {
-        // O modelo disse “anotei…” mas não devolveu answers: não fingir que gravou.
-        reply = [
-          'Não consegui registrar essa resposta. Pode repetir?',
-          await missingPromptFor(input.context.questionnaire, missing, answers),
-        ]
-          .filter(Boolean)
-          .join('\n\n');
-      } else {
-        // Incompleto: a IA conduz; só cai no template se reply vazia / confirmação / “anotei tudo”.
-        const ensured = ensureMissingAsked({
-          reply,
-          missing,
+    let reply = complete
+      ? completionReply(input.contactName)
+      : await formsAwareMissingReply({
+          questionnaire: input.context.questionnaire,
+          questions,
           answers,
+          missing,
           media,
           contactName: input.contactName,
-          questions,
         });
-        const usedTemplate =
-          ensured ===
-          defaultQuestionnaireReply(questions, answers, missing, false, media, input.contactName);
-        reply = usedTemplate ? fallbackReply : ensured;
-      }
-      const notice = hints ? pendingPreviousDaysNotice(hints) : '';
-      if (notice && !reply.includes(notice) && cycleDate === today) {
-        reply = `${reply}\n\n${notice}`;
-      }
+    if (!complete && persisted.pendingNew.length) {
+      reply = await pendingReplyText(input.context, accepted, persisted);
+    } else if (!complete && accepted.length) {
+      const summary = acceptedSummary(accepted, persisted.pendingNew);
+      reply = [summary ? `Anotei: ${summary}.` : '', reply].filter(Boolean).join('\n\n');
     }
 
     return {
@@ -806,6 +832,73 @@ function editNotUnderstoodDraft(
     detail: EDIT_NOT_UNDERSTOOD_DETAIL,
     completed: false,
   };
+}
+
+async function holdLooseConfirmation(input: {
+  conversationId?: string;
+  context: ActiveCycleContext;
+  questions: QuestionnaireQuestion[];
+  accepted: ExtractedAnswer[];
+  inbound: string;
+}): Promise<QuestionnaireDraft | null> {
+  if (input.accepted.length !== 1) return null;
+  const answer = input.accepted[0];
+  const question = input.questions.find((item) => item.id === answer.questionId);
+  const field = String(question?.export_field || '').trim();
+  const value = String(answer.text || '').trim();
+  if (!question || !value || isMarkedNewValue(value)) return null;
+  if (!shouldConfirmLoose(field, input.inbound)) return null;
+  if (input.conversationId) {
+    await saveBotMode(input.conversationId, {
+      kind: 'confirm',
+      cycleId: input.context.cycle.id,
+      questionId: question.id,
+      field,
+      value,
+    });
+  }
+  return {
+    text: looseConfirmPrompt(field, value),
+    source: 'fallback',
+    detail: 'confirmação de frase',
+    completed: false,
+  };
+}
+
+/** “1” depois da confirmação de frase solta. */
+export async function confirmStoredAnswer(input: {
+  context: ActiveCycleContext;
+  questionId: string;
+  value: string;
+  contactName: string;
+}): Promise<QuestionnaireDraft> {
+  const media = {
+    type: 'text',
+    summary: input.value,
+    transcript: '',
+    caption: '',
+    mediaUrl: '',
+    understood: true,
+  };
+  const persisted = await persistAcceptedAnswers({
+    cycleId: input.context.cycle.id,
+    questions: input.context.questionnaire.questions,
+    alreadySaved: input.context.answers,
+    accepted: [{ questionId: input.questionId, text: input.value, type: 'text' }],
+    media,
+    mediaUrl: '',
+    formKind: input.context.questionnaire.formKind,
+    companyOdooId: input.context.questionnaire.companyOdooId,
+  });
+  if (persisted.complete && !persisted.pendingNew.length) {
+    return {
+      text: completionReply(input.contactName),
+      source: 'fallback',
+      detail: 'frase confirmada',
+      completed: true,
+    };
+  }
+  return pendingNewDraft(input.context, [{ questionId: input.questionId, text: input.value, type: 'text' }], persisted, 'frase confirmada');
 }
 
 /** Gravou, mas ainda falta algo (ex.: valor fora do catálogo aguardando “é novo?”). */

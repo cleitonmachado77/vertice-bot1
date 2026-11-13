@@ -36,6 +36,7 @@ import {
   type ActiveCycleContext,
 } from './questionnaire-cycles.js';
 import { setAwaitingHuman } from './store.js';
+import { readBotMode, saveBotMode } from './conversation-mode.js';
 
 /** Menu aberto vale por este tempo; depois, número volta a ser resposta comum. */
 const MENU_TTL_MS = 15 * 60 * 1000;
@@ -82,14 +83,20 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
   const settings = botMenuSettings();
   if (!settings.enabled || !input.contactId || !input.conversationId) return { handled: false };
 
-  // Coleta aberta: a mensagem é a resposta. Não lista todos os formulários do contato.
+  // O modo gravado decide. Pergunta aberta não deixa o menu salvo roubar o número.
   if (!isMenuKeyword(input.inbound)) {
-    const lastBotText = input.lastBotText || '';
-    const collection = await readFormCollection(input.conversationId);
-    const agendaOffer = outboundOffersFormsAgenda(lastBotText) || collection.awaiting === 1;
-    if (!agendaOffer && formCollectionIsOpen(collection)) {
-      const state = await readMenuState(input.conversationId, input.contactId);
-      if (!state) return { handled: false, detail: 'menu: resposta do formulário' };
+    const stored = await readBotMode(input.conversationId);
+    if (stored?.kind === 'question') {
+      return { handled: false, detail: 'menu: resposta do formulário' };
+    }
+    if (stored?.kind !== 'menu') {
+      const lastBotText = input.lastBotText || '';
+      const collection = await readFormCollection(input.conversationId);
+      const agendaOffer = outboundOffersFormsAgenda(lastBotText) || collection.awaiting === 1;
+      if (!agendaOffer && formCollectionIsOpen(collection)) {
+        const state = await readMenuState(input.conversationId, input.contactId);
+        if (!state) return { handled: false, detail: 'menu: resposta do formulário' };
+      }
     }
   }
 
@@ -138,7 +145,7 @@ export async function tryBotMenu(input: MenuInput): Promise<BotMenuResult> {
     await saveMenuState(input.conversationId, state.node);
     return {
       handled: true,
-      text: formatMenu(state.node, { hint: 'Digite o número da opção.' }),
+      text: formatMenu(state.node, { hint: 'Você está no menu. Digite o número da opção.' }),
       detail: 'menu: opção não reconhecida',
     };
   }
@@ -255,6 +262,11 @@ async function runOption(
   }
 
   await clearMenuState(input.conversationId);
+  await saveBotMode(input.conversationId, {
+    kind: 'question',
+    cycleId: context.cycle.id,
+    questionId: context.missing[0]?.id || context.questionnaire.questions[0]?.id || '',
+  });
   await unskipFormsBotQuestionnaire(input.contactId, input.date, form.questionnaireId);
   const editing = option.action === 'correct' || context.cycle.status === 'completed';
   // Correção/acréscimo em ciclo concluído: marca a conversa como “aguardando edição”
@@ -386,6 +398,7 @@ async function readMenuState(conversationId: string, contactId: string): Promise
 
 async function saveMenuState(conversationId: string, node: MenuNode): Promise<void> {
   const stamp = new Date().toISOString();
+  await saveBotMode(conversationId, { kind: 'menu' });
   await run(
     `INSERT INTO conversation_menu_state(conversation_id, node_json, shown_at, updated_at)
      VALUES($1, $2, $3, $3)

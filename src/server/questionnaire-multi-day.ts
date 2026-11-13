@@ -21,6 +21,7 @@ export async function draftMultiDayQuestionnaireReply(input: {
   mediaUrl: string;
   history: { direction: string; text: string }[];
   today: string;
+  conversationId?: string;
 }): Promise<QuestionnaireDraft | null> {
   const explicit = input.segments.filter((item) => item.explicit && item.text.trim());
   if (explicit.length < 2) return null;
@@ -54,6 +55,7 @@ export async function draftMultiDayQuestionnaireReply(input: {
       mediaUrl: input.mediaUrl,
       history: input.history,
       today: input.today,
+      conversationId: input.conversationId,
     });
     if (draft.deferToFree && !draft.text) continue;
     parts.push({ date: segment.date, label: segment.label, draft });

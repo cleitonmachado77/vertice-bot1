@@ -423,6 +423,12 @@ Se não souber a resposta ou faltar informação, diga claramente que vai passar
 Não mencione que você é um modelo de linguagem.`;
 
 async function migrate(): Promise<void> {
+  await run(
+    `ALTER TABLE conversation_questionnaire_context ADD COLUMN IF NOT EXISTS bot_mode TEXT NOT NULL DEFAULT ''`,
+  );
+  await run(
+    `ALTER TABLE conversation_questionnaire_context ADD COLUMN IF NOT EXISTS bot_mode_json TEXT NOT NULL DEFAULT '{}'`,
+  );
   await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS prompt TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS instructions TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE dispatches ADD COLUMN IF NOT EXISTS message_id TEXT NOT NULL DEFAULT ''`);

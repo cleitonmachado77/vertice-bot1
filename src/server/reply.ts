@@ -1,4 +1,17 @@
 import { draftReply, type Draft } from './agent.js';
+import { understandInbound } from './media-understand.js';
+import {
+  AUDIO_MISSED,
+  OFFER_REPEAT_HINT,
+  dayChoicePrompt,
+  findYesterdayResume,
+  readBotMode,
+  resumeYesterdayCycle,
+  saveBotMode,
+  todayCollectionIsOpen,
+} from './conversation-mode.js';
+import { isMenuKeyword } from './bot-menu-rules.js';
+import { onlyOptionNumber } from './forms-bot-fields.js';
 import { getSetting, one, withTransaction } from './db.js';
 import { zonedNow } from './clock.js';
 import {
@@ -7,9 +20,10 @@ import {
   type ConversationContextPack,
 } from './conversation-context.js';
 import { ensureCycleMaterialized, formsBotCompletionNote } from './forms-bot.js';
-import { questionIdForCatalogList } from './forms-bot-capture.js';
+import { missingPromptFor, questionIdForCatalogList } from './forms-bot-capture.js';
 import { tryFormsCatalogListReply } from './forms-bot-catalog-context.js';
 import {
+  confirmStoredAnswer,
   draftQuestionnaireReply,
   type QuestionnaireDraft,
 } from './questionnaire-agent.js';
@@ -27,6 +41,7 @@ import {
 } from './questionnaire-rules.js';
 import {
   clearConversationCompletedEditContext,
+  getCycleContextsByIds,
   listCompletedCycleContexts,
   readCyclePrompt,
   rememberCyclePrompt,
@@ -95,9 +110,9 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     channelId: input.channelId || '',
     source: 'none',
   });
-  const inboundType = input.inboundType || 'text';
+  let inboundType = input.inboundType || 'text';
   const mediaUrl = input.mediaUrl || '';
-  const inboundText =
+  let inboundText =
     input.text.trim() ||
     (mediaUrl
       ? inboundType === 'audio'
@@ -132,10 +147,20 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   if (!phone) return empty('Contato sem telefone');
 
   const limit = Number(getSetting('agent_history') || '16');
+  const originalInbound = inboundText;
   const history = (await recentMessages(input.conversationId, limit)).filter(
     (item, index, all) =>
-      !(index === all.length - 1 && item.direction === 'INBOUND' && item.text === inboundText),
+      !(index === all.length - 1 && item.direction === 'INBOUND' && item.text === originalInbound),
   );
+  let audioMissed = false;
+  if (inboundType === 'audio' && mediaUrl) {
+    const heard = await understandInbound({ type: inboundType, text: input.text.trim(), mediaUrl });
+    if (!heard.transcript) audioMissed = true;
+    else {
+      inboundText = heard.transcript;
+      inboundType = 'text';
+    }
+  }
   const clock = zonedNow();
   const editLike = looksLikeQuestionnaireEdit(inboundType, inboundText, mediaUrl);
   const dateSegments = splitDatedSegments(clock.date, inboundText);
@@ -183,11 +208,41 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   let cycle: ActiveCycleContext | undefined;
   let draft: QuestionnaireDraft | Draft | null = null;
   let formReply = false;
+  let offerAppended = false;
 
   const lastBotText = lastOutboundText(historyRows);
 
+  if (audioMissed) {
+    draft = {
+      text: AUDIO_MISSED,
+      source: 'fallback',
+      detail: 'áudio sem transcrição',
+      completed: false,
+    };
+  } else if (contactId && !isMenuKeyword(inboundText)) {
+    const exclusive = await routeExclusiveMode({
+      conversationId: input.conversationId,
+      contactId,
+      contactName,
+      today: clock.date,
+      weekday: clock.weekday,
+      minutes: clock.minutes,
+      inbound: inboundText,
+      otherDay: otherDayIntent,
+    });
+    if (exclusive) {
+      draft = {
+        text: exclusive.text,
+        source: 'fallback',
+        detail: exclusive.detail,
+        completed: exclusive.completed,
+      };
+      if (exclusive.cycle) cycle = exclusive.cycle;
+    }
+  }
+
   // Sem pergunta aberta, o menu abre. Com formulário ou agenda abertos, a mensagem é a resposta.
-  if (contactId) {
+  if (!draft && contactId) {
     const menu = await tryBotMenu({
       contactId,
       contactName,
@@ -278,6 +333,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
       mediaUrl,
       history: historyRows,
       today: clock.date,
+      conversationId: input.conversationId,
     });
   }
 
@@ -428,6 +484,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
                 history: historyRows,
                 forceCompletedEdit: resolution.completedEditContext,
                 today: clock.date,
+                conversationId: input.conversationId,
               });
             })()
           : null;
@@ -476,6 +533,7 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
       excludeCycleId: cycle.cycle.id,
     });
     if (offer.text) {
+      offerAppended = true;
       draft = {
         ...draft,
         text: `${draft.text}\n\n${offer.text}`,
@@ -488,8 +546,20 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
   const questionnaireDeferred =
     Boolean(draft && 'deferToFree' in draft && (draft as QuestionnaireDraft).deferToFree);
 
-  // Sem ciclo, ou questionário julgou fora de contexto → agente geral.
-  if ((!cycle && !draft?.text) || questionnaireDeferred) {
+  // Fora do questionário: repete a pergunta pendente. O agente livre só atende quem não está em coleta.
+  if (cycle && (questionnaireDeferred || !draft?.text)) {
+    const ask = await missingPromptFor(
+      cycle.questionnaire,
+      cycle.missing.length ? cycle.missing : cycle.questionnaire.questions,
+      cycle.answers,
+    );
+    draft = {
+      text: ask || 'Pode repetir a resposta desta pergunta?',
+      source: 'fallback',
+      detail: 'pergunta repetida',
+      completed: false,
+    };
+  } else if (!cycle && !draft?.text) {
     const pack = await loadContextPack();
     draft = await draftReply({
       contactName: contact?.name || input.contactName || conversation?.contact_name || '',
@@ -527,7 +597,14 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
     return empty(draft?.detail || 'Sem resposta');
   }
 
-  const handoff = looksLikeHumanHandoff(draft.text);
+  await syncBotMode(input.conversationId, {
+    draft,
+    cycle,
+    offerAppended,
+    today: clock.date,
+  });
+
+  const handoff = draft.source !== 'model' && looksLikeHumanHandoff(draft.text);
   await withTransaction(async () => {
     await enqueueOutbound({
       dedupeKey: marker,
@@ -582,6 +659,187 @@ async function pendingQuestionTrace(cycle: ActiveCycleContext | undefined) {
     },
     after: await readCyclePrompt(cycle.cycle.id),
   };
+}
+
+async function routeExclusiveMode(input: {
+  conversationId: string;
+  contactId: string;
+  contactName: string;
+  today: string;
+  weekday: number;
+  minutes: number;
+  inbound: string;
+  otherDay: boolean;
+}): Promise<{ text: string; detail: string; completed: boolean; cycle?: ActiveCycleContext } | null> {
+  let mode = await readBotMode(input.conversationId);
+  if (mode?.kind === 'question' && mode.cycleId) {
+    const [open] = await getCycleContextsByIds([mode.cycleId]);
+    if (
+      !open ||
+      open.cycle.occurrence_date < input.today ||
+      open.cycle.status === 'failed' ||
+      open.cycle.status === 'completed'
+    ) {
+      mode = undefined;
+    } else return null;
+    else return null;
+  }
+  if (mode?.kind === 'menu') return null;
+  if (mode?.kind === 'day') {
+    const choice = onlyOptionNumber(input.inbound);
+    if (choice === '1' && mode.cycleId) {
+      const resumed = await resumeYesterdayCycle({
+        conversationId: input.conversationId,
+        cycleId: mode.cycleId,
+        today: input.today,
+        contactName: input.contactName,
+      });
+      return {
+        text: resumed.text,
+        detail: 'dia: retomou ontem',
+        completed: false,
+        cycle: resumed.cycle,
+      };
+    }
+    if (choice === '2') {
+      await saveBotMode(input.conversationId, { kind: 'menu', dayResolved: input.today });
+      return null;
+    }
+    return {
+      text: dayChoicePrompt(mode.names || []),
+      detail: 'dia: repetir escolha',
+      completed: false,
+    };
+  }
+  if (mode?.kind === 'confirm' && mode.cycleId && mode.questionId && mode.value) {
+    const [context] = await getCycleContextsByIds([mode.cycleId]);
+    if (onlyOptionNumber(input.inbound) === '1' && context) {
+      const saved = await confirmStoredAnswer({
+        context,
+        questionId: mode.questionId,
+        value: mode.value,
+        contactName: input.contactName,
+      });
+      return {
+        text: saved.text,
+        detail: saved.detail,
+        completed: saved.completed,
+        cycle: context,
+      };
+    }
+    const ask = context
+      ? await missingPromptFor(
+          context.questionnaire,
+          context.missing.length ? context.missing : context.questionnaire.questions,
+          context.answers,
+        )
+      : 'Pode repetir a resposta?';
+    if (context) {
+      await saveBotMode(input.conversationId, {
+        kind: 'question',
+        cycleId: context.cycle.id,
+        questionId: context.missing[0]?.id || mode.questionId,
+      });
+    }
+    return {
+      text: ['Não anotei.', ask].filter(Boolean).join('\n\n'),
+      detail: 'confirmação recusada',
+      completed: false,
+      cycle: context,
+    };
+  }
+  if (mode?.kind === 'offer') {
+    const agenda = await applyFormsBotAgendaIntent({
+      contactId: input.contactId,
+      conversationId: input.conversationId,
+      date: input.today,
+      weekday: input.weekday,
+      nowMinutes: input.minutes,
+      inbound: input.inbound,
+      awaitingOffer: true,
+    });
+    if (!agenda.handled || !agenda.text) {
+      await saveBotMode(input.conversationId, { kind: 'menu', dayResolved: input.today });
+      return null;
+    }
+    const unrecognized = String(agenda.detail || '').includes('não reconhecida');
+    return {
+      text: unrecognized ? `${OFFER_REPEAT_HINT}\n\n${agenda.text}` : agenda.text,
+      detail: agenda.detail || 'agenda Forms',
+      completed: Boolean(agenda.completed),
+      cycle: agenda.cycle,
+    };
+  }
+  if (!mode && !input.otherDay && modeDayUnresolved(mode, input.today)) {
+    const openToday = await todayCollectionIsOpen(input.contactId, input.today);
+    if (!openToday) {
+      const yesterday = await findYesterdayResume(input.contactId, input.today);
+      if (yesterday) {
+        await saveBotMode(input.conversationId, {
+          kind: 'day',
+          cycleId: yesterday.cycleId,
+          names: yesterday.names,
+        });
+        return { text: dayChoicePrompt(yesterday.names), detail: 'dia: escolha', completed: false };
+      }
+    }
+  }
+  return null;
+}
+
+function modeDayUnresolved(mode: { dayResolved?: string } | undefined, today: string): boolean {
+  return mode?.dayResolved !== today;
+}
+
+async function syncBotMode(
+  conversationId: string,
+  input: {
+    draft: { text?: string; detail?: string; completed?: boolean } | null;
+    cycle?: ActiveCycleContext;
+    offerAppended: boolean;
+    today: string;
+  },
+): Promise<void> {
+  const detail = String(input.draft?.detail || '');
+  if (!input.draft?.text) return;
+  if (/^(menu:|dia:|áudio)/.test(detail) || detail === 'confirmação de frase' || detail.includes('não reconhecida')) {
+    return;
+  }
+  if (input.offerAppended || detail.includes('agenda Forms oferta')) {
+    await saveBotMode(conversationId, { kind: 'offer' });
+    return;
+  }
+  if (input.draft.completed) {
+    await saveBotMode(conversationId, { kind: 'menu', dayResolved: input.today });
+    return;
+  }
+  if (detail.startsWith('agenda Forms') && input.cycle && !input.draft.completed) {
+    await saveBotMode(conversationId, {
+      kind: 'question',
+      cycleId: input.cycle.cycle.id,
+      questionId:
+        input.cycle.missing[0]?.id ||
+        input.cycle.cycle.pending_question_id ||
+        input.cycle.questionnaire.questions[0]?.id ||
+        '',
+    });
+    return;
+  }
+  if (detail.startsWith('agenda Forms') && (!input.cycle || input.draft.completed)) {
+    await saveBotMode(conversationId, { kind: 'menu', dayResolved: input.today });
+    return;
+  }
+  if (input.cycle) {
+    await saveBotMode(conversationId, {
+      kind: 'question',
+      cycleId: input.cycle.cycle.id,
+      questionId:
+        input.cycle.missing[0]?.id ||
+        input.cycle.cycle.pending_question_id ||
+        input.cycle.questionnaire.questions[0]?.id ||
+        '',
+    });
+  }
 }
 
 function lastOutboundText(history: { direction: string; text: string }[]): string {
