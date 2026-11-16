@@ -173,7 +173,9 @@ async function loadBagInventory(companyOdooId?: string): Promise<{ header: Recor
   const params: unknown[] = ['product'];
   let sql = `SELECT header_json, created_at::text AS created_at
     FROM forms_documents
-    WHERE kind = $1 AND COALESCE(header_json::json->>'bag_type', '') <> ''`;
+    WHERE kind = $1
+      AND COALESCE(header_json::json->>'bag_type', '') <> ''
+      AND COALESCE(header_json::json->>'counted_qty', '') <> ''`;
   if (companyOdooId) {
     params.push(companyOdooId);
     sql += ` AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`;
@@ -363,8 +365,8 @@ function zonedCalendarDate(raw: string, timeZone: string): Date | null {
 }
 
 /**
- * Separação: quantidade contada em cada cartão de inventário de bag, no dia em que entrou no estoque.
- * O saldo atual do Odoo é a soma desses lançamentos menos o que a prensagem consumiu.
+ * Separação é a produção de bags: só entra `counted_qty`, a quantidade separada naquele dia.
+ * A prensagem de fardos baixa o saldo no Odoo e no gráfico de estoque, e não mexe neste número.
  */
 export function separationFromInventory(
   docs: { header: Record<string, string>; created_at: string }[],
@@ -376,7 +378,7 @@ export function separationFromInventory(
   for (const doc of docs) {
     const code = String(doc.header.bag_type || '').trim();
     if (!code) continue;
-    const qty = parseBrNumber(doc.header.counted_qty || doc.header.qty_on_hand);
+    const qty = parseBrNumber(doc.header.counted_qty);
     if (!qty) continue;
     const date = zonedCalendarDate(doc.created_at, timeZone);
     if (!inPeriod(date, year, month)) continue;

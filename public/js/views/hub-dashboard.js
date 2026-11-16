@@ -142,6 +142,7 @@ function formatValue(unit, value) {
   if (unit === 'R$') return formatMoney(value);
   const qty = formatQty(value);
   if (unit === 'Bag') return `${qty} ${Number(value) === 1 ? 'bag' : 'bags'}`;
+  if (unit === 'Fardo') return `${qty} ${Number(value) === 1 ? 'fardo' : 'fardos'}`;
   return unit ? `${qty} ${unit}` : qty;
 }
 
@@ -279,6 +280,36 @@ function stockRowsHtml(items) {
     .join('');
 }
 
+function stockFamily(product) {
+  const name = String(product || '')
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase();
+  if (/\bfardos?\b/.test(name)) return 'fardo';
+  if (/\bbags?\b/.test(name)) return 'bag';
+  return '';
+}
+
+function stockTotals(items) {
+  let bags = 0;
+  let fardos = 0;
+  for (const item of items) {
+    const qty = Number(item.qty) || 0;
+    const family = stockFamily(item.product);
+    if (family === 'bag') bags += qty;
+    if (family === 'fardo') fardos += qty;
+  }
+  return { bags, fardos };
+}
+
+function paintStockTotals(root, items) {
+  const totals = stockTotals(items);
+  const bags = root.querySelector('#hub-stock-bags');
+  const fardos = root.querySelector('#hub-stock-fardos');
+  if (bags) bags.textContent = formatValue('Bag', totals.bags);
+  if (fardos) fardos.textContent = formatValue('Fardo', totals.fardos);
+}
+
 function stockHtml() {
   return `
     <article class="card hub-dash-section hub-dash-wide hub-stock tone-green" data-section="stock">
@@ -287,6 +318,16 @@ function stockHtml() {
         <input class="hub-stock-search" id="hub-stock-search" type="search" placeholder="Buscar produto…" aria-label="Buscar produto no estoque" disabled />
       </div>
       <p class="hub-dash-chart-title" id="hub-stock-count">Consultando o Odoo…</p>
+      <div class="hub-stock-totals" id="hub-stock-totals">
+        <div>
+          <span>Bags</span>
+          <strong id="hub-stock-bags">—</strong>
+        </div>
+        <div>
+          <span>Fardos</span>
+          <strong id="hub-stock-fardos">—</strong>
+        </div>
+      </div>
       <div class="hub-stock-wrap">
         <table class="hub-stock-table">
           <thead><tr><th>Produto</th><th>Categoria</th><th>Quantidade</th></tr></thead>
@@ -317,17 +358,24 @@ async function loadStock(body) {
   if (!rows?.isConnected) return;
   const items = data.items || [];
   rows.innerHTML = stockRowsHtml(items);
+  paintStockTotals(body, items);
   if (count) count.textContent = stockCountText(items.length, items.length, data.source);
   if (!input) return;
   input.disabled = false;
   input.addEventListener('input', () => {
     const q = input.value.trim().toLowerCase();
     let shown = 0;
-    rows.querySelectorAll('tr[data-stock-name]').forEach((row) => {
-      const match = !q || row.dataset.stockName.includes(q);
-      row.hidden = !match;
-      if (match) shown += 1;
+    const visible = [];
+    items.forEach((item, index) => {
+      const row = rows.querySelectorAll('tr[data-stock-name]')[index];
+      const match = !q || String(item.product || '').toLowerCase().includes(q);
+      if (row) row.hidden = !match;
+      if (match) {
+        shown += 1;
+        visible.push(item);
+      }
     });
+    paintStockTotals(body, visible);
     if (count) count.textContent = stockCountText(items.length, shown, data.source);
   });
 }

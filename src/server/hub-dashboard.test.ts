@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { separationFromInventory } from './hub-dashboard.js';
 
-test('separação soma a quantidade contada no inventário, no dia de São Paulo', () => {
+test('separação conta a produção de bags e ignora o saldo que a prensagem já consumiu', () => {
   const section = separationFromInventory(
     [
       {
-        header: { bag_type: 'CRI', bag_type_name: 'CRISTAL', counted_qty: '6', qty_on_hand: '6' },
+        header: { bag_type: 'CRI', bag_type_name: 'CRISTAL', counted_qty: '6', qty_on_hand: '2' },
+        created_at: '2026-11-13T20:58:26.439Z',
+      },
+      {
+        header: { bag_type: 'LEI', bag_type_name: 'LEITE', qty_on_hand: '4' },
         created_at: '2026-11-13T20:58:26.439Z',
       },
       {
