@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { formsHomeHash, isRsuDashboardAvailable } from '../company-switcher.js';
 import { odooLabelPt } from '../odoo-pt.js';
 import { createPoll, escapeHtml, formatSyncError, toast, viewLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
@@ -17,8 +18,17 @@ import {
   openPresetsManager,
   presetsToolbarHtml,
 } from './forms-presets.js';
+import { renderRsuDashboard, stopHubDashboard } from './hub.js';
 
 const TABS = [
+  {
+    id: 'dashboard',
+    slug: 'dashboard',
+    label: 'Dashboard',
+    icon: 'dashboard',
+    description: 'Indicadores da entidade: recebimento, separação, prensagem, entrega e estoque',
+    entityOnly: true,
+  },
   { id: 'purchase', slug: 'compras', label: 'Compras', icon: 'cart', description: 'Solicitações de cotação e pedidos de compra' },
   { id: 'product', slug: 'inventario', label: 'Inventário', icon: 'box', description: 'Produtos e controle de estoque' },
   { id: 'production', slug: 'fabricacao', label: 'Fabricação', icon: 'factory', description: 'Registros de produção e prensagem' },
@@ -26,10 +36,12 @@ const TABS = [
   { id: 'cadastros', slug: 'cadastros', label: 'Cadastros', icon: 'folder', description: 'Produtos, clientes e fornecedores do Odoo' },
 ];
 
-export const FORMS_TABS = TABS.map((tab) => ({
-  ...tab,
-  href: tab.id === 'cadastros' ? '#/forms/cadastros/produtos' : `#/forms/${tab.slug}`,
-}));
+export function formsTabs() {
+  return TABS.filter((tab) => !tab.entityOnly || isRsuDashboardAvailable()).map((tab) => ({
+    ...tab,
+    href: tab.id === 'cadastros' ? '#/forms/cadastros/produtos' : `#/forms/${tab.slug}`,
+  }));
+}
 
 let schemaCache = null;
 let catalogCache = { products: [], partners: [], refs: {}, at: 0 };
@@ -93,11 +105,13 @@ export function tabFromSlug(slug) {
     return 'cadastros';
   }
   if (raw === 'prensagem') return 'production';
-  return TABS.find((tab) => tab.slug === slug)?.id || 'product';
+  if (raw === 'dashboard') return 'dashboard';
+  if (!raw) return isRsuDashboardAvailable() ? 'dashboard' : 'purchase';
+  return TABS.find((tab) => tab.slug === slug)?.id || (isRsuDashboardAvailable() ? 'dashboard' : 'purchase');
 }
 
 export function slugFromKind(kind) {
-  return TABS.find((tab) => tab.id === kind)?.slug || 'inventario';
+  return TABS.find((tab) => tab.id === kind)?.slug || (isRsuDashboardAvailable() ? 'dashboard' : 'compras');
 }
 
 async function loadSchema() {
@@ -129,6 +143,7 @@ function pageHeadHtml(activeKind) {
 }
 
 function topActions(kind, presets = []) {
+  if (kind === 'dashboard') return '';
   if (kind === 'cadastros') {
     return `<button class="btn" type="button" data-new>Novo</button>`;
   }
@@ -173,7 +188,7 @@ function ensureFormsShell(root, kind, presets = []) {
   return root.querySelector('#forms-body');
 }
 
-export async function renderForms(root, kind = 'product', token = getNavToken(), options = {}) {
+export async function renderForms(root, kind = 'dashboard', token = getNavToken(), options = {}) {
   const slug = options.slug || location.hash.replace('#/forms/', '');
   if (slug === 'dados' || slug.startsWith('dados/')) {
     location.replace(`#/forms/${slug.replace(/^dados/, 'cadastros') || 'cadastros/produtos'}`);
@@ -185,6 +200,24 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
   }
 
   stopFormsListPoll();
+
+  if (kind === 'dashboard') {
+    if (!isRsuDashboardAvailable()) {
+      location.replace(formsHomeHash());
+      return;
+    }
+    stopHubDashboard();
+    document.body.classList.remove('forms-modal-open');
+    closeEditorModal(root);
+    if (!root.querySelector('.hub-view')) {
+      root.innerHTML = viewLoading('Abrindo dashboard RSU…');
+    }
+    if (!isNavActive(token)) return;
+    await renderRsuDashboard(root);
+    return;
+  }
+
+  stopHubDashboard();
 
   const soft = Boolean(options.soft && root.querySelector('.forms-pane'));
   if (!soft && !root.querySelector('.forms-pane')) {
@@ -201,8 +234,7 @@ export async function renderForms(root, kind = 'product', token = getNavToken(),
   try {
     if (kind === 'cadastros') {
       await renderEntitiesBody(body, entityFromSlug(slug), token, root);
-      bindShellActions(root, kind, null, null, [], token, []);
-      return;
+      bindShellActions(root, kind, null, null, [], token, []);      return;
     }
 
     const [schema, catalog, data, presets] = await Promise.all([

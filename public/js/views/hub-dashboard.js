@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { getActiveCompanyId, loadCompanies } from '../company-switcher.js';
 import { escapeHtml, statCard } from '../ui.js';
 
 const MONTHS = [
@@ -343,13 +344,19 @@ function stockCountText(total, shown, source) {
   return `${total} produto(s) com saldo · ${origin}`;
 }
 
-async function loadStock(body) {
+async function loadStock(body, scope = 'hub') {
   const rows = body.querySelector('#hub-stock-rows');
   const count = body.querySelector('#hub-stock-count');
   const input = body.querySelector('#hub-stock-search');
   let data;
   try {
-    data = await api('/api/hub/stock');
+    const params = new URLSearchParams();
+    if (scope === 'entity') {
+      const companyId = getActiveCompanyId();
+      if (companyId) params.set('companyId', companyId);
+    }
+    const query = params.toString();
+    data = await api(`/api/hub/stock${query ? `?${query}` : ''}`);
   } catch (error) {
     if (rows) rows.innerHTML = stockMessageRow(error.message || 'Falha ao carregar estoque');
     if (count) count.textContent = 'Estoque indisponível';
@@ -380,13 +387,13 @@ async function loadStock(body) {
   });
 }
 
-function paintBody(data) {
+function paintBody(data, scope = 'hub') {
   const stats = document.querySelector('#hub-stats');
   if (stats) stats.innerHTML = statsCards(data);
   const body = document.querySelector('#hub-dashboard-body');
   if (!body) return;
   body.innerHTML = SECTIONS.map((def) => sectionHtml(def, data[def.id])).join('') + stockHtml();
-  loadStock(body).catch(() => {});
+  loadStock(body, scope).catch(() => {});
 }
 
 function chartDefaults(Chart) {
@@ -558,10 +565,17 @@ async function paintCharts(data) {
 
 let companyChangeHandler = null;
 
-export async function mountHubDashboard(root) {
+/**
+ * @param {HTMLElement} root
+ * @param {{ scope?: 'hub' | 'entity' }} [options]
+ * scope=entity: dashboard do módulo RSU, sempre filtrado pela empresa ativa.
+ * scope=hub: consolidado do WEB (Reciclarenda = todas as empresas).
+ */
+export async function mountHubDashboard(root, options = {}) {
   const monthEl = root.querySelector('#hub-dash-month');
   const yearEl = root.querySelector('#hub-dash-year');
   if (!monthEl || !yearEl) return;
+  const scope = options.scope === 'entity' ? 'entity' : 'hub';
 
   const load = async () => {
     const month = Number(monthEl.value);
@@ -572,8 +586,14 @@ export async function mountHubDashboard(root) {
     if (stats) stats.innerHTML = statsCards();
     destroyCharts();
     try {
-      const data = await api(`/api/hub/dashboard?month=${month}&year=${year}`);
-      paintBody(data);
+      const params = new URLSearchParams({ month: String(month), year: String(year) });
+      if (scope === 'entity') {
+        if (!getActiveCompanyId()) await loadCompanies(false).catch(() => null);
+        const companyId = getActiveCompanyId();
+        if (companyId) params.set('companyId', companyId);
+      }
+      const data = await api(`/api/hub/dashboard?${params}`);
+      paintBody(data, scope);
       try {
         await paintCharts(data);
       } catch (chartError) {

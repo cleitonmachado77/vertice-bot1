@@ -20,6 +20,34 @@
   animation: rise 0.28s ease both;
 }
 
+.hub-hero {
+  max-width: 720px;
+  margin: 0 0 28px;
+}
+.hub-hero-kicker {
+  margin: 0 0 10px;
+  color: var(--orange);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.hub-hero h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+  line-height: 1.15;
+}
+.hub-app--agro {
+  background:
+    radial-gradient(ellipse 70% 120% at 100% 0%, rgba(46, 204, 113, 0.2), transparent 60%),
+    var(--sidebar-bg);
+}
+.hub-app--bot {
+  background:
+    radial-gradient(ellipse 70% 120% at 100% 0%, rgba(43, 90, 168, 0.22), transparent 60%),
+    var(--sidebar-bg);
+}
+
 .hub-head {
   display: flex;
   flex-wrap: wrap;

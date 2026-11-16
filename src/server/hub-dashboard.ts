@@ -508,12 +508,15 @@ export function registerHubDashboardRoutes(): void {
 type AuthUser = NonNullable<Awaited<ReturnType<typeof requireAuth>>>;
 
 /**
- * ADM + Reciclarenda (id padrão): todas as empresas.
- * ADM + outra empresa: filtra. Gestor: só a empresa da conta.
+ * Dashboard do módulo RSU envia companyId e sempre filtra pela entidade.
+ * Dashboard do WEB (sem companyId): ADM + Reciclarenda = todas; ADM + outra = filtra;
+ * Gestor: só a empresa da conta.
  */
 function companyScope(ctx: Ctx, user: AuthUser): string | undefined {
+  const explicit = String(ctx.query.get('companyId') || '').trim();
+  if (explicit) return explicit;
   if (isAdm(user)) {
-    const activeId = String(ctx.query.get('companyId') || '').trim() || getActiveCompanyId();
+    const activeId = getActiveCompanyId();
     return activeId === DEFAULT_COMPANY_ODOO_ID ? undefined : activeId;
   }
   return String(user.companyOdooId || '').trim() || getActiveCompanyId();

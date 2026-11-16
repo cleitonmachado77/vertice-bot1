@@ -3,10 +3,18 @@ import { escapeHtml, initials, viewLoading } from './ui.js';
 import { icon } from './icons.js';
 import { nextNavToken, isNavActive } from './nav.js';
 import { initTheme } from './theme.js';
-import { clearCompaniesCache, mountCompanySwitcher, mountEntityBadge } from './company-switcher.js';
+import {
+  clearCompaniesCache,
+  formsHomeHash,
+  isHubDashboardAvailable,
+  isRsuDashboardAvailable,
+  loadCompanies,
+  mountCompanySwitcher,
+  mountEntityBadge,
+} from './company-switcher.js';
 import { renderHub, stopHubDashboard } from './views/hub.js';
 import { renderWebSettings } from './views/web-settings.js';
-import { FORMS_TABS, renderForms, tabFromSlug } from './views/forms.js';
+import { formsTabs, renderForms, tabFromSlug } from './views/forms.js';
 import { AGRO_TABS, agroTabFromSlug, closeAgroModal, renderAgro } from './views/agro.js';
 import { renderOverview, stopOverview } from './views/overview.js';
 import { renderContacts, stopContacts } from './views/contacts.js';
@@ -108,12 +116,17 @@ function currentRoute() {
     };
   }
   if (raw === 'forms' || raw.startsWith('forms/')) {
-    let slug = raw === 'forms' ? 'compras' : raw.slice('forms/'.length) || 'compras';
+    const home = formsHomeHash().replace('#/forms/', '') || 'compras';
+    let slug = raw === 'forms' ? home : raw.slice('forms/'.length) || home;
     if (slug === 'dados' || slug.startsWith('dados/')) {
       slug = slug.replace(/^dados/, 'cadastros');
       location.replace(`#/forms/${slug || 'cadastros/produtos'}`);
     }
-    if (raw === 'forms') location.replace('#/forms/compras');
+    if (slug === 'dashboard' && !isRsuDashboardAvailable()) {
+      location.replace(formsHomeHash());
+      slug = home;
+    }
+    if (raw === 'forms') location.replace(formsHomeHash());
     const formsKind = tabFromSlug(slug);
     return {
       contactId: '',
@@ -182,7 +195,9 @@ async function draw() {
   const prevKey = drawnKey;
   const softForms =
     current.name === 'forms' &&
+    current.formsKind !== 'dashboard' &&
     String(prevKey).startsWith('forms|') &&
+    !String(prevKey).startsWith('forms|dashboard') &&
     Boolean(document.querySelector('#forms-view .forms-pane'));
   const softAgro =
     current.name === 'agro' &&
@@ -204,13 +219,17 @@ async function draw() {
     return;
   }
 
+  await loadCompanies(false).catch(() => null);
+  if (!isNavActive(token)) return;
+
   if (current.name === 'login') {
     location.replace('#/web');
     return;
   }
 
   if (current.name === 'web') {
-    await mountChrome('web', me, 'web', 'Dashboard');
+    const hubTitle = isHubDashboardAvailable() ? 'Dashboard' : 'Início';
+    await mountChrome('web', me, 'web', hubTitle);
     const view = document.querySelector('#hub-view');
     if (!view || !isNavActive(token)) return;
     await renderHub(view, me);
@@ -230,12 +249,13 @@ async function draw() {
   }
 
   if (current.name === 'forms') {
-    const formsKind = current.formsKind || 'product';
-    const formsTab = FORMS_TABS.find((tab) => tab.id === formsKind);
+    const tabs = formsTabs();
+    const formsKind = current.formsKind || (isRsuDashboardAvailable() ? 'dashboard' : 'purchase');
+    const formsTab = tabs.find((tab) => tab.id === formsKind);
     await mountChrome('forms', me, formsKind, formsTab?.label || 'Vértice RSU');
     const view = document.querySelector('#forms-view');
     if (!view || !isNavActive(token)) return;
-    await renderForms(view, current.formsKind || 'product', token, {
+    await renderForms(view, formsKind, token, {
       soft: softForms,
       slug: current.formsSlug || '',
     });
@@ -283,16 +303,22 @@ function isAdmSession(me) {
 function navItems(appKey, me) {
   if (appKey === 'web') {
     const adm = isAdmSession(me);
+    const hub = isHubDashboardAvailable();
     return [
-      { key: 'web', href: '#/web', label: 'Dashboard', icon: 'dashboard' },
+      {
+        key: 'web',
+        href: '#/web',
+        label: hub ? 'Dashboard' : 'Início',
+        icon: hub ? 'dashboard' : 'apps',
+      },
       adm && { key: 'bot', href: '#/overview', label: 'Vertice Bot', icon: 'bot' },
-      { key: 'forms', href: '#/forms/compras', label: 'Vértice RSU', icon: 'forms' },
+      { key: 'forms', href: formsHomeHash(), label: 'Vértice RSU', icon: 'forms' },
       { key: 'agro', href: '#/agro/plantio', label: 'Vertice Agro', icon: 'sprout' },
       adm && { key: 'web-settings', href: '#/web/settings/usuarios', label: 'Configurações', icon: 'settings' },
     ].filter(Boolean);
   }
   if (appKey === 'forms') {
-    return FORMS_TABS.map((tab) => ({ key: tab.id, href: tab.href, label: tab.label, icon: tab.icon }));
+    return formsTabs().map((tab) => ({ key: tab.id, href: tab.href, label: tab.label, icon: tab.icon }));
   }
   if (appKey === 'agro') {
     return AGRO_TABS.map((tab) => ({

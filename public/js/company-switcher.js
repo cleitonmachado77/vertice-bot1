@@ -4,6 +4,9 @@ import { escapeHtml, toast } from './ui.js';
 const STORAGE_KEY = 'vertice-company-switcher';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+/** Empresa padrão (Reciclarenda) — mesmo id do Odoo/backend. */
+export const DEFAULT_COMPANY_ODOO_ID = '1';
+
 let cached = null;
 let fetching = null;
 
@@ -15,6 +18,28 @@ export function clearCompaniesCache() {
   } catch {
     /* ignore */
   }
+}
+
+/** Empresa ativa no seletor (ou no cache da sessão). */
+export function getActiveCompanyId() {
+  const data = cached || readStored();
+  return String(data?.activeId || '').trim();
+}
+
+/** Dashboard consolidado do WEB só na Reciclarenda. */
+export function isHubDashboardAvailable() {
+  const id = getActiveCompanyId();
+  return !id || id === DEFAULT_COMPANY_ODOO_ID;
+}
+
+/** Dashboard do módulo RSU só para entidade (não Reciclarenda). */
+export function isRsuDashboardAvailable() {
+  return !isHubDashboardAvailable();
+}
+
+/** Entrada padrão do Vértice RSU conforme o perfil. */
+export function formsHomeHash() {
+  return isRsuDashboardAvailable() ? '#/forms/dashboard' : '#/forms/compras';
 }
 
 function shortName(name) {
