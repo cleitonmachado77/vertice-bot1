@@ -388,6 +388,7 @@ async function openProductEditor(root, reload, item, token) {
   const value = item || {
     id: '',
     name: '',
+    sigla: '',
     category: '',
     sales_price: '',
     cost: '',
@@ -428,6 +429,7 @@ async function openProductEditor(root, reload, item, token) {
       ${entitySyncNoticeHtml(item)}
       <div class="grid-2">
         <label>Nome *<input name="name" required value="${escapeHtml(value.name || '')}" /></label>
+        <label>Sigla<input name="sigla" maxlength="40" placeholder="ex.: CEN, SOJ, MIL" value="${escapeHtml(value.sigla || '')}" /></label>
         ${entityCombo('category', 'Categoria do produto', odooLabelPt(value.category || ''), 'Buscar categoria…')}
         <label>Preço de venda<input name="sales_price" value="${escapeHtml(value.sales_price || '')}" /></label>
         <label>Custo<input name="cost" value="${escapeHtml(value.cost || '')}" /></label>

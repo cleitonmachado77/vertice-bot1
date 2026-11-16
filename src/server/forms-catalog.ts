@@ -29,6 +29,7 @@ function filterTaxesForCompany(
 export type CatalogProduct = {
   id: string;
   name: string;
+  sigla?: string;
   category: string;
   sales_price: string;
   cost: string;
@@ -84,6 +85,7 @@ export async function listCatalogProducts(): Promise<CatalogProduct[]> {
     products.push({
       id: row.id,
       name,
+      sigla: header.sigla || '',
       category: header.category || '',
       sales_price: header.sales_price || '',
       cost: header.cost || '',

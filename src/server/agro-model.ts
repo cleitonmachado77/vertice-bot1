@@ -1,8 +1,24 @@
 import { many, one } from './db.js';
 
 export type AgroPlot = { id: string; name: string; area: number | null };
-export type AgroProperty = { id: string; name: string; producerName: string; plots: AgroPlot[] };
-export type AgroProduct = { id: string; name: string; uom: string; salesPrice: string };
+export type AgroProperty = {
+  id: string;
+  name: string;
+  producerId: string;
+  producerName: string;
+  plots: AgroPlot[];
+};
+export type AgroProducer = {
+  id: string;
+  name: string;
+  totalArea: number | null;
+  city: string;
+  state: string;
+  phone: string;
+  partnerId: string;
+  properties: AgroProperty[];
+};
+export type AgroProduct = { id: string; name: string; sigla: string; uom: string; salesPrice: string };
 export type AgroBuyer = { id: string; name: string };
 
 export type AgroPlanting = {

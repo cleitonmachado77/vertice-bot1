@@ -1,5 +1,5 @@
 import { many } from './db.js';
-import type { AgroBuyer, AgroProduct, AgroProperty } from './agro-model.js';
+import type { AgroBuyer, AgroProducer, AgroProduct, AgroProperty } from './agro-model.js';
 
 function nullable(value: unknown): number | null {
   if (value == null || value === '') return null;
@@ -20,12 +20,34 @@ function parseHeader(raw: string): Record<string, string> {
 
 export async function listAgroCatalog(companyId: string): Promise<{
   properties: AgroProperty[];
+  farmProducers: AgroProducer[];
   products: AgroProduct[];
   producers: AgroBuyer[];
   buyers: AgroBuyer[];
 }> {
-  const properties = await many<{ id: string; name: string; producer_name: string }>(
-    `SELECT id, name, producer_name FROM agro_properties
+  const farmProducerRows = await many<{
+    id: string;
+    name: string;
+    total_area: number | null;
+    city: string;
+    state: string;
+    phone: string;
+    partner_id: string;
+  }>(
+    `SELECT id, name, total_area, city, state, phone, COALESCE(partner_id, '') AS partner_id
+     FROM agro_producers
+     WHERE company_odoo_id = $1 AND active = 1
+     ORDER BY name ASC`,
+    [companyId],
+  );
+  const properties = await many<{
+    id: string;
+    name: string;
+    producer_id: string;
+    producer_name: string;
+  }>(
+    `SELECT id, name, COALESCE(producer_id, '') AS producer_id, producer_name
+     FROM agro_properties
      WHERE company_odoo_id = $1 AND active = 1 ORDER BY name ASC`,
     [companyId],
   );
@@ -53,7 +75,13 @@ export async function listAgroCatalog(companyId: string): Promise<{
     const key = name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    products.push({ id: row.id, name, uom: header.uom || '', salesPrice: header.sales_price || '' });
+    products.push({
+      id: row.id,
+      name,
+      sigla: header.sigla || '',
+      uom: header.uom || '',
+      salesPrice: header.sales_price || '',
+    });
   }
   products.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   const buyers = await many<AgroBuyer>(
@@ -70,15 +98,28 @@ export async function listAgroCatalog(companyId: string): Promise<{
   );
   buyers.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   producers.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const mappedProperties: AgroProperty[] = properties.map((property) => ({
+    id: property.id,
+    name: property.name,
+    producerId: property.producer_id || '',
+    producerName: property.producer_name || '',
+    plots: plots
+      .filter((plot) => plot.property_id === property.id)
+      .map((plot) => ({ id: plot.id, name: plot.name, area: nullable(plot.area) })),
+  }));
+  const farmProducers: AgroProducer[] = farmProducerRows.map((producer) => ({
+    id: producer.id,
+    name: producer.name,
+    totalArea: nullable(producer.total_area),
+    city: producer.city || '',
+    state: producer.state || '',
+    phone: producer.phone || '',
+    partnerId: producer.partner_id || '',
+    properties: mappedProperties.filter((property) => property.producerId === producer.id),
+  }));
   return {
-    properties: properties.map((property) => ({
-      id: property.id,
-      name: property.name,
-      producerName: property.producer_name || '',
-      plots: plots
-        .filter((plot) => plot.property_id === property.id)
-        .map((plot) => ({ id: plot.id, name: plot.name, area: nullable(plot.area) })),
-    })),
+    properties: mappedProperties,
+    farmProducers,
     products,
     producers,
     buyers,

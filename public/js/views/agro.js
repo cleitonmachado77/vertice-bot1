@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { getNavToken, isNavActive } from '../nav.js';
 import { escapeHtml, toast } from '../ui.js';
 import {
+  costFormHtml,
   deliveryFormHtml,
   harvestFormHtml,
   plantingFormHtml,
@@ -12,17 +13,25 @@ import {
 } from './agro-editor.js';
 import { AGRO_TABS, bodyHtml, shell, tabMeta } from './agro-list.js';
 import { openAgroPresets } from './agro-presets.js';
+import { renderAgroDashboard, stopAgroDashboard } from './agro-dashboard.js';
+import { renderAgroSettings } from './agro-settings.js';
 
-export { AGRO_TABS };
+export { AGRO_TABS, stopAgroDashboard };
 
-const COLLECTIONS = { plantio: 'plantings', colheita: 'harvests', entrega: 'deliveries' };
+const COLLECTIONS = {
+  plantio: 'plantings',
+  colheita: 'harvests',
+  entrega: 'deliveries',
+  custos: 'costs',
+};
+const OPERATIONAL = new Set(['plantio', 'colheita', 'entrega', 'custos']);
 
 let snapshot = null;
-let currentTab = 'plantio';
+let currentTab = 'dashboard';
 let editor = null;
 
 export function agroTabFromSlug(slug) {
-  return AGRO_TABS.find((tab) => tab.slug === slug || tab.id === slug)?.id || 'plantio';
+  return AGRO_TABS.find((tab) => tab.slug === slug || tab.id === slug)?.id || 'dashboard';
 }
 
 export function closeAgroModal() {
@@ -48,8 +57,9 @@ function ensureModal() {
   modal.addEventListener('click', (event) => {
     if (event.target.closest('[data-close-modal]')) closeAgroModal();
     if (event.target.closest('[data-delete-modal]')) {
+      if (!editor?.kind || !COLLECTIONS[editor.kind]) return;
       event.preventDefault();
-      removeRecord(editor?.kind, editor?.id);
+      removeRecord(editor.kind, editor.id);
     }
   });
   modal.addEventListener('change', (event) => {
@@ -76,7 +86,9 @@ function openEditor(kind, record) {
       ? harvestFormHtml(record, snapshot.catalog, plantings)
       : kind === 'entrega'
         ? deliveryFormHtml(record, snapshot.catalog, plantings)
-        : plantingFormHtml(record, snapshot.catalog);
+        : kind === 'custos'
+          ? costFormHtml(record, snapshot.catalog)
+          : plantingFormHtml(record, snapshot.catalog);
   modal.querySelector('#agro-editor').innerHTML = html;
   editor = { kind, id: record?.id || '', collection: COLLECTIONS[kind] };
   const form = modal.querySelector('#agro-form');
@@ -89,7 +101,13 @@ function openEditor(kind, record) {
 
 function recordById(kind, id) {
   const list =
-    kind === 'colheita' ? snapshot?.harvests : kind === 'entrega' ? snapshot?.deliveries : snapshot?.plantings;
+    kind === 'colheita'
+      ? snapshot?.harvests
+      : kind === 'entrega'
+        ? snapshot?.deliveries
+        : kind === 'custos'
+          ? snapshot?.costs
+          : snapshot?.plantings;
   return (list || []).find((item) => item.id === id);
 }
 
@@ -145,7 +163,9 @@ function bind(root) {
   root.addEventListener('click', (event) => {
     const presets = event.target.closest('[data-presets]');
     if (presets) {
-      openAgroPresets(currentTab).catch((error) => toast(error.message || 'Não foi possível abrir os padrões', { tone: 'error' }));
+      openAgroPresets(currentTab).catch((error) =>
+        toast(error.message || 'Não foi possível abrir os padrões', { tone: 'error' }),
+      );
       return;
     }
     const create = event.target.closest('[data-new]');
@@ -183,29 +203,68 @@ function takePending(tab) {
   }
 }
 
-export async function renderAgro(root, tab = 'plantio', token = getNavToken(), options = {}) {
-  currentTab = AGRO_TABS.some((item) => item.id === tab) ? tab : 'plantio';
-  if (!options.keepModal) closeAgroModal();
-  if (!root.querySelector('.agro-pane')) root.innerHTML = shell(currentTab);
-  else {
-    const meta = tabMeta(currentTab);
-    const title = root.querySelector('.page-head h1');
-    const lead = root.querySelector('.page-head .muted');
-    const button = root.querySelector('[data-new]');
-    if (title) title.textContent = meta.label;
-    if (lead) lead.textContent = `${meta.description}. Os registros seguem a empresa ativa do Odoo.`;
-    if (button) button.dataset.new = currentTab;
+function updateToolbar(root) {
+  const meta = tabMeta(currentTab);
+  const title = root.querySelector('.page-head h1');
+  const lead = root.querySelector('.page-head .muted');
+  const actions = root.querySelector('.forms-top-actions');
+  if (title) title.textContent = meta.label;
+  if (lead) {
+    lead.textContent =
+      currentTab === 'dashboard'
+        ? `${meta.description}.`
+        : `${meta.description}. Os registros seguem a empresa ativa do Odoo.`;
   }
+  if (!actions) return;
+  if (currentTab === 'configuracoes') {
+    actions.innerHTML = `
+      <button class="btn-ghost" type="button" data-settings-new="property">Nova propriedade</button>
+      <button class="btn" type="button" data-settings-new="producer">Novo produtor</button>`;
+    return;
+  }
+  if (currentTab === 'dashboard') {
+    actions.innerHTML = '';
+    actions.id = 'agro-dash-actions';
+    return;
+  }
+  actions.removeAttribute('id');
+  const presets =
+    currentTab === 'custos' ? '' : `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
+  actions.innerHTML = `
+    ${presets}
+    <button class="btn" type="button" data-new="${escapeHtml(currentTab)}">Novo</button>`;
+}
+
+export async function renderAgro(root, tab = 'dashboard', token = getNavToken(), options = {}) {
+  currentTab = AGRO_TABS.some((item) => item.id === tab) ? tab : 'dashboard';
+  if (!options.keepModal) closeAgroModal();
+  if (currentTab !== 'dashboard') stopAgroDashboard();
+
+  if (!root.querySelector('.agro-pane')) root.innerHTML = shell(currentTab);
+  else updateToolbar(root);
+
+  if (currentTab === 'configuracoes') {
+    await renderAgroSettings(root);
+    return;
+  }
+
+  if (currentTab === 'dashboard') {
+    await renderAgroDashboard(root);
+    return;
+  }
+
   bind(root);
   const body = root.querySelector('#agro-body');
-  const reuse = Boolean(options.soft && snapshot && !options.force);
+  const reuse = Boolean(options.soft && snapshot && !options.force && OPERATIONAL.has(currentTab));
   if (!reuse) {
     if (body) body.innerHTML = `<p class="muted">Carregando…</p>`;
     try {
       snapshot = await api('/api/agro');
     } catch (error) {
       if (!isNavActive(token)) return;
-      if (body) body.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Não foi possível carregar o Vertice Agro')}</p>`;
+      if (body) {
+        body.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Não foi possível carregar o Vertice Agro')}</p>`;
+      }
       return;
     }
   }

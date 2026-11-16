@@ -1,4 +1,5 @@
-import { run } from './db.js';
+import { randomUUID } from 'node:crypto';
+import { many, one, run } from './db.js';
 
 /** Tabelas do Vertice Agro no mesmo Postgres do Vertice WEB, por empresa do Odoo. */
 
@@ -15,6 +16,23 @@ export function ensureAgroSchema(): Promise<void> {
 }
 
 async function createAgroTables(): Promise<void> {
+  await run(`
+    CREATE TABLE IF NOT EXISTS agro_producers (
+      id TEXT PRIMARY KEY,
+      company_odoo_id TEXT NOT NULL DEFAULT '1',
+      name TEXT NOT NULL,
+      total_area DOUBLE PRECISION,
+      city TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      partner_id TEXT NOT NULL DEFAULT '',
+      contact_id TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (total_area IS NULL OR total_area >= 0)
+    )
+  `);
   await run(`
     CREATE TABLE IF NOT EXISTS agro_properties (
       id TEXT PRIMARY KEY,
@@ -92,20 +110,48 @@ async function createAgroTables(): Promise<void> {
       CHECK (total_value IS NULL OR total_value >= 0)
     )
   `);
+  await run(`DROP INDEX IF EXISTS ux_agro_producers_company_name`);
   await run(
-    `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_properties_company_name
-     ON agro_properties(company_odoo_id, lower(name))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_producers_company_name_active
+     ON agro_producers(company_odoo_id, lower(name)) WHERE active = 1`,
   );
+  await run(`DROP INDEX IF EXISTS ux_agro_properties_company_name`);
   await run(
-    `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_plots_property_name
-     ON agro_plots(property_id, lower(name))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_properties_company_name_active
+     ON agro_properties(company_odoo_id, lower(name)) WHERE active = 1`,
   );
+  await run(`DROP INDEX IF EXISTS ux_agro_plots_property_name`);
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_plots_property_name_active
+     ON agro_plots(property_id, lower(name)) WHERE active = 1`,
+  );
+  await run(`
+    CREATE TABLE IF NOT EXISTS agro_costs (
+      id TEXT PRIMARY KEY,
+      company_odoo_id TEXT NOT NULL DEFAULT '1',
+      plot_id TEXT NOT NULL REFERENCES agro_plots(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+      cost_on DATE NOT NULL,
+      name TEXT NOT NULL,
+      quantity DOUBLE PRECISION NOT NULL,
+      unit_price DOUBLE PRECISION,
+      notes TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (quantity > 0),
+      CHECK (unit_price IS NULL OR unit_price >= 0)
+    )
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_agro_costs_company ON agro_costs(company_odoo_id, cost_on DESC)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_agro_costs_plot ON agro_costs(plot_id, cost_on DESC)`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_agro_producers_company ON agro_producers(company_odoo_id)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_agro_plantings_company ON agro_plantings(company_odoo_id, planted_on DESC)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_agro_harvests_planting ON agro_harvests(planting_id, harvested_on DESC)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_agro_deliveries_planting ON agro_deliveries(planting_id, delivered_on DESC)`);
   await run(`ALTER TABLE agro_properties ADD COLUMN IF NOT EXISTS odoo_location_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_properties ADD COLUMN IF NOT EXISTS odoo_partner_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_properties ADD COLUMN IF NOT EXISTS producer_partner_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE agro_properties ADD COLUMN IF NOT EXISTS producer_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_plots ADD COLUMN IF NOT EXISTS odoo_location_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_harvests ADD COLUMN IF NOT EXISTS odoo_qty DOUBLE PRECISION NOT NULL DEFAULT 0`);
   await run(`ALTER TABLE agro_deliveries ADD COLUMN IF NOT EXISTS odoo_order_id TEXT NOT NULL DEFAULT ''`);
@@ -125,4 +171,56 @@ async function createAgroTables(): Promise<void> {
     `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_deliveries_cycle
      ON agro_deliveries(source_cycle_id) WHERE source_cycle_id <> ''`,
   );
+  await migrateProducersFromProperties();
+}
+
+/** Liga propriedades antigas a um cadastro de produtor (nome/fornecedor já gravados). */
+async function migrateProducersFromProperties(): Promise<void> {
+  const rows = await many<{
+    id: string;
+    company_odoo_id: string;
+    producer_name: string;
+    producer_partner_id: string;
+  }>(
+    `SELECT id, company_odoo_id, COALESCE(producer_name, '') AS producer_name,
+            COALESCE(producer_partner_id, '') AS producer_partner_id
+     FROM agro_properties
+     WHERE active = 1 AND COALESCE(producer_id, '') = ''
+       AND (COALESCE(producer_name, '') <> '' OR COALESCE(producer_partner_id, '') <> '')`,
+  );
+  for (const row of rows) {
+    const name = String(row.producer_name || '').trim();
+    const partnerId = String(row.producer_partner_id || '').trim();
+    if (!name && !partnerId) continue;
+    let producer = partnerId
+      ? await one<{ id: string }>(
+          `SELECT id FROM agro_producers
+           WHERE company_odoo_id = $1 AND partner_id = $2 AND active = 1 LIMIT 1`,
+          [row.company_odoo_id, partnerId],
+        )
+      : undefined;
+    if (!producer && name) {
+      producer = await one<{ id: string }>(
+        `SELECT id FROM agro_producers
+         WHERE company_odoo_id = $1 AND lower(name) = lower($2) AND active = 1 LIMIT 1`,
+        [row.company_odoo_id, name],
+      );
+    }
+    let producerId = producer?.id || '';
+    if (!producerId) {
+      producerId = randomUUID();
+      const label = name || `Produtor ${partnerId.slice(0, 8)}`;
+      await run(
+        `INSERT INTO agro_producers(
+           id, company_odoo_id, name, partner_id, active, created_at, updated_at
+         ) VALUES($1, $2, $3, $4, 1, NOW(), NOW())
+         ON CONFLICT (id) DO NOTHING`,
+        [producerId, row.company_odoo_id, label, partnerId],
+      );
+    }
+    await run(`UPDATE agro_properties SET producer_id = $2, updated_at = NOW() WHERE id = $1`, [
+      row.id,
+      producerId,
+    ]);
+  }
 }

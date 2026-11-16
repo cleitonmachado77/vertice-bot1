@@ -336,6 +336,7 @@ export function registerFormsRoutes(): void {
       const input = body(ctx);
       const item = await saveEntityProduct({
         name: text(input.name),
+        sigla: text(input.sigla),
         category: text(input.category),
         sales_price: text(input.sales_price),
         cost: text(input.cost),
@@ -360,6 +361,7 @@ export function registerFormsRoutes(): void {
       const item = await saveEntityProduct({
         id: ctx.params.id,
         name: text(input.name),
+        sigla: text(input.sigla),
         category: text(input.category),
         sales_price: text(input.sales_price),
         cost: text(input.cost),

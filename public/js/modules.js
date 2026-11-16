@@ -24,8 +24,8 @@ export function availableModules() {
     {
       id: 'agro',
       name: 'Vertice Agro',
-      description: 'Plantio, colheita e entrega da empresa ativa',
-      href: '#/agro/plantio',
+      description: 'Plantio, colheita, entrega e custos da empresa ativa',
+      href: '#/agro/dashboard',
       logo: '/logo-vertice-web.png',
       accent: 'agro',
       available: true,

@@ -45,28 +45,37 @@ export function syncDeliveryTotal(form) {
 }
 
 export function syncPlantingForm(form, catalog) {
+  const farmProducers = catalog?.farmProducers || [];
+  const producerId = form.producerId?.value || '';
+  const producer = farmProducers.find((item) => item.id === producerId);
+  const properties = producer?.properties || [];
+  const propertySelect = form.propertyId;
+  if (propertySelect) {
+    const currentProperty = propertySelect.dataset.current || propertySelect.value;
+    delete propertySelect.dataset.current;
+    propertySelect.innerHTML = [
+      option('', 'Selecione', ''),
+      ...properties.map((item) => option(item.id, item.name, currentProperty)),
+    ].join('');
+    const available = [...propertySelect.options].some((item) => item.value === currentProperty && currentProperty);
+    propertySelect.value = available ? currentProperty : properties[0]?.id || '';
+  }
+
   const propertyId = form.propertyId?.value || '';
-  const isNewProperty = propertyId === '__new__' || propertyId === '';
-  const propertyBox = form.querySelector('[data-new-property]');
-  if (propertyBox) propertyBox.hidden = propertyId !== '__new__';
-  const property = (catalog?.properties || []).find((item) => item.id === propertyId);
+  const property = properties.find((item) => item.id === propertyId) ||
+    (catalog?.properties || []).find((item) => item.id === propertyId);
   const plot = form.plotId;
   if (plot) {
     const current = plot.dataset.current || plot.value;
     delete plot.dataset.current;
-    const plots = isNewProperty ? [] : property?.plots || [];
+    const plots = property?.plots || [];
     plot.innerHTML = [
       option('', 'Selecione', ''),
       ...plots.map((item) => option(item.id, item.name, current)),
-      option('__new__', 'Novo talhão', current),
     ].join('');
     const available = [...plot.options].some((item) => item.value === current && current !== '');
-    plot.value = available ? current : isNewProperty ? '__new__' : plots[0]?.id || '__new__';
+    plot.value = available ? current : plots[0]?.id || '';
   }
-  const plotBox = form.querySelector('[data-new-plot]');
-  if (plotBox) plotBox.hidden = form.plotId?.value !== '__new__';
-  const producerBox = form.querySelector('[data-custom-producer]');
-  if (producerBox) producerBox.hidden = form.producerPartnerId?.value !== '__custom__';
   const custom = form.querySelector('[data-custom-product]');
   if (custom) custom.hidden = form.productId?.value !== '__custom__';
   if (form.productId?.value && form.productId.value !== '__custom__') {
@@ -118,39 +127,42 @@ function removeButton() {
 }
 
 export function plantingFormHtml(item, catalog) {
+  const farmProducers = catalog?.farmProducers || [];
   const properties = catalog?.properties || [];
   const products = catalog?.products || [];
-  const selectedProperty = item?.propertyId || (properties.length ? properties[0].id : '__new__');
+  const selectedProducer =
+    item?.producerId ||
+    properties.find((property) => property.id === item?.propertyId)?.producerId ||
+    farmProducers.find((producer) => producer.partnerId && producer.partnerId === item?.producerPartnerId)?.id ||
+    farmProducers[0]?.id ||
+    '';
+  const producerProperties = farmProducers.find((producer) => producer.id === selectedProducer)?.properties || properties;
+  const selectedProperty = item?.propertyId || producerProperties[0]?.id || '';
   const selectedProduct = item ? item.productId || '__custom__' : '';
   const knownProduct = products.some((product) => product.id === selectedProduct);
   return `
     <header class="forms-editor-head">
       <div>
         <h2 id="agro-editor-title">${item ? 'Editar plantio' : 'Novo plantio'}</h2>
-        <p class="muted">O produtor é o fornecedor do Odoo. Propriedade e talhão são locais de estoque. A estimativa da safra fica neste plantio.</p>
+        <p class="muted">Produtor, propriedade e talhão vêm de <a href="#/agro/configuracoes">Configurações</a>. A estimativa da safra fica neste plantio.</p>
       </div>
     </header>
     <form id="agro-form" class="agro-form" data-kind="plantio">
-      <label>Fornecedor (produtor)
-        <select name="producerPartnerId">
-          ${option('', 'Selecione', item?.producerPartnerId || '')}
-          ${
-            item?.producerPartnerId && !(catalog?.producers || []).some((producer) => producer.id === item.producerPartnerId)
-              ? option(item.producerPartnerId, item.producerName, item.producerPartnerId)
-              : ''
-          }
-          ${(catalog?.producers || []).map((producer) => option(producer.id, producer.name, item?.producerPartnerId || '')).join('')}
-          ${option('__custom__', 'Outro produtor', !item?.producerPartnerId && item?.producerName ? '__custom__' : '')}
+      ${
+        farmProducers.length
+          ? ''
+          : '<p class="muted">Cadastre o produtor e a propriedade em <a href="#/agro/configuracoes">Configurações</a> antes de lançar o plantio.</p>'
+      }
+      <label>Produtor
+        <select name="producerId" required>
+          ${option('', 'Selecione', selectedProducer)}
+          ${farmProducers.map((producer) => option(producer.id, producer.name, selectedProducer)).join('')}
         </select>
-      </label>
-      <label data-custom-producer hidden>Nome do produtor
-        <input name="producerName" maxlength="150" value="${escapeHtml(!item?.producerPartnerId ? item?.producerName || '' : '')}">
       </label>
       <div class="grid-2">
         <label>Propriedade
-          <select name="propertyId" required>
-            ${option('__new__', 'Nova propriedade', selectedProperty)}
-            ${properties.map((property) => option(property.id, property.name, selectedProperty)).join('')}
+          <select name="propertyId" data-current="${escapeHtml(selectedProperty)}" required>
+            ${option('', 'Selecione', '')}
           </select>
         </label>
         <label>Talhão
@@ -158,11 +170,6 @@ export function plantingFormHtml(item, catalog) {
             ${option('', 'Selecione', '')}
           </select>
         </label>
-      </div>
-      <label data-new-property hidden>Nome da propriedade<input name="propertyName" maxlength="150"></label>
-      <div class="grid-2" data-new-plot hidden>
-        <label>Nome do talhão<input name="plotName" maxlength="150"></label>
-        <label>Área do talhão (ha)<input name="plotArea" inputmode="decimal"></label>
       </div>
       <div class="grid-2">
         <label>Produto
@@ -232,6 +239,58 @@ export function harvestFormHtml(item, catalog, plantings) {
       </div>
       <label>Observações<textarea name="notes" maxlength="500" rows="3">${escapeHtml(item?.notes || '')}</textarea></label>
       <label class="agro-check"><input name="close" type="checkbox" ${item?.plantingStatus === 'colhido' ? 'checked' : ''}> Encerrar a colheita deste plantio</label>
+      ${actions(item?.id ? removeButton() : '')}
+    </form>`;
+}
+
+export function costFormHtml(item, catalog) {
+  const plots = (catalog?.properties || []).flatMap((property) =>
+    (property.plots || []).map((plot) => ({
+      id: plot.id,
+      label: `${property.name} · ${plot.name}`,
+    })),
+  );
+  const selected = item?.plotId || '';
+  return `
+    <header class="forms-editor-head">
+      <div>
+        <h2 id="agro-editor-title">${item?.id ? 'Editar custo' : 'Novo custo'}</h2>
+        <p class="muted">Custo lançado na área (talhão). O valor unitário é opcional e alimenta o dashboard.</p>
+      </div>
+    </header>
+    <form id="agro-form" class="agro-form" data-kind="custos">
+      ${
+        plots.length
+          ? ''
+          : '<p class="muted">Cadastre propriedade e talhão em <a href="#/agro/configuracoes">Configurações</a> antes de lançar custos.</p>'
+      }
+      <div class="grid-2">
+        <label>Data
+          <input name="costOn" type="date" required value="${escapeHtml(item?.costOn || '')}">
+        </label>
+        <label>Área (talhão)
+          <select name="plotId" required>
+            ${option('', 'Selecione', selected)}
+            ${plots.map((plot) => option(plot.id, plot.label, selected)).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="grid-2">
+        <label>Nome
+          <input name="name" maxlength="150" required placeholder="ex.: adubo, veneno" value="${escapeHtml(item?.name || '')}">
+        </label>
+        <label>Quantidade
+          <input name="quantity" inputmode="decimal" required value="${escapeHtml(item?.quantity ?? '')}">
+        </label>
+      </div>
+      <div class="grid-2">
+        <label>Valor unitário (R$)
+          <input name="unitPrice" inputmode="decimal" value="${escapeHtml(item?.unitPrice ?? '')}">
+        </label>
+        <label>Observações
+          <input name="notes" maxlength="500" value="${escapeHtml(item?.notes || '')}">
+        </label>
+      </div>
       ${actions(item?.id ? removeButton() : '')}
     </form>`;
 }

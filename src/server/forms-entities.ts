@@ -262,6 +262,7 @@ export async function listEntityProducts(): Promise<EntityProduct[]> {
     return {
       id: row.id,
       name: header.name || '',
+      sigla: header.sigla || '',
       category: header.category || '',
       sales_price: header.sales_price || '',
       cost: header.cost || '',
@@ -280,6 +281,7 @@ export async function listEntityProducts(): Promise<EntityProduct[]> {
 export async function saveEntityProduct(input: {
   id?: string;
   name: string;
+  sigla?: string;
   category?: string;
   sales_price?: string;
   cost?: string;
@@ -293,6 +295,7 @@ export async function saveEntityProduct(input: {
   if (!clean) throw new Error('Nome do produto obrigatório');
   const header = emptyHeader('product');
   header.name = clean;
+  header.sigla = input.sigla || '';
   header.category = input.category || '';
   header.sales_price = input.sales_price || '';
   header.cost = input.cost || '';
@@ -321,6 +324,7 @@ export async function saveEntityProduct(input: {
     return {
       id: input.id,
       name: clean,
+      sigla: merged.sigla || '',
       category: merged.category || '',
       sales_price: merged.sales_price || '',
       cost: merged.cost || '',
@@ -342,6 +346,7 @@ export async function saveEntityProduct(input: {
   return {
     id,
     name: clean,
+    sigla: header.sigla || '',
     category: header.category || '',
     sales_price: header.sales_price || '',
     cost: header.cost || '',

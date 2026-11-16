@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { one, run, withTransaction } from './db.js';
 import { listAgroCatalog } from './agro-catalog.js';
+import { deleteCost, listCosts, saveCost } from './agro-costs.js';
 import {
   getDelivery,
   getHarvest,
@@ -42,14 +43,17 @@ const nowIso = () => new Date().toISOString();
 export async function agroOverview(companyId: string) {
   await ensureAgroSchema();
   await refreshAgroMirror(companyId);
-  const [plantings, harvests, deliveries, catalog] = await Promise.all([
+  const [plantings, harvests, deliveries, costs, catalog] = await Promise.all([
     listPlantings(companyId),
     listHarvests(companyId),
     listDeliveries(companyId),
+    listCosts(companyId),
     listAgroCatalog(companyId),
   ]);
-  return { plantings, harvests, deliveries, catalog };
+  return { plantings, harvests, deliveries, costs, catalog };
 }
+
+export { deleteCost, saveCost };
 
 function plantingStatus(current: AgroPlanting | undefined, requested: unknown): PlantingStatus {
   if (!current || current.harvestedQty <= 0) return 'planejado';

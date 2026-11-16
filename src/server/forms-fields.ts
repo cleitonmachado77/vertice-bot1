@@ -169,6 +169,7 @@ export const PURCHASE_LINE_FIELDS: FormField[] = [
 /** Espelha product.template (+ qty via stock.quant). */
 export const PRODUCT_FIELDS: FormField[] = [
   { key: 'name', label: 'Nome', required: true, placeholder: 'ex.: Cenoura' },
+  { key: 'sigla', label: 'Sigla', placeholder: 'ex.: CEN, SOJ, MIL' },
   {
     key: 'category',
     label: 'Categoria do produto',

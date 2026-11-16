@@ -1,9 +1,24 @@
 import { escapeHtml, statCard } from '../ui.js';
 
 export const AGRO_TABS = [
+  {
+    id: 'dashboard',
+    slug: 'dashboard',
+    label: 'Dashboard',
+    icon: 'dashboard',
+    description: 'Indicadores de plantio, colheita, entrega e custos da empresa ativa',
+  },
   { id: 'plantio', slug: 'plantio', label: 'Plantio', icon: 'sprout', description: 'O produtor é o fornecedor do Odoo. A estimativa da safra fica no plantio' },
   { id: 'colheita', slug: 'colheita', label: 'Colheita', icon: 'harvest', description: 'A quantidade colhida soma no estoque do talhão' },
   { id: 'entrega', slug: 'entrega', label: 'Entrega', icon: 'truck', description: 'Gera o pedido de venda e baixa o estoque do talhão' },
+  { id: 'custos', slug: 'custos', label: 'Custos', icon: 'money', description: 'Registra os custos por área (talhão) da empresa ativa' },
+  {
+    id: 'configuracoes',
+    slug: 'configuracoes',
+    label: 'Configurações',
+    icon: 'settings',
+    description: 'Produtor, propriedades e talhões centralizados para o Agro e o Bot',
+  },
 ];
 
 const STATUS = {
@@ -36,6 +51,26 @@ export function tabMeta(tab) {
   return AGRO_TABS.find((item) => item.id === tab) || AGRO_TABS[0];
 }
 
+export function productSigla(catalog, productId, productName) {
+  const product = (catalog?.products || []).find((item) => item.id && item.id === productId);
+  const sigla = String(product?.sigla || '').trim();
+  return sigla || String(productName || '').trim() || '—';
+}
+
+function avgSalePrice(data, productName, productId) {
+  const deliveries = (data.deliveries || []).filter((item) => item.productName === productName);
+  let value = 0;
+  let quantity = 0;
+  for (const item of deliveries) {
+    value += Number(item.totalValue || 0);
+    quantity += Number(item.quantity || 0);
+  }
+  if (quantity > 0) return value / quantity;
+  const product = (data.catalog?.products || []).find((item) => item.id === productId);
+  const fallback = Number(String(product?.salesPrice || '').replace(',', '.'));
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
 function stats(tab, data) {
   const plantings = data.plantings || [];
   if (tab === 'colheita') {
@@ -56,6 +91,20 @@ function stats(tab, data) {
         value: plantings.filter((item) => item.harvestedQty - item.deliveredQty > 0.0001).length,
         tone: 'green',
         icon: 'box',
+      }),
+    ].join('');
+  }
+  if (tab === 'custos') {
+    const costs = data.costs || [];
+    const total = costs.reduce((sum, item) => sum + Number(item.totalValue != null ? item.totalValue : item.quantity || 0), 0);
+    return [
+      statCard({ label: 'Lançamentos', value: costs.length, tone: 'amber', icon: 'money' }),
+      statCard({ label: 'Valor / quantidade', value: costs.length ? money(total) : '—', tone: 'orange', icon: 'box' }),
+      statCard({
+        label: 'Áreas com custo',
+        value: new Set(costs.map((item) => item.plotId).filter(Boolean)).size,
+        tone: 'green',
+        icon: 'sprout',
       }),
     ].join('');
   }
@@ -89,8 +138,12 @@ function listHtml(tab, data) {
   if (tab === 'colheita') {
     const rows = (data.harvests || [])
       .map((item) => {
-        const search = `${item.propertyName} ${item.plotName} ${item.productName}`.toLowerCase();
         const planting = (data.plantings || []).find((entry) => entry.id === item.plantingId);
+        const sigla = productSigla(data.catalog, planting?.productId || '', item.productName);
+        const area = item.plotName || planting?.plotName || '—';
+        const price = avgSalePrice(data, item.productName, planting?.productId || '');
+        const revenue = price > 0 ? Number(item.quantity || 0) * price : null;
+        const search = `${item.propertyName} ${area} ${sigla} ${item.productName}`.toLowerCase();
         const remaining = planting ? planting.harvestedQty - planting.deliveredQty : 0;
         const deliver =
           remaining > 0.0001
@@ -98,25 +151,33 @@ function listHtml(tab, data) {
             : '';
         return `<tr data-search="${escapeHtml(search)}">
           <td>${dateBr(item.harvestedOn)}</td>
-          <td>${escapeHtml(item.propertyName)}<span class="agro-sub">${escapeHtml(item.plotName || 'Sem talhão')}</span></td>
-          <td>${escapeHtml(item.productName)}</td>
+          <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)}</span></td>
           <td>${qty(item.quantity, item.unit)}</td>
-          <td>${statusPill(item.plantingStatus)}</td>
+          <td>${escapeHtml(area)}<span class="agro-sub">${escapeHtml(item.propertyName || '')}</span></td>
+          <td>${money(revenue)}</td>
+          <td>${escapeHtml(item.propertyName)}<span class="agro-sub">${statusPill(item.plantingStatus)}</span></td>
           ${buttons('colheita', item.id, deliver)}
         </tr>`;
       })
       .join('');
-    return table(['Data', 'Propriedade', 'Produto', 'Quantidade', 'Plantio'], rows, 'Nenhuma colheita registrada.');
+    return table(
+      ['Data', 'Produto', 'Quantidade', 'Área', 'Receita área', 'Propriedade'],
+      rows,
+      'Nenhuma colheita registrada.',
+    );
   }
   if (tab === 'entrega') {
     const rows = (data.deliveries || [])
       .map((item) => {
-        const search = `${item.propertyName} ${item.partnerName} ${item.productName} ${item.document}`.toLowerCase();
+        const planting = (data.plantings || []).find((entry) => entry.id === item.plantingId);
+        const sigla = productSigla(data.catalog, planting?.productId || '', item.productName);
+        const search = `${item.propertyName} ${item.partnerName} ${sigla} ${item.productName} ${item.document}`.toLowerCase();
         return `<tr data-search="${escapeHtml(search)}">
           <td>${dateBr(item.deliveredOn)}</td>
-          <td>${escapeHtml(item.partnerName)}</td>
-          <td>${escapeHtml(item.propertyName)}<span class="agro-sub">${escapeHtml(item.productName)}</span></td>
+          <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)}</span></td>
           <td>${qty(item.quantity, item.unit)}</td>
+          <td>${escapeHtml(item.partnerName)}<span class="agro-sub">Cliente / local da entrega</span></td>
+          <td>${escapeHtml(item.propertyName)}</td>
           <td>${money(item.unitPrice)}</td>
           <td>${money(item.totalValue)}</td>
           <td>${escapeHtml(item.document || '—')}</td>
@@ -124,23 +185,44 @@ function listHtml(tab, data) {
         </tr>`;
       })
       .join('');
-    return table(['Data', 'Comprador', 'Origem', 'Quantidade', 'Unitário', 'Total', 'Documento'], rows, 'Nenhuma entrega registrada.');
+    return table(
+      ['Data', 'Produto', 'Quantidade', 'Cliente', 'Origem', 'Unitário', 'Total', 'Documento'],
+      rows,
+      'Nenhuma entrega registrada.',
+    );
+  }
+  if (tab === 'custos') {
+    const rows = (data.costs || [])
+      .map((item) => {
+        const search = `${item.propertyName} ${item.plotName} ${item.name}`.toLowerCase();
+        return `<tr data-search="${escapeHtml(search)}">
+          <td>${dateBr(item.costOn)}</td>
+          <td>${escapeHtml(item.name)}</td>
+          <td>${qty(item.quantity)}</td>
+          <td>${escapeHtml(item.plotName || '—')}<span class="agro-sub">${escapeHtml(item.propertyName || '')}</span></td>
+          <td>${money(item.totalValue)}</td>
+          ${buttons('custos', item.id)}
+        </tr>`;
+      })
+      .join('');
+    return table(['Data', 'Nome', 'Quantidade', 'Área', 'Valor'], rows, 'Nenhum custo registrado.');
   }
   const rows = (data.plantings || [])
     .map((item) => {
-      const search = `${item.propertyName} ${item.producerName} ${item.plotName} ${item.productName}`.toLowerCase();
+      const sigla = productSigla(data.catalog, item.productId, item.productName);
+      const search = `${item.propertyName} ${item.producerName} ${item.plotName} ${sigla} ${item.productName}`.toLowerCase();
       const harvest =
         item.status === 'colhido'
           ? ''
           : `<button class="btn-ghost agro-mini" type="button" data-go="colheita" data-planting="${escapeHtml(item.id)}">Colher</button>`;
       return `<tr data-search="${escapeHtml(search)}">
+        <td>${dateBr(item.plantedOn)}</td>
+        <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)} · ${escapeHtml(item.unit || '')}</span></td>
+        <td>${qty(item.forecastQty, item.unit)}</td>
         <td>${escapeHtml(item.propertyName)}</td>
         <td>${escapeHtml(item.producerName || '—')}</td>
         <td>${escapeHtml(item.plotName || '—')}</td>
-        <td>${escapeHtml(item.productName)}<span class="agro-sub">${escapeHtml(item.unit || '')}</span></td>
         <td>${qty(item.areaPlanned, 'ha')}</td>
-        <td>${dateBr(item.plantedOn)}</td>
-        <td>${qty(item.forecastQty, item.unit)}</td>
         <td>${qty(item.harvestedQty, item.unit)}</td>
         <td>${statusPill(item.status)}</td>
         ${buttons('plantio', item.id, harvest)}
@@ -148,7 +230,7 @@ function listHtml(tab, data) {
     })
     .join('');
   return table(
-    ['Propriedade', 'Fornecedor', 'Talhão', 'Produto', 'Área', 'Plantio', 'Estimativa', 'Colhido', 'Situação'],
+    ['Data', 'Produto', 'Quantidade', 'Propriedade', 'Fornecedor', 'Talhão', 'Área', 'Colhido', 'Situação'],
     rows,
     'Nenhum plantio nesta empresa.',
   );
@@ -156,6 +238,36 @@ function listHtml(tab, data) {
 
 export function shell(tab) {
   const meta = tabMeta(tab);
+  if (tab === 'configuracoes') {
+    return `
+    <div class="view-pane forms-pane agro-pane">
+      <div class="forms-toolbar">
+        <header class="page-head">
+          <h1>${escapeHtml(meta.label)}</h1>
+          <p class="muted">${escapeHtml(meta.description)}. Os registros seguem a empresa ativa do Odoo.</p>
+        </header>
+        <div class="row forms-top-actions">
+          <button class="btn-ghost" type="button" data-settings-new="property">Nova propriedade</button>
+          <button class="btn" type="button" data-settings-new="producer">Novo produtor</button>
+        </div>
+      </div>
+      <div id="agro-body"></div>
+    </div>`;
+  }
+  if (tab === 'dashboard') {
+    return `
+    <div class="view-pane forms-pane agro-pane">
+      <div class="forms-toolbar">
+        <header class="page-head">
+          <h1>${escapeHtml(meta.label)}</h1>
+          <p class="muted">${escapeHtml(meta.description)}.</p>
+        </header>
+        <div class="row forms-top-actions" id="agro-dash-actions"></div>
+      </div>
+      <div id="agro-body"></div>
+    </div>`;
+  }
+  const presets = tab === 'custos' ? '' : `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
   return `
     <div class="view-pane forms-pane agro-pane">
       <div class="forms-toolbar">
@@ -164,7 +276,7 @@ export function shell(tab) {
           <p class="muted">${escapeHtml(meta.description)}. Os registros seguem a empresa ativa do Odoo.</p>
         </header>
         <div class="row forms-top-actions">
-          <button class="btn-ghost" type="button" data-presets>Padrões</button>
+          ${presets}
           <button class="btn" type="button" data-new="${escapeHtml(tab)}">Novo</button>
         </div>
       </div>
@@ -175,20 +287,27 @@ export function shell(tab) {
 function emptyLabel(tab) {
   if (tab === 'colheita') return 'Nenhuma colheita registrada.';
   if (tab === 'entrega') return 'Nenhuma entrega registrada.';
+  if (tab === 'custos') return 'Nenhum custo registrado.';
   return 'Nenhum plantio nesta empresa.';
 }
 
 export function bodyHtml(tab, data) {
-  const rows = tab === 'colheita' ? data.harvests : tab === 'entrega' ? data.deliveries : data.plantings;
+  const rows =
+    tab === 'colheita'
+      ? data.harvests
+      : tab === 'entrega'
+        ? data.deliveries
+        : tab === 'custos'
+          ? data.costs
+          : data.plantings;
   return `
     <div class="stat-row stat-row--3">${stats(tab, data)}</div>
     <section class="card data-results agro-panel">
       <div class="forms-filters">
         <label class="forms-filter-search">Busca
-          <input data-filter placeholder="Propriedade, produto, talhão ou comprador" />
+          <input data-filter placeholder="Propriedade, produto, talhão, custo ou comprador" />
         </label>
       </div>
       ${rows?.length ? listHtml(tab, data) : `<p class="muted">${escapeHtml(emptyLabel(tab))}</p>`}
     </section>`;
 }
-

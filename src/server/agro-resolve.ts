@@ -42,7 +42,28 @@ export async function resolveProperty(companyId: string, input: Record<string, u
 export async function resolveProducer(
   companyId: string,
   input: Record<string, unknown>,
-): Promise<{ id: string; name: string }> {
+): Promise<{ id: string; name: string; producerId?: string }> {
+  const farmProducerId = clip(input.producerId, 80);
+  if (farmProducerId) {
+    const farm = await one<{ id: string; name: string; partner_id: string }>(
+      `SELECT id, name, COALESCE(partner_id, '') AS partner_id
+       FROM agro_producers WHERE id = $1 AND company_odoo_id = $2 AND active = 1`,
+      [farmProducerId, companyId],
+    );
+    if (!farm) throw new Error('Produtor não encontrado em Configurações');
+    let partnerId = farm.partner_id;
+    if (!partnerId) {
+      const created = await upsertPartner(farm.name, 'vendor', companyId);
+      partnerId = created?.id || '';
+      if (partnerId) {
+        await run(`UPDATE agro_producers SET partner_id = $2, updated_at = NOW() WHERE id = $1`, [
+          farm.id,
+          partnerId,
+        ]);
+      }
+    }
+    return { id: partnerId, name: farm.name, producerId: farm.id };
+  }
   const partnerId = clip(input.producerPartnerId, 80);
   if (partnerId && partnerId !== '__custom__') {
     const row = await one<{ id: string; name: string }>(
@@ -65,14 +86,16 @@ export async function assignProducer(
   propertyId: string,
   input: Record<string, unknown>,
 ): Promise<void> {
-  if (!('producerPartnerId' in input) && !('producerName' in input)) return;
+  if (!('producerPartnerId' in input) && !('producerName' in input) && !('producerId' in input)) return;
   const producer = await resolveProducer(companyId, input);
-  if (!producer.id) return;
+  if (!producer.id && !producer.producerId) return;
   await run(
     `UPDATE agro_properties
-     SET producer_partner_id = $2, producer_name = $3, updated_at = NOW()
+     SET producer_partner_id = $2, producer_name = $3,
+         producer_id = CASE WHEN $5 <> '' THEN $5 ELSE producer_id END,
+         updated_at = NOW()
      WHERE id = $1 AND company_odoo_id = $4`,
-    [propertyId, producer.id, producer.name, companyId],
+    [propertyId, producer.id, producer.name, companyId, producer.producerId || ''],
   );
 }
 
