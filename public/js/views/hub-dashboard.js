@@ -31,6 +31,23 @@ const PALETTE = [
   '#909090',
 ];
 
+/** Cor estável por sigla, para o mesmo tipo não mudar de lugar no ranking. */
+const BAG_COLORS = {
+  PAP: '#e2a100',
+  PTB: '#3b82f6',
+  CRI: '#14b8a6',
+  PMI: '#f59e0b',
+  LEI: '#6366f1',
+  SCC: '#ec4899',
+  PP: '#22c55e',
+  SCP: '#64748b',
+  FER: '#ea580c',
+  PEC: '#f97316',
+  PPB: '#84cc16',
+  PPP: '#7c3aed',
+  PTO: '#0d9488',
+};
+
 /** Fluxo do RSU: recebimento → separação → prensagem → entrega → venda. */
 const SECTIONS = [
   {
@@ -47,13 +64,13 @@ const SECTIONS = [
   {
     id: 'separation',
     title: 'Separação',
-    chartTitle: 'Bags produzidas por dia, por produto',
+    chartTitle: 'Bags separadas no período, por tipo',
     totalLabel: 'Total separado',
     statLabel: 'Bags separadas',
     tone: 'teal',
     color: '#1aa897',
     icon: 'box',
-    href: '#/forms/fabricacao',
+    href: '#/forms/inventario',
     stacked: true,
   },
   {
@@ -189,14 +206,55 @@ export function renderDashboardShell() {
     </section>`;
 }
 
+function separationRows(section) {
+  const totals = new Map();
+  for (const day of section?.dailyStacked || []) {
+    for (const [product, qty] of Object.entries(day.byProduct || {})) {
+      totals.set(product, (totals.get(product) || 0) + Number(qty || 0));
+    }
+  }
+  return [...totals.entries()]
+    .map(([product, qty]) => ({ product, qty }))
+    .filter((row) => row.qty > 0)
+    .sort((a, b) => b.qty - a.qty || a.product.localeCompare(b.product, 'pt-BR'));
+}
+
+function bagLabel(product) {
+  const [code, ...rest] = String(product || '').split(' ');
+  const name = rest.join(' ').trim();
+  return name ? `${code} · ${name}` : code;
+}
+
+function bagColor(product, index) {
+  const code = String(product || '').split(' ')[0].toUpperCase();
+  return BAG_COLORS[code] || PALETTE[index % PALETTE.length];
+}
+
+function inkOn(hex) {
+  const value = String(hex || '').replace('#', '');
+  if (value.length !== 6) return '#ffffff';
+  const n = Number.parseInt(value, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.64 ? '#1a1a1c' : '#ffffff';
+}
+
+function separationChartTitle(section) {
+  const days = (section?.dailyStacked || []).filter((day) => day.total > 0);
+  if (days.length === 1) return `Bags do dia ${days[0].label}, por tipo`;
+  return 'Bags separadas no período, por tipo';
+}
+
 function sectionHtml(def, section) {
+  const title = def.id === 'separation' ? separationChartTitle(section) : def.chartTitle;
   return `
     <article class="card hub-dash-section tone-${def.tone}${def.wide ? ' hub-dash-wide' : ''}" data-section="${escapeHtml(def.id)}">
       <div class="hub-dash-section-head">
         <h3>${escapeHtml(def.title)}</h3>
         <p class="hub-dash-total">${escapeHtml(def.totalLabel)} <strong>${escapeHtml(formatValue(section?.unit, section?.total))}</strong></p>
       </div>
-      <p class="hub-dash-chart-title">${escapeHtml(def.chartTitle)}</p>
+      <p class="hub-dash-chart-title">${escapeHtml(title)}</p>
       <div class="hub-dash-canvas-wrap">
         <canvas id="chart-${escapeHtml(def.id)}"></canvas>
       </div>
@@ -312,8 +370,85 @@ function datasetsFor(def, section) {
   }));
 }
 
+const bagValueLabels = {
+  id: 'bagValueLabels',
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    const dataset = chart.data.datasets[0];
+    if (!dataset) return;
+    ctx.save();
+    ctx.font = '600 12px Outfit, "Segoe UI", sans-serif';
+    ctx.textBaseline = 'middle';
+    const colors = Array.isArray(dataset.backgroundColor) ? dataset.backgroundColor : [];
+    chart.getDatasetMeta(0).data.forEach((bar, index) => {
+      const text = formatQty(dataset.data[index]);
+      const width = bar.x - bar.base;
+      const inside = width > ctx.measureText(text).width + 14;
+      ctx.fillStyle = inside ? inkOn(colors[index]) : '#1a1a1c';
+      ctx.textAlign = inside ? 'right' : 'left';
+      ctx.fillText(text, inside ? bar.x - 8 : bar.x + 8, bar.y);
+    });
+    ctx.restore();
+  },
+};
+
+function makeSeparationBar(Chart, canvas, section) {
+  if (!canvas) return;
+  const existing = chartInstances.get(canvas.id);
+  if (existing) existing.destroy();
+  const rows = separationRows(section);
+  const chart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: rows.map((row) => bagLabel(row.product)),
+      datasets: [
+        {
+          label: 'Bags',
+          data: rows.map((row) => row.qty),
+          backgroundColor: rows.map((row, index) => bagColor(row.product, index)),
+          borderRadius: 6,
+          barThickness: 18,
+        },
+      ],
+    },
+    plugins: [bagValueLabels],
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { right: 28 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              return formatValue('Bag', ctx.parsed.x);
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          beginAtZero: true,
+          grid: { display: false },
+          ticks: { callback: (value) => formatQty(value) },
+        },
+        y: {
+          grid: { display: false },
+          ticks: { autoSkip: false, font: { size: 11 }, color: '#1a1a1c' },
+        },
+      },
+    },
+  });
+  chartInstances.set(canvas.id, chart);
+}
+
 function makeBar(Chart, canvas, def, section) {
   if (!canvas) return;
+  if (def.id === 'separation' && separationRows(section).length) {
+    makeSeparationBar(Chart, canvas, section);
+    return;
+  }
   const existing = chartInstances.get(canvas.id);
   if (existing) existing.destroy();
   const datasets = datasetsFor(def, section);
@@ -355,10 +490,19 @@ function makeBar(Chart, canvas, def, section) {
   chartInstances.set(canvas.id, chart);
 }
 
+function alignChartHeights(data) {
+  const rows = separationRows(data?.separation);
+  const height = Math.max(220, rows.length * 32 + 12);
+  document.querySelectorAll('.hub-dash-canvas-wrap').forEach((wrap) => {
+    wrap.style.height = `${height}px`;
+  });
+}
+
 async function paintCharts(data) {
   const { Chart } = await loadChartJs();
   chartDefaults(Chart);
   destroyCharts();
+  alignChartHeights(data);
   for (const def of SECTIONS) {
     makeBar(Chart, document.querySelector(`#chart-${def.id}`), def, data[def.id] || {});
   }

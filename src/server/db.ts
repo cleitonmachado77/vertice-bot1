@@ -104,12 +104,17 @@ function getPool(): pg.Pool {
   if (pool) return pool;
   const connectionString = databaseConnectionString(env('DATABASE_URL'));
   if (!connectionString) throw new Error('DATABASE_URL não configurada');
+  // O pooler do Supabase em modo sessão (porta 5432) aceita no máximo 15 clientes
+  // no total, somando web, cron e o servidor local. Poucas conexões, soltas quando
+  // o processo fica ocioso, evitam “max clients reached”.
+  const max = Number(env('DATABASE_POOL_MAX', '3'));
   pool = new pg.Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },
-    max: 10,
+    max: Number.isFinite(max) && max > 0 ? max : 3,
     connectionTimeoutMillis: 12000,
-    idleTimeoutMillis: 30_000,
+    idleTimeoutMillis: 5_000,
+    allowExitOnIdle: true,
   });
   // Evita derrubar o processo em ECONNRESET idle do Postgres.
   pool.on('error', (error) => {

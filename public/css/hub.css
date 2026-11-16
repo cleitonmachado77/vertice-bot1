@@ -146,6 +146,7 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  align-items: stretch;
 }
 .hub-dashboard-loading {
   grid-column: 1 / -1;
@@ -153,7 +154,12 @@
   padding: 18px 22px;
 }
 
-.hub-dash-section { padding: 18px 20px 16px; }
+.hub-dash-section {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 18px 20px 16px;
+}
 .hub-dash-wide { grid-column: 1 / -1; }
 .hub-dash-section-head {
   display: flex;
@@ -195,6 +201,8 @@
 }
 .hub-dash-canvas-wrap {
   position: relative;
+  flex: 1 1 auto;
+  min-height: 220px;
   height: 220px;
 }
 

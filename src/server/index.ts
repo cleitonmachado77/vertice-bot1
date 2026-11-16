@@ -1,4 +1,4 @@
-import { getSetting, initDatabase } from './db.js';
+import { closeDatabase, getSetting, initDatabase } from './db.js';
 import { loadEnv, env } from './env.js';
 import { listen } from './http.js';
 import { registerContactRoutes } from './contact-routes.js';
@@ -39,3 +39,17 @@ startLiveSync();
 startScheduler();
 startOdooPullScheduler();
 console.log(`Vertice WEB em http://localhost:${port}`);
+closePoolOnStop();
+
+function closePoolOnStop(): void {
+  let closing = false;
+  const stop = () => {
+    if (closing) return;
+    closing = true;
+    const force = setTimeout(() => process.exit(0), 1000);
+    force.unref();
+    void closeDatabase().finally(() => process.exit(0));
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+}

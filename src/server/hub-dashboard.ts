@@ -1,4 +1,4 @@
-import { many } from './db.js';
+import { getSetting, many } from './db.js';
 import { json, route, type Ctx } from './http.js';
 import { requireAuth } from './auth.js';
 import { DEFAULT_COMPANY_ODOO_ID, getActiveCompanyId } from './forms-companies.js';
@@ -135,8 +135,6 @@ function isPostedProduction(doc: LoadedDoc): boolean {
 }
 
 const isFardo = (product: string) => /fardo/.test(nameKey(product));
-const isBagUnit = (uom: string) => /^bags?$/.test(nameKey(uom));
-const isBagProduct = (product: string) => /\bbags?\b/.test(nameKey(product));
 const isKgUnit = (uom: string) => /^(kg|kgs|quilos?|kilos?)$/.test(nameKey(uom));
 
 async function loadKind(kind: 'purchase' | 'sale' | 'production', companyOdooId?: string): Promise<LoadedDoc[]> {
@@ -168,6 +166,20 @@ async function loadKind(kind: 'purchase' | 'sale' | 'production', companyOdooId?
     lines: byDoc.get(doc.id) || [],
     created_at: doc.created_at,
   }));
+}
+
+/** Cartões de inventário da separação de bags (um por tipo lançado no estoque). */
+async function loadBagInventory(companyOdooId?: string): Promise<{ header: Record<string, string>; created_at: string }[]> {
+  const params: unknown[] = ['product'];
+  let sql = `SELECT header_json, created_at::text AS created_at
+    FROM forms_documents
+    WHERE kind = $1 AND COALESCE(header_json::json->>'bag_type', '') <> ''`;
+  if (companyOdooId) {
+    params.push(companyOdooId);
+    sql += ` AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`;
+  }
+  const rows = await many<{ header_json: string; created_at: string }>(sql, params);
+  return rows.map((row) => ({ header: parseJson(row.header_json), created_at: row.created_at }));
 }
 
 async function loadProducts(companyOdooId?: string): Promise<Record<string, string>[]> {
@@ -264,7 +276,6 @@ export async function hubStockPayload(companyOdooId?: string) {
 type Units = {
   uoms: UomInfo[];
   productUoms: Map<string, string>;
-  kgPerBag: number;
 };
 
 /** Unidade da linha; vazia = unidade do produto no cadastro. */
@@ -276,13 +287,6 @@ function lineUom(line: Record<string, string>, units: Units): string {
 function kgOf(qty: number, uom: string, units: Units): number | null {
   if (!uom || isKgUnit(uom)) return qty;
   return toKg(qty, uom, units.uoms);
-}
-
-/** Quantidade em Bags: direto na unidade Bag, ou peso do produto Bag convertido pelo fator do Odoo. */
-function bagsOf(qty: number, uom: string, units: Units): number | null {
-  if (isBagUnit(uom)) return qty;
-  const kg = kgOf(qty, uom, units);
-  return kg != null && units.kgPerBag > 0 ? kg / units.kgPerBag : null;
 }
 
 class DailySeries {
@@ -346,20 +350,39 @@ function productionDate(doc: LoadedDoc): Date | null {
   return parseDocDate(doc.header.production_date) || parseDocDate(doc.created_at);
 }
 
-/** Separação: linhas geradas em Bag (unidade ou produto “Bag…”), contadas em bags. */
-function buildSeparation(docs: LoadedDoc[], year: number, month: number, units: Units): DashboardSection {
+function zonedCalendarDate(raw: string, timeZone: string): Date | null {
+  const instant = new Date(raw);
+  if (Number.isNaN(instant.getTime())) return parseDocDate(raw);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(instant);
+  return parseDocDate(parts);
+}
+
+/**
+ * Separação: quantidade contada em cada cartão de inventário de bag, no dia em que entrou no estoque.
+ * O saldo atual do Odoo é a soma desses lançamentos menos o que a prensagem consumiu.
+ */
+export function separationFromInventory(
+  docs: { header: Record<string, string>; created_at: string }[],
+  year: number,
+  month: number,
+  timeZone = 'America/Sao_Paulo',
+): DashboardSection {
   const series = new DailySeries(year, month, 'Bag');
   for (const doc of docs) {
-    if (!isPostedProduction(doc)) continue;
-    const date = productionDate(doc);
+    const code = String(doc.header.bag_type || '').trim();
+    if (!code) continue;
+    const qty = parseBrNumber(doc.header.counted_qty || doc.header.qty_on_hand);
+    if (!qty) continue;
+    const date = zonedCalendarDate(doc.created_at, timeZone);
     if (!inPeriod(date, year, month)) continue;
-    for (const line of doc.lines) {
-      const product = String(line.product || '').trim();
-      const uom = lineUom(line, units);
-      if (isFardo(product) || !(isBagUnit(uom) || isBagProduct(product))) continue;
-      const bags = bagsOf(parseBrNumber(line.quantity), uom, units);
-      if (bags) series.add(date, bags, product || 'Bag');
-    }
+    const name = String(doc.header.bag_type_name || '').trim();
+    const label = name && name.toUpperCase() !== code.toUpperCase() ? `${code} ${name}` : code;
+    series.add(date, qty, label);
   }
   return series.build(true);
 }
@@ -422,20 +445,21 @@ export async function hubDashboardPayload(input: {
   companyOdooId?: string;
 }) {
   const { year, month, companyOdooId } = input;
-  const [purchases, productions, sales, products, uoms] = await Promise.all([
+  const [purchases, productions, sales, products, bags, uoms] = await Promise.all([
     loadKind('purchase', companyOdooId),
     loadKind('production', companyOdooId),
     loadKind('sale', companyOdooId),
     loadProducts(companyOdooId),
+    loadBagInventory(companyOdooId),
     listUomInfos(),
   ]);
-  const units: Units = { uoms, productUoms: productUomByName(products), kgPerBag: toKg(1, 'Bag', uoms) || 0 };
+  const units: Units = { uoms, productUoms: productUomByName(products) };
   return {
     year,
     month,
     scope: companyOdooId ? 'entity' : 'all',
     receipts: buildReceipts(purchases, year, month, units),
-    separation: buildSeparation(productions, year, month, units),
+    separation: separationFromInventory(bags, year, month, getSetting('timezone', 'America/Sao_Paulo')),
     pressing: buildPressing(productions, year, month, units),
     deliveries: buildDeliveries(sales, year, month, units),
     sales: buildSales(sales, year, month),
