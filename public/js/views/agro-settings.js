@@ -127,11 +127,12 @@ function plotForm(item, propertyId) {
     })),
   );
   const selected = item?.propertyId || propertyId || '';
+  const code = String(item?.code || '').trim();
   return `
     <header class="forms-editor-head">
       <div>
         <h2 id="agro-editor-title">${item?.id ? 'Editar talhão' : 'Novo talhão'}</h2>
-        <p class="muted">Código para o Bot (ex.: 1 ou A1) e nome da área (ex.: Hortaliças, Fruticultura).</p>
+        <p class="muted">O código (ex.: 1 ou A1) é o que o Bot e as listas usam. O nome descreve a área.</p>
       </div>
     </header>
     <form id="agro-settings-form" class="agro-form" data-kind="plot">
@@ -141,16 +142,14 @@ function plotForm(item, propertyId) {
           ${properties.map((property) => option(property.id, property.label, selected)).join('')}
         </select>
       </label>
-      <div class="grid-2">
-        <label>Código do talhão / área
-          <input name="code" maxlength="40" required placeholder="ex.: 1 ou A1" value="${escapeHtml(item?.code || '')}">
-        </label>
-        <label>Área (ha)
-          <input name="area" inputmode="decimal" value="${escapeHtml(item?.area ?? '')}">
-        </label>
-      </div>
+      <label>Código do talhão <span class="muted">(obrigatório · Bot)</span>
+        <input name="code" maxlength="40" required autocomplete="off" placeholder="ex.: 1 ou A1" value="${escapeHtml(code)}">
+      </label>
       <label>Nome do talhão
         <input name="name" maxlength="150" required placeholder="ex.: Hortaliças, Fruticultura, Leite" value="${escapeHtml(item?.name || '')}">
+      </label>
+      <label>Área (ha)
+        <input name="area" inputmode="decimal" value="${escapeHtml(item?.area ?? '')}">
       </label>
       ${actions(item?.id ? removeButton() : '')}
     </form>`;

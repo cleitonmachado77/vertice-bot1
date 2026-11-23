@@ -342,10 +342,9 @@ export async function saveAgroPlot(
 ): Promise<AgroSettingsPlot & { propertyId: string }> {
   await ensureAgroSchema();
   const propertyId = clip(input.propertyId, 80);
-  const code = clip(input.code, 40);
+  let code = clip(input.code, 40);
   const name = clip(input.name, 150);
   if (!propertyId) throw new Error('Informe a propriedade do talhão');
-  if (!code) throw new Error('Informe o código do talhão (ex.: 1 ou A1)');
   if (!name) throw new Error('Informe o nome do talhão (ex.: Hortaliças)');
   const property = await one<{ id: string }>(
     `SELECT id FROM agro_properties WHERE id = $1 AND company_odoo_id = $2 AND active = 1`,
@@ -356,14 +355,17 @@ export async function saveAgroPlot(
   const area = parseOptionalQuantity(input.area, 'Área do talhão');
 
   const current = id
-    ? await one<{ id: string; property_id: string }>(
-        `SELECT id, property_id FROM agro_plots WHERE id = $1 AND active = 1`,
+    ? await one<{ id: string; property_id: string; code: string }>(
+        `SELECT id, property_id, COALESCE(code, '') AS code FROM agro_plots WHERE id = $1 AND active = 1`,
         [id],
       )
     : undefined;
   if (id && (!current || current.property_id !== propertyId)) {
     throw new Error('Talhão não encontrado nesta propriedade');
   }
+  // Edição sem o campo na tela antiga: mantém o código já gravado.
+  if (!code && current?.code) code = clip(current.code, 40);
+  if (!code) throw new Error('Informe o código do talhão (ex.: 1 ou A1)');
 
   const codeClash = await one<{ id: string }>(
     `SELECT id FROM agro_plots
