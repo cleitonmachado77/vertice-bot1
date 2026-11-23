@@ -3,6 +3,7 @@ import { many, one, run } from './db.js';
 import { clip } from './agro-resolve.js';
 import { parseIsoDate, parseMoney, parseQuantity } from './agro-rules.js';
 import { ensureAgroSchema } from './agro-schema.js';
+import { PLOT_LABEL_SQL } from './agro-model.js';
 
 export type AgroCost = {
   id: string;
@@ -43,7 +44,7 @@ export async function listCosts(companyId: string): Promise<AgroCost[]> {
     unit_price: number | null;
     notes: string;
   }>(
-    `SELECT c.id, c.plot_id, pl.name AS plot_name, pr.id AS property_id, pr.name AS property_name,
+    `SELECT c.id, c.plot_id, ${PLOT_LABEL_SQL} AS plot_name, pr.id AS property_id, pr.name AS property_name,
             to_char(c.cost_on, 'YYYY-MM-DD') AS cost_on, c.name, c.quantity, c.unit_price, c.notes
      FROM agro_costs c
      JOIN agro_plots pl ON pl.id = c.plot_id

@@ -271,6 +271,8 @@ export async function listEntityProducts(): Promise<EntityProduct[]> {
       weight: header.weight || '',
       qty_on_hand: header.qty_on_hand || '',
       track_inventory: header.track_inventory || 'True',
+      cycle_days: header.cycle_days || '',
+      yield_per_ha: header.yield_per_ha || '',
       odoo_id: header.odoo_id || '',
       odoo_sync_error: header.odoo_sync_error || '',
       updated_at: row.updated_at,
@@ -290,6 +292,8 @@ export async function saveEntityProduct(input: {
   weight?: string;
   qty_on_hand?: string;
   track_inventory?: string;
+  cycle_days?: string;
+  yield_per_ha?: string;
 }): Promise<EntityProduct> {
   const clean = input.name.trim();
   if (!clean) throw new Error('Nome do produto obrigatório');
@@ -304,6 +308,8 @@ export async function saveEntityProduct(input: {
   header.weight = input.weight || '';
   header.qty_on_hand = input.qty_on_hand || '';
   header.track_inventory = input.track_inventory || 'True';
+  header.cycle_days = input.cycle_days || '';
+  header.yield_per_ha = input.yield_per_ha || '';
 
   const companyId = getActiveCompanyId();
   header.company_odoo_id = companyId;
@@ -333,6 +339,8 @@ export async function saveEntityProduct(input: {
       weight: merged.weight || '',
       qty_on_hand: merged.qty_on_hand || '',
       track_inventory: merged.track_inventory || 'True',
+      cycle_days: merged.cycle_days || '',
+      yield_per_ha: merged.yield_per_ha || '',
       odoo_id: merged.odoo_id || '',
     };
   }
@@ -355,6 +363,8 @@ export async function saveEntityProduct(input: {
     weight: header.weight || '',
     qty_on_hand: header.qty_on_hand || '',
     track_inventory: header.track_inventory || 'True',
+    cycle_days: header.cycle_days || '',
+    yield_per_ha: header.yield_per_ha || '',
     odoo_id: '',
   };
 }

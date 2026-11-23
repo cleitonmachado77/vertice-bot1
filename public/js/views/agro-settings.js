@@ -6,7 +6,7 @@ const UF = [
   'PB', 'PR', 'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
 ];
 
-let settings = { producers: [] };
+let settings = { producers: [], deliveryPoints: [] };
 let editor = null;
 
 function ha(value) {
@@ -96,6 +96,29 @@ function propertyForm(item, producerId) {
     </form>`;
 }
 
+function plotLabel(plot) {
+  const code = String(plot?.code || '').trim();
+  const name = String(plot?.name || '').trim();
+  if (code && name && code.toLowerCase() !== name.toLowerCase()) return `${code} · ${name}`;
+  return code || name || '—';
+}
+
+function deliveryPointForm(item) {
+  return `
+    <header class="forms-editor-head">
+      <div>
+        <h2 id="agro-editor-title">${item?.id ? 'Editar local de entrega' : 'Novo local de entrega'}</h2>
+        <p class="muted">Pontos curtos usados na entrega e no Bot (ex.: Sacolão, Escola Municipal).</p>
+      </div>
+    </header>
+    <form id="agro-settings-form" class="agro-form" data-kind="deliveryPoint">
+      <label>Nome do local
+        <input name="name" maxlength="150" required placeholder="ex.: Sacolão" value="${escapeHtml(item?.name || '')}">
+      </label>
+      ${actions(item?.id ? removeButton() : '')}
+    </form>`;
+}
+
 function plotForm(item, propertyId) {
   const properties = (settings.producers || []).flatMap((producer) =>
     (producer.properties || []).map((property) => ({
@@ -108,7 +131,7 @@ function plotForm(item, propertyId) {
     <header class="forms-editor-head">
       <div>
         <h2 id="agro-editor-title">${item?.id ? 'Editar talhão' : 'Novo talhão'}</h2>
-        <p class="muted">Área (talhão) com nome e tamanho em hectares.</p>
+        <p class="muted">Código para o Bot (ex.: 1 ou A1) e nome da área (ex.: Hortaliças, Fruticultura).</p>
       </div>
     </header>
     <form id="agro-settings-form" class="agro-form" data-kind="plot">
@@ -119,13 +142,16 @@ function plotForm(item, propertyId) {
         </select>
       </label>
       <div class="grid-2">
-        <label>Nome do talhão
-          <input name="name" maxlength="150" required value="${escapeHtml(item?.name || '')}">
+        <label>Código do talhão / área
+          <input name="code" maxlength="40" required placeholder="ex.: 1 ou A1" value="${escapeHtml(item?.code || '')}">
         </label>
         <label>Área (ha)
           <input name="area" inputmode="decimal" value="${escapeHtml(item?.area ?? '')}">
         </label>
       </div>
+      <label>Nome do talhão
+        <input name="name" maxlength="150" required placeholder="ex.: Hortaliças, Fruticultura, Leite" value="${escapeHtml(item?.name || '')}">
+      </label>
       ${actions(item?.id ? removeButton() : '')}
     </form>`;
 }
@@ -159,7 +185,9 @@ function openModal(kind, record, context = {}) {
       ? propertyForm(record, context.producerId)
       : kind === 'plot'
         ? plotForm(record, context.propertyId)
-        : producerForm(record);
+        : kind === 'deliveryPoint'
+          ? deliveryPointForm(record)
+          : producerForm(record);
   modal.querySelector('#agro-editor').innerHTML = html;
   editor = { kind, id: record?.id || '', context };
   modal.hidden = false;
@@ -197,9 +225,42 @@ function findPlot(id) {
   return null;
 }
 
+function findDeliveryPoint(id) {
+  return (settings.deliveryPoints || []).find((item) => item.id === id) || null;
+}
+
 async function reload(root) {
   settings = await api('/api/agro/settings');
   paint(root);
+}
+
+function deliveryPointsCard() {
+  const points = settings.deliveryPoints || [];
+  return `
+    <section class="card agro-settings">
+      <div class="agro-settings-head">
+        <div>
+          <h2 class="section-title">Locais de entrega</h2>
+          <p class="muted">Lista curta para a entrega e o Bot (Sacolão, escolas, Coara…). No Odoo, cada local precisa de CNPJ/CPF, endereço e dados fiscais para emitir NF.</p>
+        </div>
+        <button class="btn agro-mini" type="button" data-settings-new="deliveryPoint">Novo local</button>
+      </div>
+      ${
+        points.length
+          ? `<ul class="agro-plot-list">${points
+              .map(
+                (point) => `<li>
+                  <span>${escapeHtml(point.name)}</span>
+                  <span class="agro-actions">
+                    <button class="btn-ghost agro-mini" type="button" data-settings-edit="deliveryPoint" data-id="${escapeHtml(point.id)}">Editar</button>
+                    <button class="btn-ghost agro-mini" type="button" data-settings-delete="deliveryPoint" data-id="${escapeHtml(point.id)}">Excluir</button>
+                  </span>
+                </li>`,
+              )
+              .join('')}</ul>`
+          : `<p class="muted">Nenhum local cadastrado.</p>`
+      }
+    </section>`;
 }
 
 function paint(root) {
@@ -207,6 +268,7 @@ function paint(root) {
   if (!body) return;
   const producers = settings.producers || [];
   body.innerHTML = `
+    ${deliveryPointsCard()}
     <section class="card agro-settings">
       <div class="agro-settings-head">
         <div>
@@ -265,7 +327,7 @@ function propertyBlock(property) {
           ? `<ul class="agro-plot-list">${plots
               .map(
                 (plot) => `<li>
-                  <span>${escapeHtml(plot.name)}<span class="agro-sub">${ha(plot.area)}</span></span>
+                  <span>${escapeHtml(plotLabel(plot))}<span class="agro-sub">${ha(plot.area)}</span></span>
                   <span class="agro-actions">
                     <button class="btn-ghost agro-mini" type="button" data-settings-edit="plot" data-id="${escapeHtml(plot.id)}">Editar</button>
                     <button class="btn-ghost agro-mini" type="button" data-settings-delete="plot" data-id="${escapeHtml(plot.id)}">Excluir</button>
@@ -288,18 +350,27 @@ async function saveForm(form) {
     producer: editor.id ? `/api/agro/producers/${editor.id}` : '/api/agro/producers',
     property: editor.id ? `/api/agro/properties/${editor.id}` : '/api/agro/properties',
     plot: editor.id ? `/api/agro/plots/${editor.id}` : '/api/agro/plots',
+    deliveryPoint: editor.id
+      ? `/api/agro/delivery-points/${editor.id}`
+      : '/api/agro/delivery-points',
   };
   await api(paths[editor.kind], { method: 'POST', body: data });
 }
 
 async function removeCurrent() {
   if (!editor?.id) return;
-  const labels = { producer: 'produtor', property: 'propriedade', plot: 'talhão' };
+  const labels = {
+    producer: 'produtor',
+    property: 'propriedade',
+    plot: 'talhão',
+    deliveryPoint: 'local de entrega',
+  };
   if (!confirm(`Excluir este ${labels[editor.kind]}?`)) return;
   const paths = {
     producer: `/api/agro/producers/${editor.id}`,
     property: `/api/agro/properties/${editor.id}`,
     plot: `/api/agro/plots/${editor.id}`,
+    deliveryPoint: `/api/agro/delivery-points/${editor.id}`,
   };
   await api(paths[editor.kind], { method: 'DELETE' });
 }
@@ -372,7 +443,9 @@ function bind(root) {
           ? findProperty(edit.dataset.id)
           : kind === 'plot'
             ? findPlot(edit.dataset.id)
-            : findProducer(edit.dataset.id);
+            : kind === 'deliveryPoint'
+              ? findDeliveryPoint(edit.dataset.id)
+              : findProducer(edit.dataset.id);
       if (record) openModal(kind, record);
       return;
     }

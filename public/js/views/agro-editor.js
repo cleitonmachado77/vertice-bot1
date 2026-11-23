@@ -34,6 +34,11 @@ function looseNumber(value) {
 }
 
 export function syncDeliveryTotal(form) {
+  syncQtyPriceTotal(form);
+}
+
+/** Valor total = quantidade × unitário (entrega e custo). */
+export function syncQtyPriceTotal(form) {
   const target = form.querySelector('[data-total]');
   if (!target) return;
   const quantity = looseNumber(form.quantity?.value);
@@ -42,6 +47,78 @@ export function syncDeliveryTotal(form) {
     quantity != null && price != null
       ? (Math.round(quantity * price * 100) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
       : '';
+}
+
+function moneyReadonly(value) {
+  if (value == null || value === '') return '';
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '';
+  return parsed.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function addDaysIso(isoDate, days) {
+  const raw = String(isoDate || '').trim().slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match || !Number.isFinite(days) || days <= 0) return '';
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  date.setUTCDate(date.getUTCDate() + Math.trunc(days));
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function haLabel(value) {
+  if (value == null || value === '') return '—';
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return '—';
+  return `${parsed.toLocaleString('pt-BR', { maximumFractionDigits: 3 })} ha`;
+}
+
+function syncPlantingDerived(form, catalog) {
+  const propertyId = form.propertyId?.value || '';
+  const plotId = form.plotId?.value || '';
+  const properties = catalog?.properties || [];
+  const farmProducers = catalog?.farmProducers || [];
+  const property =
+    properties.find((item) => item.id === propertyId) ||
+    farmProducers.flatMap((item) => item.properties || []).find((item) => item.id === propertyId);
+  const plot = (property?.plots || []).find((item) => item.id === plotId);
+  const area = plot?.area;
+  if (form.areaPlanned) {
+    form.areaPlanned.value = area != null && Number(area) > 0 ? String(area) : '';
+  }
+  const areaHelp = form.querySelector('[data-plot-area]');
+  if (areaHelp) {
+    areaHelp.textContent =
+      area != null && Number(area) > 0
+        ? `Área do talhão: ${haLabel(area)}`
+        : 'Cadastre a área do talhão em Configurações.';
+  }
+
+  const productId = form.productId?.value || '';
+  const product = (catalog?.products || []).find((item) => item.id === productId);
+  const plantedOn = form.plantedOn?.value || '';
+  const cycleDays = product?.cycleDays != null ? Number(product.cycleDays) : NaN;
+  const yieldPerHa = product?.yieldPerHa != null ? Number(product.yieldPerHa) : NaN;
+  const forecastOn = addDaysIso(plantedOn, cycleDays);
+  const areaNum = area != null ? Number(area) : NaN;
+  const forecastQty =
+    Number.isFinite(yieldPerHa) && yieldPerHa > 0 && Number.isFinite(areaNum) && areaNum > 0
+      ? Math.round(areaNum * yieldPerHa * 1000) / 1000
+      : null;
+  if (form.forecastOn) form.forecastOn.value = forecastOn;
+  if (form.forecastQty) form.forecastQty.value = forecastQty == null ? '' : String(forecastQty);
+  const hint = form.querySelector('[data-forecast-hint]');
+  if (hint) {
+    const missing = [];
+    if (!Number.isFinite(cycleDays) || cycleDays <= 0) missing.push('dias até a colheita');
+    if (!Number.isFinite(yieldPerHa) || yieldPerHa <= 0) missing.push('produtividade / ha');
+    hint.textContent = missing.length
+      ? `Preencha ${missing.join(' e ')} no cadastro do produto para calcular automaticamente.`
+      : 'Calculado pelos parâmetros do produto (dias e produtividade / ha).';
+  }
 }
 
 export function syncPlantingForm(form, catalog) {
@@ -71,7 +148,14 @@ export function syncPlantingForm(form, catalog) {
     const plots = property?.plots || [];
     plot.innerHTML = [
       option('', 'Selecione', ''),
-      ...plots.map((item) => option(item.id, item.name, current)),
+      ...plots.map((item) =>
+        option(
+          item.id,
+          item.label || item.name,
+          current,
+          `data-area="${escapeHtml(item.area ?? '')}"`,
+        ),
+      ),
     ].join('');
     const available = [...plot.options].some((item) => item.value === current && current !== '');
     plot.value = available ? current : plots[0]?.id || '';
@@ -83,6 +167,7 @@ export function syncPlantingForm(form, catalog) {
     const unit = chosen?.dataset?.uom || '';
     if (unit && form.unit) form.unit.value = unit;
   }
+  syncPlantingDerived(form, catalog);
 }
 
 function suggestDeliveryPrice(form, catalog, plantings) {
@@ -144,7 +229,7 @@ export function plantingFormHtml(item, catalog) {
     <header class="forms-editor-head">
       <div>
         <h2 id="agro-editor-title">${item ? 'Editar plantio' : 'Novo plantio'}</h2>
-        <p class="muted">Produtor, propriedade e talhão vêm de <a href="#/agro/configuracoes">Configurações</a>. A estimativa da safra fica neste plantio.</p>
+        <p class="muted">Área vem do talhão; previsão e estimativa saem dos parâmetros do produto.</p>
       </div>
     </header>
     <form id="agro-form" class="agro-form" data-kind="plantio">
@@ -171,44 +256,53 @@ export function plantingFormHtml(item, catalog) {
           </select>
         </label>
       </div>
-      <div class="grid-2">
-        <label>Produto
-          <select name="productId" required>
-            ${option('', 'Selecione', selectedProduct)}
-            ${!knownProduct && item?.productId ? option(item.productId, item.productName, selectedProduct) : ''}
-            ${products
-              .map((product) => option(product.id, product.uom ? `${product.name} · ${product.uom}` : product.name, selectedProduct, `data-uom="${escapeHtml(product.uom)}"`))
-              .join('')}
-            ${option('__custom__', 'Outra cultura', selectedProduct)}
-          </select>
-        </label>
-        <label>Área planejada (ha)<input name="areaPlanned" inputmode="decimal" required value="${escapeHtml(item?.areaPlanned ?? '')}"></label>
-      </div>
+      <p class="muted" data-plot-area>Área do talhão: —</p>
+      <input type="hidden" name="areaPlanned" value="${escapeHtml(item?.areaPlanned ?? '')}">
+      <label>Produto
+        <select name="productId" required>
+          ${option('', 'Selecione', selectedProduct)}
+          ${!knownProduct && item?.productId ? option(item.productId, item.productName, selectedProduct) : ''}
+          ${products
+            .map((product) =>
+              option(
+                product.id,
+                product.uom ? `${product.name} · ${product.uom}` : product.name,
+                selectedProduct,
+                `data-uom="${escapeHtml(product.uom)}"`,
+              ),
+            )
+            .join('')}
+          ${option('__custom__', 'Outra cultura', selectedProduct)}
+        </select>
+      </label>
       <div class="grid-2" data-custom-product hidden>
         <label>Nome da cultura<input name="productName" maxlength="150" value="${escapeHtml(item && !item.productId ? item.productName : '')}"></label>
         <label>Unidade<input name="unit" maxlength="20" value="${escapeHtml(item?.unit || '')}" placeholder="kg, sc, t"></label>
       </div>
+      <label>Data do plantio<input name="plantedOn" type="date" required value="${escapeHtml(item?.plantedOn || '')}"></label>
       <div class="grid-2">
-        <label>Data do plantio<input name="plantedOn" type="date" required value="${escapeHtml(item?.plantedOn || '')}"></label>
-        <label>Previsão de colheita<input name="forecastOn" type="date" value="${escapeHtml(item?.forecastOn || '')}"></label>
+        <label>Previsão de colheita
+          <input name="forecastOn" type="date" readonly value="${escapeHtml(item?.forecastOn || '')}">
+        </label>
+        <label>Estimativa da safra
+          <input name="forecastQty" inputmode="decimal" readonly value="${escapeHtml(item?.forecastQty ?? '')}" placeholder="Calculada pelo produto">
+        </label>
       </div>
-      <div class="grid-2">
-        <label>Estimativa da safra<input name="forecastQty" inputmode="decimal" value="${escapeHtml(item?.forecastQty ?? '')}" placeholder="Quantidade prevista"></label>
-        ${
-          item
-            ? `<label>Situação
-                <select name="status">
-                  ${(item.harvestedQty > 0
-                    ? [['em_colheita', STATUS.em_colheita], ['colhido', STATUS.colhido]]
-                    : [['planejado', STATUS.planejado]]
-                  )
-                    .map(([value, label]) => option(value, label, item.status))
-                    .join('')}
-                </select>
-              </label>`
-            : '<span></span>'
-        }
-      </div>
+      <p class="muted" data-forecast-hint>Calculado pelos parâmetros do produto (dias e produtividade / ha).</p>
+      ${
+        item
+          ? `<label>Situação
+              <select name="status">
+                ${(item.harvestedQty > 0
+                  ? [['em_colheita', STATUS.em_colheita], ['colhido', STATUS.colhido]]
+                  : [['planejado', STATUS.planejado]]
+                )
+                  .map(([value, label]) => option(value, label, item.status))
+                  .join('')}
+              </select>
+            </label>`
+          : ''
+      }
       <label>Observações<textarea name="notes" maxlength="500" rows="3">${escapeHtml(item?.notes || '')}</textarea></label>
       ${actions(item ? removeButton() : '')}
     </form>`;
@@ -247,7 +341,7 @@ export function costFormHtml(item, catalog) {
   const plots = (catalog?.properties || []).flatMap((property) =>
     (property.plots || []).map((plot) => ({
       id: plot.id,
-      label: `${property.name} · ${plot.name}`,
+      label: `${property.name} · ${plot.label || plot.name}`,
     })),
   );
   const selected = item?.plotId || '';
@@ -287,10 +381,13 @@ export function costFormHtml(item, catalog) {
         <label>Valor unitário (R$)
           <input name="unitPrice" inputmode="decimal" value="${escapeHtml(item?.unitPrice ?? '')}">
         </label>
-        <label>Observações
-          <input name="notes" maxlength="500" value="${escapeHtml(item?.notes || '')}">
+        <label>Valor total
+          <input data-total readonly value="${escapeHtml(moneyReadonly(item?.totalValue))}">
         </label>
       </div>
+      <label>Observações
+        <input name="notes" maxlength="500" value="${escapeHtml(item?.notes || '')}">
+      </label>
       ${actions(item?.id ? removeButton() : '')}
     </form>`;
 }
@@ -304,13 +401,13 @@ export function deliveryFormHtml(item, catalog, plantings) {
     <header class="forms-editor-head">
       <div>
         <h2 id="agro-editor-title">${item?.id ? 'Editar entrega' : 'Nova entrega'}</h2>
-        <p class="muted">Gera um pedido de venda no Odoo e baixa o estoque do talhão. O preço sugerido vem do produto.</p>
+        <p class="muted">Salva a entrega localmente. Agrupe na grid para gerar o pedido no Odoo. Locais vêm de Configurações.</p>
       </div>
     </header>
     <form id="agro-form" class="agro-form" data-kind="entrega">
       <div class="grid-2">
         <label>Plantio
-          <select name="plantingId" required ${item?.id ? 'disabled' : ''}>
+          <select name="plantingId" required ${item?.id || item?.odooOrderId ? 'disabled' : ''}>
             ${option('', 'Selecione', selectedPlanting)}
             ${choices
               .map((planting) => {
@@ -321,32 +418,43 @@ export function deliveryFormHtml(item, catalog, plantings) {
               .join('')}
           </select>
         </label>
-        <label>Comprador
-          <select name="partnerId" required>
+        <label>Local de entrega
+          <select name="partnerId" required ${item?.odooOrderId ? 'disabled' : ''}>
             ${option('', 'Selecione', selectedBuyer)}
             ${item?.partnerId && !buyers.some((buyer) => buyer.id === item.partnerId) ? option(item.partnerId, item.partnerName, selectedBuyer) : ''}
             ${buyers.map((buyer) => option(buyer.id, buyer.name, selectedBuyer)).join('')}
-            ${option('__custom__', 'Outro comprador', selectedBuyer)}
           </select>
         </label>
       </div>
       ${item?.id ? `<input type="hidden" name="plantingId" value="${escapeHtml(item.plantingId)}">` : ''}
+      ${item?.odooOrderId ? `<input type="hidden" name="partnerId" value="${escapeHtml(item.partnerId || '')}">` : ''}
       ${!choices.length ? '<p class="muted">Não há saldo colhido para entregar. Registre a colheita antes.</p>' : ''}
+      ${
+        buyers.length
+          ? ''
+          : '<p class="muted">Cadastre os locais de entrega em <a href="#/agro/configuracoes">Configurações</a>.</p>'
+      }
       <div data-custom-buyer hidden>
-        <label>Nome do comprador<input name="partnerName" maxlength="150" value="${escapeHtml(item && !item.partnerId ? item.partnerName : '')}"></label>
+        <label>Nome do local<input name="partnerName" maxlength="150" value=""></label>
       </div>
       <div class="grid-2">
-        <label>Data da entrega<input name="deliveredOn" type="date" required value="${escapeHtml(item?.deliveredOn || '')}"></label>
-        <label>Quantidade<input name="quantity" inputmode="decimal" required value="${escapeHtml(item?.quantity ?? '')}"></label>
+        <label>Data da entrega<input name="deliveredOn" type="date" required value="${escapeHtml(item?.deliveredOn || '')}" ${item?.odooOrderId ? 'readonly' : ''}></label>
+        <label>Quantidade<input name="quantity" inputmode="decimal" required value="${escapeHtml(item?.quantity ?? '')}" ${item?.odooOrderId ? 'readonly' : ''}></label>
       </div>
       <div class="grid-2">
-        <label>Valor unitário (R$)<input name="unitPrice" inputmode="decimal" value="${escapeHtml(item?.unitPrice ?? '')}"></label>
+        <label>Valor unitário (R$)<input name="unitPrice" inputmode="decimal" value="${escapeHtml(item?.unitPrice ?? '')}" ${item?.odooOrderId ? 'readonly' : ''}></label>
         <label>Valor total<input data-total readonly value="${escapeHtml(item?.totalValue ?? '')}"></label>
       </div>
       <div class="grid-2">
-        <label>Documento<input name="document" maxlength="150" placeholder="NF ou romaneio. Vazio usa o pedido do Odoo" value="${escapeHtml(item?.document || '')}"></label>
-        <label>Observações<input name="notes" maxlength="500" value="${escapeHtml(item?.notes || '')}"></label>
+        <label>Documento (NF / romaneio)
+          <input name="document" maxlength="150" placeholder="Opcional" value="${escapeHtml(item?.document || '')}" ${item?.odooOrderId ? 'readonly' : ''}>
+        </label>
+        <label>Pedido Odoo
+          <input readonly value="${escapeHtml(item?.odooOrderRef || (item?.odooOrderId ? `#${item.odooOrderId}` : 'Pendente'))}">
+        </label>
       </div>
-      ${actions(item?.id ? removeButton() : '')}
+      <label>Observações<input name="notes" maxlength="500" value="${escapeHtml(item?.notes || '')}" ${item?.odooOrderId ? 'readonly' : ''}></label>
+      ${item?.odooOrderId ? '<p class="muted">Entrega já vinculada a um pedido Odoo. Exclua pelo estorno no Odoo se precisar refazer.</p>' : ''}
+      ${actions(item?.id && !item?.odooOrderId ? removeButton() : '')}
     </form>`;
 }

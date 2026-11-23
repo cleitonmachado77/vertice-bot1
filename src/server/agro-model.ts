@@ -1,6 +1,16 @@
 import { many, one } from './db.js';
 
-export type AgroPlot = { id: string; name: string; area: number | null };
+export type AgroPlot = { id: string; code: string; name: string; area: number | null; label: string };
+
+/** Expressão SQL do rótulo do talhão (código · nome). */
+export const PLOT_LABEL_SQL = `
+  CASE
+    WHEN COALESCE(pl.code, '') <> '' AND lower(pl.code) <> lower(pl.name)
+      THEN pl.code || ' · ' || pl.name
+    WHEN COALESCE(pl.code, '') <> '' THEN pl.code
+    ELSE COALESCE(pl.name, '')
+  END
+`.trim();
 export type AgroProperty = {
   id: string;
   name: string;
@@ -18,7 +28,15 @@ export type AgroProducer = {
   partnerId: string;
   properties: AgroProperty[];
 };
-export type AgroProduct = { id: string; name: string; sigla: string; uom: string; salesPrice: string };
+export type AgroProduct = {
+  id: string;
+  name: string;
+  sigla: string;
+  uom: string;
+  salesPrice: string;
+  cycleDays: number | null;
+  yieldPerHa: number | null;
+};
 export type AgroBuyer = { id: string; name: string };
 
 export type AgroPlanting = {
@@ -69,10 +87,12 @@ export type AgroDelivery = {
   notes: string;
   saleDocumentId: string;
   odooOrderId: string;
+  odooOrderRef: string;
   productName: string;
   unit: string;
   propertyName: string;
   plotName: string;
+  plotId: string;
 };
 
 type PlantingRow = {
@@ -100,7 +120,7 @@ type PlantingRow = {
 const PLANTING_SQL = `
   SELECT p.id, p.property_id, pr.name AS property_name,
     COALESCE(pr.producer_partner_id, '') AS producer_partner_id, pr.producer_name,
-    COALESCE(p.plot_id, '') AS plot_id, COALESCE(pl.name, '') AS plot_name,
+    COALESCE(p.plot_id, '') AS plot_id, ${PLOT_LABEL_SQL} AS plot_name,
     p.product_id, p.product_name, p.unit, p.area_planned,
     to_char(p.planted_on, 'YYYY-MM-DD') AS planted_on,
     COALESCE(to_char(p.forecast_on, 'YYYY-MM-DD'), '') AS forecast_on,
@@ -186,7 +206,7 @@ export async function listHarvests(companyId: string): Promise<AgroHarvest[]> {
   }>(
     `SELECT h.id, h.planting_id, to_char(h.harvested_on, 'YYYY-MM-DD') AS harvested_on,
        h.quantity, h.notes, p.product_name, p.unit, pr.name AS property_name,
-       COALESCE(pl.name, '') AS plot_name, p.status AS planting_status
+       ${PLOT_LABEL_SQL} AS plot_name, p.status AS planting_status
      FROM agro_harvests h
      JOIN agro_plantings p ON p.id = h.planting_id
      JOIN agro_properties pr ON pr.id = p.property_id
@@ -228,17 +248,21 @@ export async function listDeliveries(companyId: string): Promise<AgroDelivery[]>
     notes: string;
     sale_document_id: string;
     odoo_order_id: string;
+    odoo_order_ref: string;
     product_name: string;
     unit: string;
     property_name: string;
     plot_name: string;
+    plot_id: string;
   }>(
     `SELECT e.id, e.planting_id, e.partner_id, e.partner_name,
        to_char(e.delivered_on, 'YYYY-MM-DD') AS delivered_on,
        e.quantity, e.unit_price, e.total_value, e.document, e.notes,
        COALESCE(e.sale_document_id, '') AS sale_document_id,
        COALESCE(e.odoo_order_id, '') AS odoo_order_id,
-       p.product_name, p.unit, pr.name AS property_name, COALESCE(pl.name, '') AS plot_name
+       COALESCE(e.odoo_order_ref, '') AS odoo_order_ref,
+       p.product_name, p.unit, pr.name AS property_name, ${PLOT_LABEL_SQL} AS plot_name,
+       COALESCE(p.plot_id, '') AS plot_id
      FROM agro_deliveries e
      JOIN agro_plantings p ON p.id = e.planting_id
      JOIN agro_properties pr ON pr.id = p.property_id
@@ -260,10 +284,12 @@ export async function listDeliveries(companyId: string): Promise<AgroDelivery[]>
     notes: row.notes || '',
     saleDocumentId: row.sale_document_id || '',
     odooOrderId: row.odoo_order_id || '',
+    odooOrderRef: row.odoo_order_ref || '',
     productName: row.product_name,
     unit: row.unit || '',
     propertyName: row.property_name,
     plotName: row.plot_name || '',
+    plotId: row.plot_id || '',
   }));
 }
 

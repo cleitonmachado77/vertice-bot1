@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { many, one, run } from './db.js';
 import { upsertPartner } from './forms-catalog.js';
 import { createLocalContact, findContactByPhone } from './local-contact.js';
-import { clip } from './agro-resolve.js';
+import { listDeliveryPoints, type AgroDeliveryPoint } from './agro-delivery-points.js';
+import { clip, plotLabel } from './agro-resolve.js';
 import { parseOptionalQuantity, parseQuantity } from './agro-rules.js';
 import { ensureAgroSchema } from './agro-schema.js';
 
-export type AgroSettingsPlot = { id: string; name: string; area: number | null };
+export type AgroSettingsPlot = { id: string; code: string; name: string; area: number | null; label: string };
 export type AgroSettingsProperty = {
   id: string;
   name: string;
@@ -24,6 +25,7 @@ export type AgroSettingsProducer = {
   contactId: string;
   properties: AgroSettingsProperty[];
 };
+export type { AgroDeliveryPoint };
 
 const UF = new Set([
   'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA',
@@ -87,8 +89,11 @@ async function syncProducerLinks(
   return { partnerId, contactId };
 }
 
-export async function listAgroSettings(companyId: string): Promise<{ producers: AgroSettingsProducer[] }> {
+export async function listAgroSettings(
+  companyId: string,
+): Promise<{ producers: AgroSettingsProducer[]; deliveryPoints: AgroDeliveryPoint[] }> {
   await ensureAgroSchema();
+  const deliveryPoints = await listDeliveryPoints(companyId);
   const producers = await many<{
     id: string;
     name: string;
@@ -120,15 +125,16 @@ export async function listAgroSettings(companyId: string): Promise<{ producers: 
     : [];
   const propertyIds = properties.map((item) => item.id);
   const plots = propertyIds.length
-    ? await many<{ id: string; property_id: string; name: string; area: number | null }>(
-        `SELECT id, property_id, name, area FROM agro_plots
+    ? await many<{ id: string; property_id: string; code: string; name: string; area: number | null }>(
+        `SELECT id, property_id, COALESCE(code, '') AS code, name, area FROM agro_plots
          WHERE active = 1 AND property_id = ANY($1::text[])
-         ORDER BY name ASC`,
+         ORDER BY CASE WHEN COALESCE(code, '') = '' THEN 1 ELSE 0 END, lower(code), lower(name)`,
         [propertyIds],
       )
     : [];
 
   return {
+    deliveryPoints,
     producers: producers.map((producer) => ({
       id: producer.id,
       name: producer.name,
@@ -148,8 +154,10 @@ export async function listAgroSettings(companyId: string): Promise<{ producers: 
             .filter((plot) => plot.property_id === property.id)
             .map((plot) => ({
               id: plot.id,
+              code: plot.code || '',
               name: plot.name,
               area: plot.area == null ? null : Number(plot.area),
+              label: plotLabel(plot.code, plot.name),
             })),
         })),
     })),
@@ -334,9 +342,11 @@ export async function saveAgroPlot(
 ): Promise<AgroSettingsPlot & { propertyId: string }> {
   await ensureAgroSchema();
   const propertyId = clip(input.propertyId, 80);
+  const code = clip(input.code, 40);
   const name = clip(input.name, 150);
   if (!propertyId) throw new Error('Informe a propriedade do talhão');
-  if (!name) throw new Error('Informe o nome do talhão');
+  if (!code) throw new Error('Informe o código do talhão (ex.: 1 ou A1)');
+  if (!name) throw new Error('Informe o nome do talhão (ex.: Hortaliças)');
   const property = await one<{ id: string }>(
     `SELECT id FROM agro_properties WHERE id = $1 AND company_odoo_id = $2 AND active = 1`,
     [propertyId, companyId],
@@ -355,27 +365,41 @@ export async function saveAgroPlot(
     throw new Error('Talhão não encontrado nesta propriedade');
   }
 
-  const clash = await one<{ id: string }>(
+  const codeClash = await one<{ id: string }>(
+    `SELECT id FROM agro_plots
+     WHERE property_id = $1 AND lower(code) = lower($2) AND active = 1 AND id <> $3`,
+    [propertyId, code, current?.id || ''],
+  );
+  if (codeClash) throw new Error('Já existe um talhão com este código nesta propriedade');
+
+  const nameClash = await one<{ id: string }>(
     `SELECT id FROM agro_plots
      WHERE property_id = $1 AND lower(name) = lower($2) AND active = 1 AND id <> $3`,
     [propertyId, name, current?.id || ''],
   );
-  if (clash) throw new Error('Já existe um talhão com este nome nesta propriedade');
+  if (nameClash) throw new Error('Já existe um talhão com este nome nesta propriedade');
 
   const plotId = current?.id || randomUUID();
   if (!current) {
     await run(
-      `INSERT INTO agro_plots(id, property_id, name, area, active, created_at, updated_at)
-       VALUES($1, $2, $3, $4, 1, NOW(), NOW())`,
-      [plotId, propertyId, name, area],
+      `INSERT INTO agro_plots(id, property_id, code, name, area, active, created_at, updated_at)
+       VALUES($1, $2, $3, $4, $5, 1, NOW(), NOW())`,
+      [plotId, propertyId, code, name, area],
     );
   } else {
     await run(
-      `UPDATE agro_plots SET name = $1, area = $2, updated_at = NOW() WHERE id = $3`,
-      [name, area, plotId],
+      `UPDATE agro_plots SET code = $1, name = $2, area = $3, updated_at = NOW() WHERE id = $4`,
+      [code, name, area, plotId],
     );
   }
-  return { id: plotId, propertyId, name, area };
+  return {
+    id: plotId,
+    propertyId,
+    code,
+    name,
+    area,
+    label: plotLabel(code, name),
+  };
 }
 
 export async function deleteAgroPlot(companyId: string, id: string): Promise<void> {

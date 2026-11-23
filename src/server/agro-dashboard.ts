@@ -27,11 +27,21 @@ function barsFromMap(map: Map<string, number>, unit = ''): AgroDashBar[] {
     .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label, 'pt-BR'));
 }
 
-export async function agroDashboard(companyId: string, month: number, year: number) {
+function isActivePlanting(status: string): boolean {
+  return status !== 'colhido';
+}
+
+export async function agroDashboard(
+  companyId: string,
+  month: number,
+  year: number,
+  productId = '',
+) {
   await ensureAgroSchema();
   const now = new Date();
   const periodMonth = month >= 1 && month <= 12 ? month : now.getMonth() + 1;
   const periodYear = year >= 2000 && year <= 2100 ? year : now.getFullYear();
+  const selectedProductId = String(productId || '').trim();
 
   const [plantings, harvests, deliveries, costs, catalog] = await Promise.all([
     listPlantings(companyId),
@@ -41,18 +51,31 @@ export async function agroDashboard(companyId: string, month: number, year: numb
     listAgroCatalog(companyId),
   ]);
 
+  const matchProduct = (id: string) => !selectedProductId || id === selectedProductId;
+
   const siglaByProductId = new Map(
     (catalog.products || []).map((item) => [item.id, String(item.sigla || '').trim()]),
   );
   const salesPriceByProductId = new Map(
     (catalog.products || []).map((item) => [item.id, Number(String(item.salesPrice || '').replace(',', '.')) || 0]),
   );
-  const labelOf = (productId: string, productName: string) =>
-    productLabel(productName, siglaByProductId.get(productId) || '');
+  const labelOf = (id: string, productName: string) =>
+    productLabel(productName, siglaByProductId.get(id) || '');
+
+  const plantingById = new Map(plantings.map((item) => [item.id, item]));
+
+  /** Talhões com plantio da cultura filtrada (custos / receita por área). */
+  const plotIdsForProduct = new Set(
+    plantings.filter((item) => matchProduct(item.productId)).map((item) => item.plotId).filter(Boolean),
+  );
+  const matchPlot = (plotId: string) =>
+    !selectedProductId || (plotId && plotIdsForProduct.has(plotId));
 
   const avgPriceByProduct = new Map<string, { value: number; qty: number }>();
   for (const item of deliveries) {
     if (!inPeriod(item.deliveredOn, periodMonth, periodYear)) continue;
+    const planting = plantingById.get(item.plantingId);
+    if (!matchProduct(planting?.productId || '')) continue;
     const key = item.productName || item.plantingId;
     const bucket = avgPriceByProduct.get(key) || { value: 0, qty: 0 };
     bucket.value += Number(item.totalValue || 0);
@@ -60,10 +83,10 @@ export async function agroDashboard(companyId: string, month: number, year: numb
     avgPriceByProduct.set(key, bucket);
   }
 
-  function avgSalePrice(productId: string, productName: string): number {
+  function avgSalePrice(id: string, productName: string): number {
     const bucket = avgPriceByProduct.get(productName);
     if (bucket && bucket.qty > 0) return bucket.value / bucket.qty;
-    return salesPriceByProductId.get(productId) || 0;
+    return salesPriceByProductId.get(id) || 0;
   }
 
   const forecastByProduct = new Map<string, number>();
@@ -77,10 +100,20 @@ export async function agroDashboard(companyId: string, month: number, year: numb
   const revenueByArea = new Map<string, number>();
   const expenseByArea = new Map<string, number>();
 
+  let plantedAreaHa = 0;
+  let estimatedQty = 0;
+
   for (const item of plantings) {
+    if (!matchProduct(item.productId)) continue;
     const label = labelOf(item.productId, item.productName);
+
+    if (isActivePlanting(item.status)) {
+      plantedAreaHa += Number(item.areaPlanned || 0);
+      estimatedQty += Number(item.forecastQty || 0);
+    }
+
     if (inPeriod(item.plantedOn, periodMonth, periodYear)) {
-      addMap(plantingByProduct, label, Number(item.areaPlanned || 0));
+      addMap(plantingByProduct, label, Number(item.forecastQty || 0));
     }
     if (item.forecastQty != null && item.forecastOn && inPeriod(item.forecastOn, periodMonth, periodYear)) {
       addMap(forecastByProduct, label, Number(item.forecastQty || 0));
@@ -94,28 +127,42 @@ export async function agroDashboard(companyId: string, month: number, year: numb
     if (stock > 0.0001) addMap(stockByProduct, label, stock);
   }
 
+  let harvestedQty = 0;
   for (const item of harvests) {
     if (!inPeriod(item.harvestedOn, periodMonth, periodYear)) continue;
-    const planting = plantings.find((row) => row.id === item.plantingId);
+    const planting = plantingById.get(item.plantingId);
+    if (!matchProduct(planting?.productId || '')) continue;
+    const qty = Number(item.quantity || 0);
+    harvestedQty += qty;
     const label = labelOf(planting?.productId || '', item.productName);
-    addMap(harvestByProduct, label, Number(item.quantity || 0));
+    addMap(harvestByProduct, label, qty);
     const area = item.plotName || planting?.plotName || 'Sem talhão';
     const price = avgSalePrice(planting?.productId || '', item.productName);
-    addMap(revenueByArea, area, Number(item.quantity || 0) * price);
+    addMap(revenueByArea, area, qty * price);
   }
 
+  let deliveredQty = 0;
+  let soldValue = 0;
   for (const item of deliveries) {
     if (!inPeriod(item.deliveredOn, periodMonth, periodYear)) continue;
-    const planting = plantings.find((row) => row.id === item.plantingId);
+    const planting = plantingById.get(item.plantingId);
+    if (!matchProduct(planting?.productId || '')) continue;
+    const qty = Number(item.quantity || 0);
+    const value = Number(item.totalValue || 0);
+    deliveredQty += qty;
+    soldValue += value;
     const label = labelOf(planting?.productId || '', item.productName);
-    addMap(deliveryByProduct, label, Number(item.quantity || 0));
-    addMap(salesByProduct, label, Number(item.totalValue || 0));
+    addMap(deliveryByProduct, label, qty);
+    addMap(salesByProduct, label, value);
   }
 
+  let productionCosts = 0;
   for (const item of costs) {
     if (!inPeriod(item.costOn, periodMonth, periodYear)) continue;
+    if (!matchPlot(item.plotId)) continue;
     const area = item.plotName || 'Sem talhão';
     const amount = item.totalValue != null ? item.totalValue : Number(item.quantity || 0);
+    productionCosts += amount;
     addMap(costsByArea, area, amount);
     addMap(expenseByArea, area, amount);
   }
@@ -129,31 +176,47 @@ export async function agroDashboard(companyId: string, month: number, year: numb
     }))
     .sort((a, b) => b.revenue - a.revenue || a.label.localeCompare(b.label, 'pt-BR'));
 
-  const totalCosts = [...costsByArea.values()].reduce((sum, value) => sum + value, 0);
-  const totalRevenue = [...revenueByArea.values()].reduce((sum, value) => sum + value, 0);
-  const totalHarvest = [...harvestByProduct.values()].reduce((sum, value) => sum + value, 0);
-  const totalDelivery = [...deliveryByProduct.values()].reduce((sum, value) => sum + value, 0);
-
-  return {
-    period: { month: periodMonth, year: periodYear },
-    products: (catalog.products || []).map((item) => ({
+  const productOptions = new Map<string, { id: string; name: string; sigla: string; label: string }>();
+  for (const item of plantings) {
+    if (!item.productId || productOptions.has(item.productId)) continue;
+    productOptions.set(item.productId, {
+      id: item.productId,
+      name: item.productName,
+      sigla: siglaByProductId.get(item.productId) || '',
+      label: labelOf(item.productId, item.productName),
+    });
+  }
+  for (const item of catalog.products || []) {
+    if (productOptions.has(item.id)) continue;
+    productOptions.set(item.id, {
       id: item.id,
       name: item.name,
       sigla: item.sigla || '',
       label: productLabel(item.name, item.sigla || ''),
-    })),
+    });
+  }
+
+  return {
+    period: { month: periodMonth, year: periodYear },
+    productId: selectedProductId,
+    products: [...productOptions.values()].sort((a, b) =>
+      a.label.localeCompare(b.label, 'pt-BR'),
+    ),
     summary: {
-      plantings: plantings.filter((item) => inPeriod(item.plantedOn, periodMonth, periodYear)).length,
-      harvestedQty: Math.round(totalHarvest * 1000) / 1000,
-      deliveredQty: Math.round(totalDelivery * 1000) / 1000,
-      costs: Math.round(totalCosts * 100) / 100,
-      margin: Math.round((totalRevenue - totalCosts) * 100) / 100,
+      plantedAreaHa: Math.round(plantedAreaHa * 1000) / 1000,
+      estimatedQty: Math.round(estimatedQty * 1000) / 1000,
+      harvestedQty: Math.round(harvestedQty * 1000) / 1000,
+      deliveredQty: Math.round(deliveredQty * 1000) / 1000,
+      soldValue: Math.round(soldValue * 100) / 100,
+      costs: Math.round(productionCosts * 100) / 100,
     },
     forecast: {
       byProduct: barsFromMap(forecastByProduct),
-      timeline: forecastTimeline.sort((a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product)),
+      timeline: forecastTimeline.sort(
+        (a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product),
+      ),
     },
-    plantingByProduct: barsFromMap(plantingByProduct, 'ha'),
+    plantingByProduct: barsFromMap(plantingByProduct),
     harvestByProduct: barsFromMap(harvestByProduct),
     deliveryByProduct: barsFromMap(deliveryByProduct),
     salesByProduct: barsFromMap(salesByProduct, 'R$'),

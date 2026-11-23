@@ -153,9 +153,24 @@ async function createAgroTables(): Promise<void> {
   await run(`ALTER TABLE agro_properties ADD COLUMN IF NOT EXISTS producer_partner_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_properties ADD COLUMN IF NOT EXISTS producer_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_plots ADD COLUMN IF NOT EXISTS odoo_location_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE agro_plots ADD COLUMN IF NOT EXISTS code TEXT NOT NULL DEFAULT ''`);
+  await run(`UPDATE agro_plots SET code = name WHERE COALESCE(code, '') = '' AND COALESCE(name, '') <> ''`);
+  await run(`DROP INDEX IF EXISTS ux_agro_plots_property_code_active`);
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_plots_property_code_active
+     ON agro_plots(property_id, lower(code)) WHERE active = 1 AND code <> ''`,
+  );
   await run(`ALTER TABLE agro_harvests ADD COLUMN IF NOT EXISTS odoo_qty DOUBLE PRECISION NOT NULL DEFAULT 0`);
   await run(`ALTER TABLE agro_deliveries ADD COLUMN IF NOT EXISTS odoo_order_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE agro_deliveries ADD COLUMN IF NOT EXISTS odoo_order_ref TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_deliveries ADD COLUMN IF NOT EXISTS sale_document_id TEXT NOT NULL DEFAULT ''`);
+  await run(
+    `UPDATE agro_deliveries
+     SET odoo_order_ref = document
+     WHERE COALESCE(odoo_order_ref, '') = ''
+       AND COALESCE(sale_document_id, '') <> ''
+       AND document ~ '^S[0-9]+$'`,
+  );
   await run(`ALTER TABLE agro_plantings ADD COLUMN IF NOT EXISTS source_cycle_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_harvests ADD COLUMN IF NOT EXISTS source_cycle_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_deliveries ADD COLUMN IF NOT EXISTS source_cycle_id TEXT NOT NULL DEFAULT ''`);
@@ -170,6 +185,26 @@ async function createAgroTables(): Promise<void> {
   await run(
     `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_deliveries_cycle
      ON agro_deliveries(source_cycle_id) WHERE source_cycle_id <> ''`,
+  );
+  await run(`
+    CREATE TABLE IF NOT EXISTS agro_delivery_points (
+      id TEXT PRIMARY KEY,
+      company_odoo_id TEXT NOT NULL DEFAULT '1',
+      name TEXT NOT NULL,
+      partner_id TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_delivery_points_company_name_active
+     ON agro_delivery_points(company_odoo_id, lower(name)) WHERE active = 1`,
+  );
+  await run(
+    `CREATE INDEX IF NOT EXISTS idx_agro_delivery_points_company
+     ON agro_delivery_points(company_odoo_id, sort_order, name)`,
   );
   await migrateProducersFromProperties();
 }

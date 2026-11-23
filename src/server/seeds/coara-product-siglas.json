@@ -1,0 +1,1377 @@
+[
+  {
+    "name": "ABOBORA CABOTIA - KG",
+    "key": "ABOBORA CABOTIA KG",
+    "sigla": "ABC"
+  },
+  {
+    "name": "INHAME - BDJ",
+    "key": "INHAME BDJ",
+    "sigla": "INH"
+  },
+  {
+    "name": "ALFACE MIMOSA VERDE",
+    "key": "ALFACE MIMOSA VERDE",
+    "sigla": "AMV"
+  },
+  {
+    "name": "ALFACE MIMOSA ROXO",
+    "key": "ALFACE MIMOSA ROXO",
+    "sigla": "AMR"
+  },
+  {
+    "name": "SERINGUELA",
+    "key": "SERINGUELA",
+    "sigla": "SER"
+  },
+  {
+    "name": "ALFACE CRESPA - PCTE",
+    "key": "ALFACE CRESPA PCTE",
+    "sigla": "ALC"
+  },
+  {
+    "name": "MANDIOCA VACUO - PCT",
+    "key": "MANDIOCA VACUO PCT",
+    "sigla": "MAV"
+  },
+  {
+    "name": "ALFACE AMERICANA ORGANICA - PCTE",
+    "key": "ALFACE AMERICANA ORGANICA PCTE",
+    "sigla": "AAO"
+  },
+  {
+    "name": "TOMATE SALADETE - BDJ",
+    "key": "TOMATE SALADETE BDJ",
+    "sigla": "TOS"
+  },
+  {
+    "name": "GOIABA - KG",
+    "key": "GOIABA KG",
+    "sigla": "GOI"
+  },
+  {
+    "name": "PEPINO CAIPIRA - BDJ",
+    "key": "PEPINO CAIPIRA BDJ",
+    "sigla": "PEC"
+  },
+  {
+    "name": "COUVE FLOR - UNID",
+    "key": "COUVE FLOR UNID",
+    "sigla": "COF"
+  },
+  {
+    "name": "ABOBRINHA MENINA ORGÂNICA - KG",
+    "key": "ABOBRINHA MENINA ORGANICA KG",
+    "sigla": "AMO"
+  },
+  {
+    "name": "RUCULA DA TERRA MAÇO",
+    "key": "RUCULA DA TERRA MACO",
+    "sigla": "RUT"
+  },
+  {
+    "name": "CEBOLINHA - MÇ",
+    "key": "CEBOLINHA MC",
+    "sigla": "CEB"
+  },
+  {
+    "name": "SALSINHA ORGANICA - MÇ",
+    "key": "SALSINHA ORGANICA MC",
+    "sigla": "SAO"
+  },
+  {
+    "name": "LIMÃO ROSA - BJ",
+    "key": "LIMAO ROSA BJ",
+    "sigla": "LIR"
+  },
+  {
+    "name": "BATATA DOCE - BDJ",
+    "key": "BATATA DOCE BDJ",
+    "sigla": "BAD"
+  },
+  {
+    "name": "PACOCA - 300G",
+    "key": "PACOCA 300G",
+    "sigla": "PAC"
+  },
+  {
+    "name": "PIMENTA AMERICANA",
+    "key": "PIMENTA AMERICANA",
+    "sigla": "PIA"
+  },
+  {
+    "name": "BERINJELA - BDJ",
+    "key": "BERINJELA BDJ",
+    "sigla": "BER"
+  },
+  {
+    "name": "ABOBORA CAIPIRA - KG",
+    "key": "ABOBORA CAIPIRA KG",
+    "sigla": "ACA"
+  },
+  {
+    "name": "CHICORIA - UN",
+    "key": "CHICORIA UN",
+    "sigla": "CHI"
+  },
+  {
+    "name": "AMENDOIM - PCTE",
+    "key": "AMENDOIM PCTE",
+    "sigla": "AME"
+  },
+  {
+    "name": "LIMÃO TAITI - PCTE",
+    "key": "LIMAO TAITI PCTE",
+    "sigla": "LIT"
+  },
+  {
+    "name": "LIMÃO ROSA  - KG",
+    "key": "LIMAO ROSA KG",
+    "sigla": "LRO"
+  },
+  {
+    "name": "ABACATE ORGANICO - KG",
+    "key": "ABACATE ORGANICO KG",
+    "sigla": "ABO"
+  },
+  {
+    "name": "ALFACE ROXO",
+    "key": "ALFACE ROXO",
+    "sigla": "ALR"
+  },
+  {
+    "name": "ALFACE FRISE",
+    "key": "ALFACE FRISE",
+    "sigla": "ALF"
+  },
+  {
+    "name": "TOMATE MOLHO - KG",
+    "key": "TOMATE MOLHO KG",
+    "sigla": "TOM"
+  },
+  {
+    "name": "BANANA PAO - KG",
+    "key": "BANANA PAO KG",
+    "sigla": "BAP"
+  },
+  {
+    "name": "PIMENTA DEDO DE MOÇA -BDJ",
+    "key": "PIMENTA DEDO DE MOCA BDJ",
+    "sigla": "PDM"
+  },
+  {
+    "name": "ABOBORA MADURA - KG",
+    "key": "ABOBORA MADURA KG",
+    "sigla": "ABM"
+  },
+  {
+    "name": "MANDIOCA COM CASCA",
+    "key": "MANDIOCA COM CASCA",
+    "sigla": "MAC"
+  },
+  {
+    "name": "VAGEM - KG",
+    "key": "VAGEM KG",
+    "sigla": "VAG"
+  },
+  {
+    "name": "QUIABO - BDJ",
+    "key": "QUIABO BDJ",
+    "sigla": "QUI"
+  },
+  {
+    "name": "PITAIA - KG",
+    "key": "PITAIA KG",
+    "sigla": "PIT"
+  },
+  {
+    "name": "MANGA COQUINHO",
+    "key": "MANGA COQUINHO",
+    "sigla": "MCO"
+  },
+  {
+    "name": "ALMEIRÃO ORGANICO - PCT",
+    "key": "ALMEIRAO ORGANICO PCT",
+    "sigla": "ALO"
+  },
+  {
+    "name": "UVA VITÓRIA SEM SEMENTE",
+    "key": "UVA VITORIA SEM SEMENTE",
+    "sigla": "UVS"
+  },
+  {
+    "name": "ESPINAFRE ORGANICO - PCTE",
+    "key": "ESPINAFRE ORGANICO PCTE",
+    "sigla": "ESO"
+  },
+  {
+    "name": "MELANCIA - KG",
+    "key": "MELANCIA KG",
+    "sigla": "MEL"
+  },
+  {
+    "name": "TOMATE SALADETE ORGANICO - KG",
+    "key": "TOMATE SALADETE ORGANICO KG",
+    "sigla": "TSO"
+  },
+  {
+    "name": "ALFACE CRESPA ROXA - PCTE",
+    "key": "ALFACE CRESPA ROXA PCTE",
+    "sigla": "ACR"
+  },
+  {
+    "name": "ALHO PORO - MÇ",
+    "key": "ALHO PORO MC",
+    "sigla": "ALP"
+  },
+  {
+    "name": "MANJERICÃO - MÇ",
+    "key": "MANJERICAO MC",
+    "sigla": "MAN"
+  },
+  {
+    "name": "ALMEIRÃO - UN",
+    "key": "ALMEIRAO UN",
+    "sigla": "ALM"
+  },
+  {
+    "name": "ALFACE AMERICANA - PCTE",
+    "key": "ALFACE AMERICANA PCTE",
+    "sigla": "ALA"
+  },
+  {
+    "name": "ERVA CIDREIRA - MÇ",
+    "key": "ERVA CIDREIRA MC",
+    "sigla": "ERC"
+  },
+  {
+    "name": "PIMENTAO VERDE - KG",
+    "key": "PIMENTAO VERDE KG",
+    "sigla": "PIV"
+  },
+  {
+    "name": "MILHO VERDE - BDJ",
+    "key": "MILHO VERDE BDJ",
+    "sigla": "MIV"
+  },
+  {
+    "name": "CENOURA - BDJ 475G",
+    "key": "CENOURA BDJ 475G",
+    "sigla": "CEN"
+  },
+  {
+    "name": "MARACUJA ORGANICO - KG",
+    "key": "MARACUJA ORGANICO KG",
+    "sigla": "MAO"
+  },
+  {
+    "name": "JILO - BJ",
+    "key": "JILO BJ",
+    "sigla": "JIL"
+  },
+  {
+    "name": "CHEIRO VERDE ORGANICO - MÇ",
+    "key": "CHEIRO VERDE ORGANICO MC",
+    "sigla": "CVO"
+  },
+  {
+    "name": "CHUCHU - KG",
+    "key": "CHUCHU KG",
+    "sigla": "CHU"
+  },
+  {
+    "name": "ALFACE MIMOSA ORGANICA - PCTE",
+    "key": "ALFACE MIMOSA ORGANICA PCTE",
+    "sigla": "AMF"
+  },
+  {
+    "name": "JABUTICABA - PT",
+    "key": "JABUTICABA PT",
+    "sigla": "JAB"
+  },
+  {
+    "name": "ABACATE - KG",
+    "key": "ABACATE KG",
+    "sigla": "ABA"
+  },
+  {
+    "name": "BANANA NANICA - KG",
+    "key": "BANANA NANICA KG",
+    "sigla": "BAN"
+  },
+  {
+    "name": "BANANA MAÇÃ - KG",
+    "key": "BANANA MACA KG",
+    "sigla": "BAM"
+  },
+  {
+    "name": "BANANA PRATA - KG",
+    "key": "BANANA PRATA KG",
+    "sigla": "BPR"
+  },
+  {
+    "name": "ALFACE CRESPA ORGANICA - PCTE",
+    "key": "ALFACE CRESPA ORGANICA PCTE",
+    "sigla": "ACO"
+  },
+  {
+    "name": "JACA - KG",
+    "key": "JACA KG",
+    "sigla": "JAC"
+  },
+  {
+    "name": "ALFACE LISA ORGANICA - PCTE",
+    "key": "ALFACE LISA ORGANICA PCTE",
+    "sigla": "ALI"
+  },
+  {
+    "name": "ALECRIM ORGANICO - MÇ",
+    "key": "ALECRIM ORGANICO MC",
+    "sigla": "ALE"
+  },
+  {
+    "name": "ALFACE ROXA ORGANICA - PCTE",
+    "key": "ALFACE ROXA ORGANICA PCTE",
+    "sigla": "ARO"
+  },
+  {
+    "name": "MAMAO FORMOSA - KG",
+    "key": "MAMAO FORMOSA KG",
+    "sigla": "MAF"
+  },
+  {
+    "name": "MAMAO VERDE/PARA DOCE - UNID",
+    "key": "MAMAO VERDE PARA DOCE UNID",
+    "sigla": "MVD"
+  },
+  {
+    "name": "BANANA DESPENCADA/PARA DOCE -KG",
+    "key": "BANANA DESPENCADA PARA DOCE KG",
+    "sigla": "BDD"
+  },
+  {
+    "name": "GOIABA PARA DOCE",
+    "key": "GOIABA PARA DOCE",
+    "sigla": "GOD"
+  },
+  {
+    "name": "ACELGA - UN",
+    "key": "ACELGA UN",
+    "sigla": "ACE"
+  },
+  {
+    "name": "PEPINO JAPONES - BDJ",
+    "key": "PEPINO JAPONES BDJ",
+    "sigla": "PEJ"
+  },
+  {
+    "name": "PEPINO JAPONES - KG",
+    "key": "PEPINO JAPONES KG",
+    "sigla": "PJA"
+  },
+  {
+    "name": "VAGEM - BDJ",
+    "key": "VAGEM BDJ",
+    "sigla": "VAB"
+  },
+  {
+    "name": "PEPINO JAPONES ORGANICO - KG",
+    "key": "PEPINO JAPONES ORGANICO KG",
+    "sigla": "PJO"
+  },
+  {
+    "name": "PAO CASEIRO - UN",
+    "key": "PAO CASEIRO UN",
+    "sigla": "PCA"
+  },
+  {
+    "name": "DOCE CASEIRO - UN",
+    "key": "DOCE CASEIRO UN",
+    "sigla": "DOC"
+  },
+  {
+    "name": "POLPA DE ACEROLA - UN",
+    "key": "POLPA DE ACEROLA UN",
+    "sigla": "POA"
+  },
+  {
+    "name": "POLPA DE ABACAXI - UN",
+    "key": "POLPA DE ABACAXI UN",
+    "sigla": "PAB"
+  },
+  {
+    "name": "POLPA DE ABACAXI COM HORTELÃ - UN",
+    "key": "POLPA DE ABACAXI COM HORTELA UN",
+    "sigla": "PAH"
+  },
+  {
+    "name": "POLPA DE UVA - UN",
+    "key": "POLPA DE UVA UN",
+    "sigla": "POU"
+  },
+  {
+    "name": "POLPA DE GOIABA - UN",
+    "key": "POLPA DE GOIABA UN",
+    "sigla": "POG"
+  },
+  {
+    "name": "POLPA DE MORANGO - UN",
+    "key": "POLPA DE MORANGO UN",
+    "sigla": "POM"
+  },
+  {
+    "name": "POLPA DE MARACUJA - UN",
+    "key": "POLPA DE MARACUJA UN",
+    "sigla": "PMA"
+  },
+  {
+    "name": "SALADA MISTA",
+    "key": "SALADA MISTA",
+    "sigla": "SAM"
+  },
+  {
+    "name": "SALADA ROMANA",
+    "key": "SALADA ROMANA",
+    "sigla": "SAR"
+  },
+  {
+    "name": "BETERRABA - BJ",
+    "key": "BETERRABA BJ",
+    "sigla": "BET"
+  },
+  {
+    "name": "TOMATE SALADETE - KG",
+    "key": "TOMATE SALADETE KG",
+    "sigla": "TSA"
+  },
+  {
+    "name": "TOMATE RASTEIRO - KG",
+    "key": "TOMATE RASTEIRO KG",
+    "sigla": "TOR"
+  },
+  {
+    "name": "COUVE MANTEIGA -MÇ",
+    "key": "COUVE MANTEIGA MC",
+    "sigla": "COM"
+  },
+  {
+    "name": "SALSINHA - MÇ",
+    "key": "SALSINHA MC",
+    "sigla": "SAL"
+  },
+  {
+    "name": "ABOBORA ITALIA - KG",
+    "key": "ABOBORA ITALIA KG",
+    "sigla": "ABI"
+  },
+  {
+    "name": "PINHA - KG",
+    "key": "PINHA KG",
+    "sigla": "PIN"
+  },
+  {
+    "name": "COUVE MANTEIGA ORGANICO - MAÇO",
+    "key": "COUVE MANTEIGA ORGANICO MACO",
+    "sigla": "CMO"
+  },
+  {
+    "name": "MAXIXE - BDJ",
+    "key": "MAXIXE BDJ",
+    "sigla": "MAX"
+  },
+  {
+    "name": "FEIJÃO CARIOCA - KG",
+    "key": "FEIJAO CARIOCA KG",
+    "sigla": "FEC"
+  },
+  {
+    "name": "FEIJÃO ROSINHA - PCT",
+    "key": "FEIJAO ROSINHA PCT",
+    "sigla": "FER"
+  },
+  {
+    "name": "CHICORIA ORGANICA - PCTE",
+    "key": "CHICORIA ORGANICA PCTE",
+    "sigla": "CHO"
+  },
+  {
+    "name": "POLPA DE DETOX - UNID",
+    "key": "POLPA DE DETOX UNID",
+    "sigla": "POD"
+  },
+  {
+    "name": "TOMATINHO CEREJA ORGANICO - PCTE",
+    "key": "TOMATINHO CEREJA ORGANICO PCTE",
+    "sigla": "TCO"
+  },
+  {
+    "name": "TOMATINHO CEREJA ORGANICO - KG",
+    "key": "TOMATINHO CEREJA ORGANICO KG",
+    "sigla": "TCE"
+  },
+  {
+    "name": "PONKAN - KG",
+    "key": "PONKAN KG",
+    "sigla": "PON"
+  },
+  {
+    "name": "MORICOTE - KG",
+    "key": "MORICOTE KG",
+    "sigla": "MOR"
+  },
+  {
+    "name": "TANGERINA - KG",
+    "key": "TANGERINA KG",
+    "sigla": "TAN"
+  },
+  {
+    "name": "PIMENTAO COLORIDO - BDJ",
+    "key": "PIMENTAO COLORIDO BDJ",
+    "sigla": "PIC"
+  },
+  {
+    "name": "ABOBORA MENINA - BDJ",
+    "key": "ABOBORA MENINA BDJ",
+    "sigla": "ABJ"
+  },
+  {
+    "name": "LIMAO ROSA - PCTE",
+    "key": "LIMAO ROSA PCTE",
+    "sigla": "LRP"
+  },
+  {
+    "name": "PIMENTA GODE - BDJ",
+    "key": "PIMENTA GODE BDJ",
+    "sigla": "PIG"
+  },
+  {
+    "name": "COLORAU - POTE",
+    "key": "COLORAU POTE",
+    "sigla": "COL"
+  },
+  {
+    "name": "COUVE PICADO",
+    "key": "COUVE PICADO",
+    "sigla": "COP"
+  },
+  {
+    "name": "SALDA MISTA - PCTE",
+    "key": "SALDA MISTA PCTE",
+    "sigla": "SMP"
+  },
+  {
+    "name": "HIBISCO - PCTE",
+    "key": "HIBISCO PCTE",
+    "sigla": "HIB"
+  },
+  {
+    "name": "CEBOLINHA PICADO",
+    "key": "CEBOLINHA PICADO",
+    "sigla": "CEP"
+  },
+  {
+    "name": "SALSINHA PICADO",
+    "key": "SALSINHA PICADO",
+    "sigla": "SAP"
+  },
+  {
+    "name": "SALADA TROPICAL",
+    "key": "SALADA TROPICAL",
+    "sigla": "SAT"
+  },
+  {
+    "name": "KIT SOPA",
+    "key": "KIT SOPA",
+    "sigla": "KIS"
+  },
+  {
+    "name": "CABOTIA EM CUBOS",
+    "key": "CABOTIA EM CUBOS",
+    "sigla": "CAC"
+  },
+  {
+    "name": "PACOCA - 450G",
+    "key": "PACOCA 450G",
+    "sigla": "PA4"
+  },
+  {
+    "name": "LIMÃO TAITI - KG",
+    "key": "LIMAO TAITI KG",
+    "sigla": "LTK"
+  },
+  {
+    "name": "CATALONIA - PCTE",
+    "key": "CATALONIA PCTE",
+    "sigla": "CAT"
+  },
+  {
+    "name": "HORTELA - MAÇO",
+    "key": "HORTELA MACO",
+    "sigla": "HOR"
+  },
+  {
+    "name": "CHUCHU - BDJ",
+    "key": "CHUCHU BDJ",
+    "sigla": "CHB"
+  },
+  {
+    "name": "REPOLHO VERDE - UNID",
+    "key": "REPOLHO VERDE UNID",
+    "sigla": "REV"
+  },
+  {
+    "name": "BROCOLIS CHINES",
+    "key": "BROCOLIS CHINES",
+    "sigla": "BRC"
+  },
+  {
+    "name": "PACOCA - 900G",
+    "key": "PACOCA 900G",
+    "sigla": "PA9"
+  },
+  {
+    "name": "RUCULA ORGANICA - MAÇO",
+    "key": "RUCULA ORGANICA MACO",
+    "sigla": "RUO"
+  },
+  {
+    "name": "REPOLHO ROXO - UNID",
+    "key": "REPOLHO ROXO UNID",
+    "sigla": "RER"
+  },
+  {
+    "name": "ABOBORA PAULISTA - BDJ",
+    "key": "ABOBORA PAULISTA BDJ",
+    "sigla": "ABP"
+  },
+  {
+    "name": "RUCULA HIDROPONICA - MAÇO",
+    "key": "RUCULA HIDROPONICA MACO",
+    "sigla": "RUH"
+  },
+  {
+    "name": "CEBOLINHA ORGANICA - MAÇO",
+    "key": "CEBOLINHA ORGANICA MACO",
+    "sigla": "CEO"
+  },
+  {
+    "name": "ABACAXI - UNID",
+    "key": "ABACAXI UNID",
+    "sigla": "ABX"
+  },
+  {
+    "name": "BOLACHA 3 FARINHAS - POTE",
+    "key": "BOLACHA 3 FARINHAS POTE",
+    "sigla": "B3F"
+  },
+  {
+    "name": "ACAFRAO - KG",
+    "key": "ACAFRAO KG",
+    "sigla": "ACF"
+  },
+  {
+    "name": "PIMENTA BIQUINHO - BDJ",
+    "key": "PIMENTA BIQUINHO BDJ",
+    "sigla": "PIB"
+  },
+  {
+    "name": "QUIABO - KG",
+    "key": "QUIABO KG",
+    "sigla": "QUK"
+  },
+  {
+    "name": "PIMENTA GODE - KG",
+    "key": "PIMENTA GODE KG",
+    "sigla": "PGK"
+  },
+  {
+    "name": "KIT YAKISSOBA",
+    "key": "KIT YAKISSOBA",
+    "sigla": "KIY"
+  },
+  {
+    "name": "PEPINO CAIPIRA - KG",
+    "key": "PEPINO CAIPIRA KG",
+    "sigla": "PCK"
+  },
+  {
+    "name": "LARANJA - KG",
+    "key": "LARANJA KG",
+    "sigla": "LAR"
+  },
+  {
+    "name": "PIMENTA GODE ORGANICA - BDJ",
+    "key": "PIMENTA GODE ORGANICA BDJ",
+    "sigla": "PGO"
+  },
+  {
+    "name": "MAMAO VERDE/PARA DOCE ORGANICO - UNID",
+    "key": "MAMAO VERDE PARA DOCE ORGANICO UNID",
+    "sigla": "MVO"
+  },
+  {
+    "name": "ACEROLA CONGELADA - PCTE 300G",
+    "key": "ACEROLA CONGELADA PCTE 300G",
+    "sigla": "ACC"
+  },
+  {
+    "name": "PIMENTA CASCAVEL - KG",
+    "key": "PIMENTA CASCAVEL KG",
+    "sigla": "PCC"
+  },
+  {
+    "name": "BANANA SAO TOME - KG",
+    "key": "BANANA SAO TOME KG",
+    "sigla": "BST"
+  },
+  {
+    "name": "CENOURA - KG",
+    "key": "CENOURA KG",
+    "sigla": "CEK"
+  },
+  {
+    "name": "BANANA OURO - KG",
+    "key": "BANANA OURO KG",
+    "sigla": "BAO"
+  },
+  {
+    "name": "ESPINAFRE - PCTE",
+    "key": "ESPINAFRE PCTE",
+    "sigla": "ESP"
+  },
+  {
+    "name": "ALFACE FRISSE - PCTE",
+    "key": "ALFACE FRISSE PCTE",
+    "sigla": "AFP"
+  },
+  {
+    "name": "REPOLHO MISTO",
+    "key": "REPOLHO MISTO",
+    "sigla": "REM"
+  },
+  {
+    "name": "CHUCHU EM CUBOS",
+    "key": "CHUCHU EM CUBOS",
+    "sigla": "CHC"
+  },
+  {
+    "name": "MIX BETERRABA E CENOURA",
+    "key": "MIX BETERRABA E CENOURA",
+    "sigla": "MBC"
+  },
+  {
+    "name": "BETERRABA - KG",
+    "key": "BETERRABA KG",
+    "sigla": "BEK"
+  },
+  {
+    "name": "PEPINO JAPONES ORGANICO - BDJ",
+    "key": "PEPINO JAPONES ORGANICO BDJ",
+    "sigla": "PJB"
+  },
+  {
+    "name": "PIMENTAO VERDE ORGANICO - BDJ",
+    "key": "PIMENTAO VERDE ORGANICO BDJ",
+    "sigla": "PVO"
+  },
+  {
+    "name": "BATATA DOCE - KG",
+    "key": "BATATA DOCE KG",
+    "sigla": "BDK"
+  },
+  {
+    "name": "UVA NIAGRA - BDJ",
+    "key": "UVA NIAGRA BDJ",
+    "sigla": "UVN"
+  },
+  {
+    "name": "PIMENTAO VERDE ORGANICO - KG",
+    "key": "PIMENTAO VERDE ORGANICO KG",
+    "sigla": "PVK"
+  },
+  {
+    "name": "BATATA DOCE ORGANICO - KG",
+    "key": "BATATA DOCE ORGANICO KG",
+    "sigla": "BDO"
+  },
+  {
+    "name": "TOMATE CEREJA - BDJ",
+    "key": "TOMATE CEREJA BDJ",
+    "sigla": "TCB"
+  },
+  {
+    "name": "ABOBRINHA MENINA - KG",
+    "key": "ABOBRINHA MENINA KG",
+    "sigla": "AMK"
+  },
+  {
+    "name": "MILHO VERDE - KG",
+    "key": "MILHO VERDE KG",
+    "sigla": "MVK"
+  },
+  {
+    "name": "RABANETE - MACO",
+    "key": "RABANETE MACO",
+    "sigla": "RAB"
+  },
+  {
+    "name": "PÃO CASEIRO ARTESANAL CONVENCIONAL ESCOLA URBANA",
+    "key": "PAO CASEIRO ARTESANAL CONVENCIONAL ESCOLA URBANA",
+    "sigla": "PAE"
+  },
+  {
+    "name": "ALFACE CRESPA HIDRO - PCTE",
+    "key": "ALFACE CRESPA HIDRO PCTE",
+    "sigla": "ACH"
+  },
+  {
+    "name": "MILHO PARA BOLO - BDJ",
+    "key": "MILHO PARA BOLO BDJ",
+    "sigla": "MIB"
+  },
+  {
+    "name": "BERINJELA ORGANICA - KG",
+    "key": "BERINJELA ORGANICA KG",
+    "sigla": "BEO"
+  },
+  {
+    "name": "VAGEM ORGANICA - BDJ",
+    "key": "VAGEM ORGANICA BDJ",
+    "sigla": "VAO"
+  },
+  {
+    "name": "LIMÃO SICILIANO - BDJ",
+    "key": "LIMAO SICILIANO BDJ",
+    "sigla": "LIS"
+  },
+  {
+    "name": "BETERRABA - MÇ",
+    "key": "BETERRABA MC",
+    "sigla": "BEM"
+  },
+  {
+    "name": "COENTRO - MÇ",
+    "key": "COENTRO MC",
+    "sigla": "COE"
+  },
+  {
+    "name": "ABOBORA PAULISTA - KG",
+    "key": "ABOBORA PAULISTA KG",
+    "sigla": "APK"
+  },
+  {
+    "name": "PAO DE NINHO",
+    "key": "PAO DE NINHO",
+    "sigla": "PAN"
+  },
+  {
+    "name": "GENGIBRE -BDJ",
+    "key": "GENGIBRE BDJ",
+    "sigla": "GEN"
+  },
+  {
+    "name": "UVA BENITAKA - KG",
+    "key": "UVA BENITAKA KG",
+    "sigla": "UVB"
+  },
+  {
+    "name": "BETERRABA ORGANICA - KG",
+    "key": "BETERRABA ORGANICA KG",
+    "sigla": "BTO"
+  },
+  {
+    "name": "REPOLHO VERDE MANTEIGA - UNID",
+    "key": "REPOLHO VERDE MANTEIGA UNID",
+    "sigla": "RVM"
+  },
+  {
+    "name": "CENOURA EM CUBOS - PCT KG",
+    "key": "CENOURA EM CUBOS PCT KG",
+    "sigla": "CEC"
+  },
+  {
+    "name": "BETERRABA EM CUBOS - PCT KG",
+    "key": "BETERRABA EM CUBOS PCT KG",
+    "sigla": "BEC"
+  },
+  {
+    "name": "CABOTIA EM CUBOS - PCT KG",
+    "key": "CABOTIA EM CUBOS PCT KG",
+    "sigla": "CBK"
+  },
+  {
+    "name": "MANDIOCA VACUO - PCT KG",
+    "key": "MANDIOCA VACUO PCT KG",
+    "sigla": "MVU"
+  },
+  {
+    "name": "ABOBORA MENINA -BDJ/KG",
+    "key": "ABOBORA MENINA BDJ KG",
+    "sigla": "AMB"
+  },
+  {
+    "name": "CAFÉ 500G - PCT",
+    "key": "CAFE 500G PCT",
+    "sigla": "CAF"
+  },
+  {
+    "name": "MILHO PIPOCA - PCT",
+    "key": "MILHO PIPOCA PCT",
+    "sigla": "MIP"
+  },
+  {
+    "name": "ABIU - KG",
+    "key": "ABIU KG",
+    "sigla": "ABU"
+  },
+  {
+    "name": "UVA NIAGARA - KG",
+    "key": "UVA NIAGARA KG",
+    "sigla": "UNK"
+  },
+  {
+    "name": "OVO 20UN- BDJ",
+    "key": "OVO 20UN BDJ",
+    "sigla": "OV2"
+  },
+  {
+    "name": "OVO 12UN- BDJ",
+    "key": "OVO 12UN BDJ",
+    "sigla": "OV1"
+  },
+  {
+    "name": "MEXIRICA - KG",
+    "key": "MEXIRICA KG",
+    "sigla": "MEX"
+  },
+  {
+    "name": "BATATA - KG",
+    "key": "BATATA KG",
+    "sigla": "BAT"
+  },
+  {
+    "name": "CEBOLA - KG",
+    "key": "CEBOLA KG",
+    "sigla": "CBL"
+  },
+  {
+    "name": "TOMATE TERCEIRA - CX",
+    "key": "TOMATE TERCEIRA CX",
+    "sigla": "TOT"
+  },
+  {
+    "name": "TOMATE SEGUNDA - CX",
+    "key": "TOMATE SEGUNDA CX",
+    "sigla": "TSG"
+  },
+  {
+    "name": "REPOLHO VERDE - CX",
+    "key": "REPOLHO VERDE CX",
+    "sigla": "RVC"
+  },
+  {
+    "name": "PIMENTAO VERDE - CX",
+    "key": "PIMENTAO VERDE CX",
+    "sigla": "PVC"
+  },
+  {
+    "name": "ACELGA - CX",
+    "key": "ACELGA CX",
+    "sigla": "ACX"
+  },
+  {
+    "name": "COUVE FLOR - CX",
+    "key": "COUVE FLOR CX",
+    "sigla": "CFC"
+  },
+  {
+    "name": "CENOURA PRIMEIRA - CX",
+    "key": "CENOURA PRIMEIRA CX",
+    "sigla": "CPR"
+  },
+  {
+    "name": "BETERRABA PRIMEIRA - CX",
+    "key": "BETERRABA PRIMEIRA CX",
+    "sigla": "BEP"
+  },
+  {
+    "name": "SACOLA RECICLADA - KG",
+    "key": "SACOLA RECICLADA KG",
+    "sigla": "SRK"
+  },
+  {
+    "name": "EMBALAGEM RETANGULAR P/ PRODUTOS COM TAMPA - CX",
+    "key": "EMBALAGEM RETANGULAR P PRODUTOS COM TAMPA CX",
+    "sigla": "ERP"
+  },
+  {
+    "name": "BOBINA FUNDO ESTRELA - CX",
+    "key": "BOBINA FUNDO ESTRELA CX",
+    "sigla": "BFE"
+  },
+  {
+    "name": "BOBINA FUNDO ESTRELA - UN",
+    "key": "BOBINA FUNDO ESTRELA UN",
+    "sigla": "BFU"
+  },
+  {
+    "name": "EMBALAGEM RETANGULAR P/ PRODUTOS COM TAMPA - UN",
+    "key": "EMBALAGEM RETANGULAR P PRODUTOS COM TAMPA UN",
+    "sigla": "ERU"
+  },
+  {
+    "name": "CEBOLINHA - KG",
+    "key": "CEBOLINHA KG",
+    "sigla": "CBG"
+  },
+  {
+    "name": "SALSINHA - KG",
+    "key": "SALSINHA KG",
+    "sigla": "SAK"
+  },
+  {
+    "name": "SACO BLOCADO S/B CENTRALPLAST - 30X40 C/1000",
+    "key": "SACO BLOCADO S B CENTRALPLAST 30X40 C 1000",
+    "sigla": "SBC"
+  },
+  {
+    "name": "GENGIBRE - CX",
+    "key": "GENGIBRE CX",
+    "sigla": "GEC"
+  },
+  {
+    "name": "ABOBRINHA - BDJ",
+    "key": "ABOBRINHA BDJ",
+    "sigla": "ABB"
+  },
+  {
+    "name": "INHAME - KG",
+    "key": "INHAME KG",
+    "sigla": "INK"
+  },
+  {
+    "name": "BETERRABA  ORGANICA - MÇ",
+    "key": "BETERRABA ORGANICA MC",
+    "sigla": "BOM"
+  },
+  {
+    "name": "FILME PVC 38CMX800MTS LUSAFILM",
+    "key": "FILME PVC 38CMX800MTS LUSAFILM",
+    "sigla": "FPV"
+  },
+  {
+    "name": "BANDEJA ISOPOR",
+    "key": "BANDEJA ISOPOR",
+    "sigla": "BAI"
+  },
+  {
+    "name": "ACAFRAO - BDJ",
+    "key": "ACAFRAO BDJ",
+    "sigla": "ACB"
+  },
+  {
+    "name": "ERVILHA 100G - PCTE",
+    "key": "ERVILHA 100G PCTE",
+    "sigla": "ERV"
+  },
+  {
+    "name": "TOMATE RASTEIRO ORGANICO - KG",
+    "key": "TOMATE RASTEIRO ORGANICO KG",
+    "sigla": "TRO"
+  },
+  {
+    "name": "BOLACHA MAISENA",
+    "key": "BOLACHA MAISENA",
+    "sigla": "BLM"
+  },
+  {
+    "name": "BOLACHA COCO",
+    "key": "BOLACHA COCO",
+    "sigla": "BOC"
+  },
+  {
+    "name": "AMENDOIN TORRADO 100G - PCT",
+    "key": "AMENDOIN TORRADO 100G PCT",
+    "sigla": "AT1"
+  },
+  {
+    "name": "AMENDOIN TORRADO 150G - PCT",
+    "key": "AMENDOIN TORRADO 150G PCT",
+    "sigla": "AT5"
+  },
+  {
+    "name": "ABOBRINHA VERDE",
+    "key": "ABOBRINHA VERDE",
+    "sigla": "ABV"
+  },
+  {
+    "name": "PE DE MOLEQUE - 130G",
+    "key": "PE DE MOLEQUE 130G",
+    "sigla": "PDL"
+  },
+  {
+    "name": "POLPA DE ACEROLA CONVENCIONAL ESCOLA URBANA",
+    "key": "POLPA DE ACEROLA CONVENCIONAL ESCOLA URBANA",
+    "sigla": "PAU"
+  },
+  {
+    "name": "Etiqueta COARA 100 X 50 MM",
+    "key": "ETIQUETA COARA 100 X 50 MM",
+    "sigla": "ETC"
+  },
+  {
+    "name": "SACOLA 37X47 PCTE MASSUDA C/1000",
+    "key": "SACOLA 37X47 PCTE MASSUDA C 1000",
+    "sigla": "SPM"
+  },
+  {
+    "name": "COPO DESCARTAVEL",
+    "key": "COPO DESCARTAVEL",
+    "sigla": "COD"
+  },
+  {
+    "name": "MORANGO - BDJ",
+    "key": "MORANGO BDJ",
+    "sigla": "MOG"
+  },
+  {
+    "name": "MAÇA FUJI - KG",
+    "key": "MACA FUJI KG",
+    "sigla": "MFU"
+  },
+  {
+    "name": "Embalagem A Vacuo Resistente A Perfuracao 18x25",
+    "key": "EMBALAGEM A VACUO RESISTENTE A PERFURACAO 18X25",
+    "sigla": "EAV"
+  },
+  {
+    "name": "POLPA DE MANGA -UN",
+    "key": "POLPA DE MANGA UN",
+    "sigla": "PMU"
+  },
+  {
+    "name": "MARACUJA - KG",
+    "key": "MARACUJA KG",
+    "sigla": "MAR"
+  },
+  {
+    "name": "CARAMBOLA - BDJ",
+    "key": "CARAMBOLA BDJ",
+    "sigla": "CAR"
+  },
+  {
+    "name": "LIMÃO ROSA ORGANICO - KG",
+    "key": "LIMAO ROSA ORGANICO KG",
+    "sigla": "LOK"
+  },
+  {
+    "name": "ALGODAO DOCE - UN",
+    "key": "ALGODAO DOCE UN",
+    "sigla": "ALD"
+  },
+  {
+    "name": "SUSPIRO DE LIMAO SICILIANO - PCTE",
+    "key": "SUSPIRO DE LIMAO SICILIANO PCTE",
+    "sigla": "SLS"
+  },
+  {
+    "name": "SUSPIRO DE LEITE EM PO - PCTE",
+    "key": "SUSPIRO DE LEITE EM PO PCTE",
+    "sigla": "SLP"
+  },
+  {
+    "name": "SUSPIRO DE BAUNILHA - PCTE",
+    "key": "SUSPIRO DE BAUNILHA PCTE",
+    "sigla": "SUB"
+  },
+  {
+    "name": "SUSPIRO DE CAFE - PCTE",
+    "key": "SUSPIRO DE CAFE PCTE",
+    "sigla": "SUC"
+  },
+  {
+    "name": "TANGERINA OLE - KG",
+    "key": "TANGERINA OLE KG",
+    "sigla": "TAO"
+  },
+  {
+    "name": "COUVE MANTEIGA - KG",
+    "key": "COUVE MANTEIGA KG",
+    "sigla": "CMK"
+  },
+  {
+    "name": "ALFACE CRESPA - KG",
+    "key": "ALFACE CRESPA KG",
+    "sigla": "ACK"
+  },
+  {
+    "name": "PEPINO CAIPIRA ORGANICO- KG",
+    "key": "PEPINO CAIPIRA ORGANICO KG",
+    "sigla": "PCO"
+  },
+  {
+    "name": "REPOLHO VERDE - KG",
+    "key": "REPOLHO VERDE KG",
+    "sigla": "RVK"
+  },
+  {
+    "name": "REPOLHO ROXO - KG",
+    "key": "REPOLHO ROXO KG",
+    "sigla": "RRK"
+  },
+  {
+    "name": "ACELGA - KG",
+    "key": "ACELGA KG",
+    "sigla": "AGK"
+  },
+  {
+    "name": "BROCOLIS - KG",
+    "key": "BROCOLIS KG",
+    "sigla": "BRO"
+  },
+  {
+    "name": "COUVE FLOR - KG",
+    "key": "COUVE FLOR KG",
+    "sigla": "CFK"
+  },
+  {
+    "name": "ABACATE MARGARIDA - KG",
+    "key": "ABACATE MARGARIDA KG",
+    "sigla": "AMG"
+  },
+  {
+    "name": "EMBALAGEM VACUO 20x30",
+    "key": "EMBALAGEM VACUO 20X30",
+    "sigla": "EMV"
+  },
+  {
+    "name": "ALHO - BDJ",
+    "key": "ALHO BDJ",
+    "sigla": "ALH"
+  },
+  {
+    "name": "MANGA TOMI",
+    "key": "MANGA TOMI",
+    "sigla": "MAT"
+  },
+  {
+    "name": "TOMATE SALADETE ORGANICO - BDJ",
+    "key": "TOMATE SALADETE ORGANICO BDJ",
+    "sigla": "TSB"
+  },
+  {
+    "name": "MELANCIA CORTADA - KG",
+    "key": "MELANCIA CORTADA KG",
+    "sigla": "MEC"
+  },
+  {
+    "name": "PEPINO CAIPIRA ORGANICO - BDJ",
+    "key": "PEPINO CAIPIRA ORGANICO BDJ",
+    "sigla": "PCB"
+  },
+  {
+    "name": "POLPA DE MARACUJA CONVENCIONAL ESCOLA URBANA",
+    "key": "POLPA DE MARACUJA CONVENCIONAL ESCOLA URBANA",
+    "sigla": "PMC"
+  },
+  {
+    "name": "SERRAIA - UN",
+    "key": "SERRAIA UN",
+    "sigla": "SEU"
+  },
+  {
+    "name": "LIMÃO TAITI - BDJ",
+    "key": "LIMAO TAITI BDJ",
+    "sigla": "LTB"
+  },
+  {
+    "name": "BROCOLIS RAMOSO - PCTE",
+    "key": "BROCOLIS RAMOSO PCTE",
+    "sigla": "BRR"
+  },
+  {
+    "name": "QUIABO HIGIENIZADO - PCT",
+    "key": "QUIABO HIGIENIZADO PCT",
+    "sigla": "QUH"
+  },
+  {
+    "name": "JATOBA -BDJ",
+    "key": "JATOBA BDJ",
+    "sigla": "JAT"
+  },
+  {
+    "name": "BERINJELA  - KG",
+    "key": "BERINJELA KG",
+    "sigla": "BRK"
+  },
+  {
+    "name": "AVOCADO - KG",
+    "key": "AVOCADO KG",
+    "sigla": "AVO"
+  },
+  {
+    "name": "CAMOMILA - PCT",
+    "key": "CAMOMILA PCT",
+    "sigla": "CAM"
+  },
+  {
+    "name": "BANDEJA ISOPOR B1",
+    "key": "BANDEJA ISOPOR B1",
+    "sigla": "BIB"
+  },
+  {
+    "name": "JABUTICABA - KG",
+    "key": "JABUTICABA KG",
+    "sigla": "JAK"
+  },
+  {
+    "name": "MAMAO PAPAIA - UN",
+    "key": "MAMAO PAPAIA UN",
+    "sigla": "MAP"
+  },
+  {
+    "name": "BROTO DE BAMBU - UN",
+    "key": "BROTO DE BAMBU UN",
+    "sigla": "BRB"
+  },
+  {
+    "name": "CEBOLAO - MÇ",
+    "key": "CEBOLAO MC",
+    "sigla": "CBM"
+  },
+  {
+    "name": "PACOCA - 60G",
+    "key": "PACOCA 60G",
+    "sigla": "PA6"
+  },
+  {
+    "name": "PACOCA - 90G",
+    "key": "PACOCA 90G",
+    "sigla": "P90"
+  },
+  {
+    "name": "SACO PLASTICO REFORÇADO",
+    "key": "SACO PLASTICO REFORCADO",
+    "sigla": "SPR"
+  },
+  {
+    "name": "MANGA PALMER",
+    "key": "MANGA PALMER",
+    "sigla": "MPL"
+  },
+  {
+    "name": "TOMATE CEREJA - KG",
+    "key": "TOMATE CEREJA KG",
+    "sigla": "TCK"
+  },
+  {
+    "name": "ALECRIM - MÇ",
+    "key": "ALECRIM MC",
+    "sigla": "ACM"
+  },
+  {
+    "name": "MAMAO PICADO - UN",
+    "key": "MAMAO PICADO UN",
+    "sigla": "MPU"
+  }
+]

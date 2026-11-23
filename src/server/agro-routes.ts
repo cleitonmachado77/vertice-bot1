@@ -7,16 +7,19 @@ import { removeAgroPreset, sendAgroBotPresetNow, syncAgroBotQuestionnaire } from
 import { listAgroPresets, saveAgroPreset } from './agro-presets.js';
 import {
   agroOverview,
+  closePlanting,
   deleteCost,
   deleteDelivery,
   deleteHarvest,
   deletePlanting,
+  groupDeliveriesSale,
   saveCost,
   saveDelivery,
   saveHarvest,
   savePlanting,
 } from './agro.js';
 import { agroDashboard } from './agro-dashboard.js';
+import { deleteDeliveryPoint, saveDeliveryPoint } from './agro-delivery-points.js';
 import {
   deleteAgroPlot,
   deleteAgroProducer,
@@ -59,7 +62,8 @@ export function registerAgroRoutes(): void {
     try {
       const month = Number(ctx.query.get('month') || 0);
       const year = Number(ctx.query.get('year') || 0);
-      json(ctx.res, 200, await agroDashboard(companyIdOf(user), month, year));
+      const productId = String(ctx.query.get('productId') || '').trim();
+      json(ctx.res, 200, await agroDashboard(companyIdOf(user), month, year, productId));
     } catch (error) {
       fail(ctx, error, 500);
     }
@@ -168,6 +172,37 @@ export function registerAgroRoutes(): void {
     }
   });
 
+  route('POST', '/api/agro/delivery-points', async (ctx) => {
+    const user = await requireAuth(ctx);
+    if (!user) return;
+    try {
+      json(ctx.res, 200, { item: await saveDeliveryPoint(companyIdOf(user), body(ctx)) });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('POST', '/api/agro/delivery-points/:id', async (ctx) => {
+    const user = await requireAuth(ctx);
+    if (!user) return;
+    try {
+      json(ctx.res, 200, { item: await saveDeliveryPoint(companyIdOf(user), body(ctx), ctx.params.id) });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('DELETE', '/api/agro/delivery-points/:id', async (ctx) => {
+    const user = await requireAuth(ctx);
+    if (!user) return;
+    try {
+      await deleteDeliveryPoint(companyIdOf(user), ctx.params.id);
+      json(ctx.res, 200, { ok: true });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
   route('POST', '/api/agro/plots', async (ctx) => {
     const user = await requireAuth(ctx);
     if (!user) return;
@@ -214,6 +249,16 @@ export function registerAgroRoutes(): void {
     if (!user) return;
     try {
       json(ctx.res, 200, { item: await savePlanting(companyIdOf(user), body(ctx), ctx.params.id) });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('POST', '/api/agro/plantings/:id/close', async (ctx) => {
+    const user = await requireAuth(ctx);
+    if (!user) return;
+    try {
+      json(ctx.res, 200, { item: await closePlanting(companyIdOf(user), ctx.params.id) });
     } catch (error) {
       fail(ctx, error);
     }
@@ -266,6 +311,17 @@ export function registerAgroRoutes(): void {
     if (!user) return;
     try {
       json(ctx.res, 200, { item: await saveDelivery(companyIdOf(user), body(ctx)) });
+    } catch (error) {
+      fail(ctx, error);
+    }
+  });
+
+  route('POST', '/api/agro/deliveries/group-sale', async (ctx) => {
+    const user = await requireAuth(ctx);
+    if (!user) return;
+    try {
+      const payload = body(ctx);
+      json(ctx.res, 200, await groupDeliveriesSale(companyIdOf(user), payload.deliveryIds));
     } catch (error) {
       fail(ctx, error);
     }

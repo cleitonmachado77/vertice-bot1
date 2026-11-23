@@ -1,4 +1,5 @@
 import { one, run } from './db.js';
+import { plotLabel } from './agro-resolve.js';
 import { odooConfigured, odooCreate, odooSearchRead, odooWrite } from './odoo-client.js';
 
 /** Propriedade e talhão viram locais internos do depósito da empresa. O produtor vira contato. */
@@ -139,8 +140,8 @@ export async function syncAgroPlace(
      FROM agro_properties WHERE id = $1 AND company_odoo_id = $2`,
     [propertyId, companyId],
   );
-  const plot = await one<{ name: string; odoo_location_id: string }>(
-    `SELECT name, COALESCE(odoo_location_id, '') AS odoo_location_id
+  const plot = await one<{ code: string; name: string; odoo_location_id: string }>(
+    `SELECT COALESCE(code, '') AS code, name, COALESCE(odoo_location_id, '') AS odoo_location_id
      FROM agro_plots WHERE id = $1 AND property_id = $2`,
     [plotId, propertyId],
   );
@@ -155,7 +156,12 @@ export async function syncAgroPlace(
      WHERE id = $1`,
     [propertyId, String(propertyLocation), partnerId],
   );
-  const plotLocation = await keepLocation(company, propertyLocation, plot.name, plot.odoo_location_id);
+  const plotLocation = await keepLocation(
+    company,
+    propertyLocation,
+    plotLabel(plot.code, plot.name),
+    plot.odoo_location_id,
+  );
   await run(`UPDATE agro_plots SET odoo_location_id = $2, updated_at = NOW() WHERE id = $1`, [
     plotId,
     String(plotLocation),

@@ -397,6 +397,8 @@ async function openProductEditor(root, reload, item, token) {
     weight: '',
     qty_on_hand: '',
     track_inventory: 'True',
+    cycle_days: '',
+    yield_per_ha: '',
     odoo_id: '',
   };
   const catalog = await api('/api/forms/catalog').catch(() => ({ refs: {} }));
@@ -443,7 +445,14 @@ async function openProductEditor(root, reload, item, token) {
             <option value="False"${String(value.track_inventory) === 'False' ? ' selected' : ''}>Não</option>
           </select>
         </label>
+        <label>Dias até a colheita
+          <input name="cycle_days" inputmode="numeric" placeholder="ex.: 90 (Vertice Agro)" value="${escapeHtml(value.cycle_days || '')}" />
+        </label>
+        <label>Produtividade estimada / ha
+          <input name="yield_per_ha" inputmode="decimal" placeholder="ex.: 12000 (mesma unidade do produto)" value="${escapeHtml(value.yield_per_ha || '')}" />
+        </label>
       </div>
+      <p class="muted">Dias e produtividade / ha alimentam a previsão e a estimativa do plantio no Vertice Agro e no Bot.</p>
     </form>`;
 
   openEditorModal(root);

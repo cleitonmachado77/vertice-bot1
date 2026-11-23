@@ -7,6 +7,16 @@ export function clip(value: unknown, max: number): string {
   return String(value ?? '').trim().slice(0, max);
 }
 
+/** Rótulo do talhão: código no Bot + nome descritivo (ex.: A1 · Hortaliças). */
+export function plotLabel(code: unknown, name: unknown): string {
+  const plotCode = String(code ?? '').trim();
+  const plotName = String(name ?? '').trim();
+  if (plotCode && plotName && plotCode.toLowerCase() !== plotName.toLowerCase()) {
+    return `${plotCode} · ${plotName}`;
+  }
+  return plotCode || plotName;
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -109,21 +119,33 @@ export async function resolvePlot(propertyId: string, input: Record<string, unkn
     if (!row) throw new Error('Talhão não encontrado nesta propriedade');
     return row.id;
   }
-  const name = clip(input.plotName, 150);
-  if (!name) throw new Error('Informe o talhão');
-  const existing = await one<{ id: string }>(
-    `SELECT id FROM agro_plots WHERE property_id = $1 AND lower(name) = lower($2)`,
-    [propertyId, name],
-  );
-  if (existing) return existing.id;
+  const code = clip(input.plotCode || input.plotName, 40);
+  const name = clip(input.plotName, 150) || code;
+  if (!code && !name) throw new Error('Informe o código do talhão');
+  const byCode = code
+    ? await one<{ id: string }>(
+        `SELECT id FROM agro_plots
+         WHERE property_id = $1 AND lower(code) = lower($2) AND active = 1`,
+        [propertyId, code],
+      )
+    : undefined;
+  if (byCode) return byCode.id;
+  const byName = name
+    ? await one<{ id: string }>(
+        `SELECT id FROM agro_plots
+         WHERE property_id = $1 AND lower(name) = lower($2) AND active = 1`,
+        [propertyId, name],
+      )
+    : undefined;
+  if (byName) return byName.id;
   const area =
     String(input.plotArea ?? '').trim() === '' ? null : parseQuantity(input.plotArea, 'Área do talhão');
   const id = randomUUID();
   const stamp = nowIso();
   await run(
-    `INSERT INTO agro_plots(id, property_id, name, area, active, created_at, updated_at)
-     VALUES($1, $2, $3, $4, 1, $5, $5)`,
-    [id, propertyId, name, area, stamp],
+    `INSERT INTO agro_plots(id, property_id, code, name, area, active, created_at, updated_at)
+     VALUES($1, $2, $3, $4, $5, 1, $6, $6)`,
+    [id, propertyId, code || name, name, area, stamp],
   );
   return id;
 }

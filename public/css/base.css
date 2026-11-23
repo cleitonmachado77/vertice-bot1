@@ -284,12 +284,14 @@ a.stat-card:hover {
 .stat-card-copy { min-width: 0; }
 .stat-card-value {
   display: block;
-  font-size: 1.5rem;
+  font-size: clamp(1rem, 2.2vw, 1.5rem);
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.02em;
   color: var(--ink);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stat-card-label { display: block; margin-top: 2px; color: var(--muted); font-size: 0.85rem; }
 .stat-card-hint { display: block; margin-top: 2px; color: var(--faint); font-size: 0.75rem; }

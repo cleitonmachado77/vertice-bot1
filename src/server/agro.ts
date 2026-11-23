@@ -15,19 +15,20 @@ import {
 } from './agro-model.js';
 import { productListPrice, syncAgroBuyer, syncAgroProduct } from './agro-odoo-catalog.js';
 import {
-  publishDelivery,
+  publishGroupedDeliverySale,
   publishHarvest,
   publishPlantingPlace,
-  revertSavedDelivery,
   revertHarvestStock,
 } from './agro-odoo-flow.js';
-import { assignProducer, clip, resolvePlot, resolveProperty } from './agro-resolve.js';
+import { assignProducer, clip, resolveBuyer, resolvePlot, resolveProperty } from './agro-resolve.js';
+import { upsertPartner } from './forms-catalog.js';
 import { refreshAgroMirror } from './agro-mirror.js';
 import { ensureAgroSchema } from './agro-schema.js';
 import {
   assertCanDeliver,
   assertHarvestCoversDeliveries,
   deliveryTotal,
+  derivePlantingForecast,
   isPlantingStatus,
   parseIsoDate,
   parseMoney,
@@ -63,6 +64,36 @@ function plantingStatus(current: AgroPlanting | undefined, requested: unknown): 
   return 'em_colheita';
 }
 
+function softQuantity(value: unknown): number | null {
+  try {
+    return parseOptionalQuantity(value, 'valor');
+  } catch {
+    return null;
+  }
+}
+
+async function productAgroParams(
+  companyId: string,
+  productId: string,
+): Promise<{ cycleDays: number | null; yieldPerHa: number | null }> {
+  if (!productId) return { cycleDays: null, yieldPerHa: null };
+  const row = await one<{ header_json: string }>(
+    `SELECT header_json FROM forms_documents
+     WHERE id = $1 AND kind = 'product' AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`,
+    [productId, companyId],
+  );
+  if (!row) return { cycleDays: null, yieldPerHa: null };
+  try {
+    const header = JSON.parse(row.header_json || '{}') as Record<string, unknown>;
+    return {
+      cycleDays: softQuantity(header.cycle_days),
+      yieldPerHa: softQuantity(header.yield_per_ha),
+    };
+  } catch {
+    return { cycleDays: null, yieldPerHa: null };
+  }
+}
+
 export async function savePlanting(
   companyId: string,
   input: Record<string, unknown>,
@@ -70,12 +101,6 @@ export async function savePlanting(
 ): Promise<AgroPlanting> {
   await ensureAgroSchema();
   const plantedOn = parseIsoDate(input.plantedOn);
-  const forecastOn = parseOptionalDate(input.forecastOn);
-  if (forecastOn && forecastOn < plantedOn) {
-    throw new Error('A previsão de colheita não pode ser anterior ao plantio');
-  }
-  const areaPlanned = parseQuantity(input.areaPlanned, 'Área planejada');
-  const forecastQty = parseOptionalQuantity(input.forecastQty, 'Quantidade prevista');
   const notes = clip(input.notes, 500);
   const product = await syncAgroProduct(companyId, input);
   const current = id ? await getPlanting(companyId, id) : undefined;
@@ -86,11 +111,41 @@ export async function savePlanting(
   const status = plantingStatus(current, input.status);
   const plantingId = current?.id || randomUUID();
   const stamp = nowIso();
+  const params = await productAgroParams(companyId, product.id);
+
+  let areaPlanned = 0;
+  let forecastOn: string | null = null;
+  let forecastQty: number | null = null;
 
   await withTransaction(async () => {
     const propertyId = await resolveProperty(companyId, input);
     await assignProducer(companyId, propertyId, input);
     const plotId = await resolvePlot(propertyId, input);
+    const plot = await one<{ area: number | null }>(
+      `SELECT area FROM agro_plots WHERE id = $1 AND active = 1`,
+      [plotId],
+    );
+    if (String(input.areaPlanned ?? '').trim() !== '') {
+      areaPlanned = parseQuantity(input.areaPlanned, 'Área planejada');
+    } else if (plot?.area != null && Number(plot.area) > 0) {
+      areaPlanned = Math.round(Number(plot.area) * 1000) / 1000;
+    } else {
+      throw new Error('Cadastre a área do talhão em Configurações antes do plantio');
+    }
+
+    const derived = derivePlantingForecast({
+      plantedOn,
+      areaHa: areaPlanned,
+      cycleDays: params.cycleDays,
+      yieldPerHa: params.yieldPerHa,
+    });
+    forecastOn = parseOptionalDate(input.forecastOn) || derived.forecastOn;
+    forecastQty =
+      parseOptionalQuantity(input.forecastQty, 'Quantidade prevista') ?? derived.forecastQty;
+    if (forecastOn && forecastOn < plantedOn) {
+      throw new Error('A previsão de colheita não pode ser anterior ao plantio');
+    }
+
     if (!current) {
       await run(
         `INSERT INTO agro_plantings(
@@ -131,6 +186,25 @@ export async function deletePlanting(companyId: string, id: string): Promise<voi
     throw new Error('Este plantio tem colheitas ou entregas. Remova esses registros antes de excluir.');
   }
   await run(`DELETE FROM agro_plantings WHERE id = $1 AND company_odoo_id = $2`, [id, companyId]);
+}
+
+/** Marca o plantio como colhido (útil quando a colheita veio pelo Bot sem encerrar). */
+export async function closePlanting(companyId: string, id: string): Promise<AgroPlanting> {
+  await ensureAgroSchema();
+  const current = await getPlanting(companyId, id);
+  if (!current) throw new Error('Plantio não encontrado');
+  if (current.status === 'colhido') return current;
+  if (current.harvestedQty <= 0) {
+    throw new Error('Registre ao menos uma colheita antes de encerrar o plantio');
+  }
+  await run(
+    `UPDATE agro_plantings SET status = 'colhido', updated_at = NOW()
+     WHERE id = $1 AND company_odoo_id = $2`,
+    [id, companyId],
+  );
+  const saved = await getPlanting(companyId, id);
+  if (!saved) throw new Error('Não foi possível encerrar o plantio');
+  return saved;
 }
 
 export async function saveHarvest(
@@ -242,13 +316,21 @@ export async function saveDelivery(
   const current = id ? await getDelivery(companyId, id) : undefined;
   if (id && !current) throw new Error('Entrega não encontrada');
   if (current && current.plantingId !== planting.id) throw new Error('A entrega permanece no plantio de origem');
+  if (current?.odooOrderId) {
+    throw new Error('Esta entrega já tem pedido no Odoo. Não é possível editar.');
+  }
   const quantity = parseQuantity(input.quantity, 'Quantidade entregue');
   const deliveredOn = parseIsoDate(input.deliveredOn);
   if (deliveredOn < planting.plantedOn) throw new Error('A entrega não pode ser anterior ao plantio');
   let unitPrice = parseMoney(input.unitPrice);
   if (unitPrice == null) unitPrice = await productListPrice(planting.productId);
   const total = deliveryTotal(quantity, unitPrice);
-  const buyer = await syncAgroBuyer(companyId, input);
+  let buyer = await resolveBuyer(companyId, input);
+  if (!buyer.id) {
+    const created = await upsertPartner(buyer.name, 'customer', companyId);
+    if (!created) throw new Error('Informe o local de entrega');
+    buyer = { id: created.id, name: created.name };
+  }
   const deliveredWithout = planting.deliveredQty - (current?.quantity || 0);
   assertCanDeliver(planting.harvestedQty, deliveredWithout, quantity);
   const deliveryId = current?.id || randomUUID();
@@ -277,31 +359,75 @@ export async function saveDelivery(
     );
   }
 
-  await publishDelivery({
-    companyId,
-    deliveryId,
-    created: !current,
-    saleDocumentId: current?.saleDocumentId || '',
-    propertyId: planting.propertyId,
-    plotId: planting.plotId,
-    customerName: buyer.name,
-    productName: planting.productName,
-    unit: planting.unit,
-    quantity,
-    unitPrice,
-    deliveredOn,
-    document,
-  });
-
   const saved = await getDelivery(companyId, deliveryId);
   if (!saved) throw new Error('Não foi possível salvar a entrega');
   return saved;
+}
+
+export async function groupDeliveriesSale(
+  companyId: string,
+  deliveryIdsInput: unknown,
+): Promise<{ orderName: string; odooOrderId: string; items: AgroDelivery[] }> {
+  await ensureAgroSchema();
+  const deliveryIds = Array.isArray(deliveryIdsInput)
+    ? [...new Set(deliveryIdsInput.map((item) => clip(item, 80)).filter(Boolean))]
+    : [];
+  if (!deliveryIds.length) throw new Error('Selecione ao menos uma entrega');
+
+  const all = await listDeliveries(companyId);
+  const selected = deliveryIds.map((id) => {
+    const item = all.find((entry) => entry.id === id);
+    if (!item) throw new Error('Entrega não encontrada');
+    return item;
+  });
+  if (selected.some((item) => item.odooOrderId)) {
+    throw new Error('Uma ou mais entregas já têm pedido no Odoo');
+  }
+  const partnerId = selected[0]?.partnerId || '';
+  if (!partnerId || selected.some((item) => item.partnerId !== partnerId)) {
+    throw new Error('Selecione entregas do mesmo local de entrega');
+  }
+  const customerName = selected[0]?.partnerName || '';
+  if (!customerName) throw new Error('Local de entrega sem nome');
+  await syncAgroBuyer(companyId, { partnerId, partnerName: customerName });
+
+  const plantings = await listPlantings(companyId);
+  const lines = selected.map((item) => {
+    const planting = plantings.find((entry) => entry.id === item.plantingId);
+    if (!planting) throw new Error(`Plantio não encontrado para a entrega ${item.id}`);
+    return {
+      deliveryId: item.id,
+      propertyId: planting.propertyId,
+      plotId: planting.plotId || item.plotId,
+      productName: item.productName || planting.productName,
+      unit: item.unit || planting.unit,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      deliveredOn: item.deliveredOn,
+    };
+  });
+
+  const result = await publishGroupedDeliverySale({
+    companyId,
+    customerName,
+    deliveryIds: selected.map((item) => item.id),
+    lines,
+  });
+
+  const items = (await listDeliveries(companyId)).filter((item) =>
+    selected.some((entry) => entry.id === item.id),
+  );
+  return { orderName: result.orderName, odooOrderId: result.odooOrderId, items };
 }
 
 export async function deleteDelivery(companyId: string, id: string): Promise<void> {
   await ensureAgroSchema();
   const current = await getDelivery(companyId, id);
   if (!current) throw new Error('Entrega não encontrada');
-  await revertSavedDelivery(companyId, current);
+  if (current.odooOrderId || current.saleDocumentId) {
+    throw new Error(
+      'Esta entrega já tem pedido no Odoo. Cancele/estorne o pedido no Odoo antes de excluir no Vertice.',
+    );
+  }
   await run(`DELETE FROM agro_deliveries WHERE id = $1`, [current.id]);
 }

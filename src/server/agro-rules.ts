@@ -91,3 +91,40 @@ export function statusAfterHarvestRemoval(remainingHarvests: number, current: Pl
 export function isPlantingStatus(value: string): value is PlantingStatus {
   return value === 'planejado' || value === 'em_colheita' || value === 'colhido';
 }
+
+/** Soma dias a uma data ISO (AAAA-MM-DD), em UTC civil. */
+export function addDaysIso(isoDate: string, days: number): string {
+  const base = parseIsoDate(isoDate);
+  const [year, month, day] = base.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + Math.trunc(days));
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+/** Previsão e estimativa a partir dos parâmetros do produto (dias e produtividade/ha). */
+export function derivePlantingForecast(input: {
+  plantedOn: string;
+  areaHa: number;
+  cycleDays: number | null;
+  yieldPerHa: number | null;
+}): { forecastOn: string | null; forecastQty: number | null } {
+  const cycleDays =
+    input.cycleDays != null && Number.isFinite(input.cycleDays) && input.cycleDays > 0
+      ? Math.trunc(input.cycleDays)
+      : null;
+  const yieldPerHa =
+    input.yieldPerHa != null && Number.isFinite(input.yieldPerHa) && input.yieldPerHa > 0
+      ? input.yieldPerHa
+      : null;
+  return {
+    forecastOn: cycleDays == null ? null : addDaysIso(input.plantedOn, cycleDays),
+    forecastQty:
+      yieldPerHa == null || !(input.areaHa > 0)
+        ? null
+        : Math.round(input.areaHa * yieldPerHa * 1000) / 1000,
+  };
+}

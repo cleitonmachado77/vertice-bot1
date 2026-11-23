@@ -191,6 +191,10 @@ body.agro-modal-open .sidebar {
   margin-bottom: 16px;
 }
 
+.agro-dash-stats .stat-card-value {
+  font-size: clamp(0.95rem, 1.6vw, 1.35rem);
+}
+
 .agro-dash-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -234,9 +238,20 @@ body.agro-modal-open .sidebar {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.stat-row--6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+@media (max-width: 1200px) {
+  .stat-row--6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 980px) {
   .agro-dash-grid,
-  .stat-row--5 {
+  .stat-row--5,
+  .stat-row--6 {
     grid-template-columns: 1fr;
   }
 }

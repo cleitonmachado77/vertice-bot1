@@ -1,5 +1,7 @@
 import { many } from './db.js';
 import type { AgroBuyer, AgroProducer, AgroProduct, AgroProperty } from './agro-model.js';
+import { listDeliveryPointBuyers } from './agro-delivery-points.js';
+import { plotLabel } from './agro-resolve.js';
 
 function nullable(value: unknown): number | null {
   if (value == null || value === '') return null;
@@ -53,10 +55,10 @@ export async function listAgroCatalog(companyId: string): Promise<{
   );
   const propertyIds = properties.map((item) => item.id);
   const plots = propertyIds.length
-    ? await many<{ id: string; property_id: string; name: string; area: number | null }>(
-        `SELECT id, property_id, name, area FROM agro_plots
+    ? await many<{ id: string; property_id: string; code: string; name: string; area: number | null }>(
+        `SELECT id, property_id, COALESCE(code, '') AS code, name, area FROM agro_plots
          WHERE active = 1 AND property_id = ANY($1::text[])
-         ORDER BY name ASC`,
+         ORDER BY CASE WHEN COALESCE(code, '') = '' THEN 1 ELSE 0 END, lower(code), lower(name)`,
         [propertyIds],
       )
     : [];
@@ -81,22 +83,18 @@ export async function listAgroCatalog(companyId: string): Promise<{
       sigla: header.sigla || '',
       uom: header.uom || '',
       salesPrice: header.sales_price || '',
+      cycleDays: nullable(header.cycle_days),
+      yieldPerHa: nullable(header.yield_per_ha),
     });
   }
   products.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
-  const buyers = await many<AgroBuyer>(
-    `SELECT DISTINCT ON (lower(name)) id, name FROM forms_partners
-     WHERE is_customer = 1 AND (company_odoo_id = $1 OR company_odoo_id = '0')
-     ORDER BY lower(name), CASE WHEN company_odoo_id = $1 THEN 0 ELSE 1 END, name ASC`,
-    [companyId],
-  );
+  const buyers = await listDeliveryPointBuyers(companyId);
   const producers = await many<AgroBuyer>(
     `SELECT DISTINCT ON (lower(name)) id, name FROM forms_partners
      WHERE is_vendor = 1 AND (company_odoo_id = $1 OR company_odoo_id = '0')
      ORDER BY lower(name), CASE WHEN company_odoo_id = $1 THEN 0 ELSE 1 END, name ASC`,
     [companyId],
   );
-  buyers.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   producers.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   const mappedProperties: AgroProperty[] = properties.map((property) => ({
     id: property.id,
@@ -105,7 +103,13 @@ export async function listAgroCatalog(companyId: string): Promise<{
     producerName: property.producer_name || '',
     plots: plots
       .filter((plot) => plot.property_id === property.id)
-      .map((plot) => ({ id: plot.id, name: plot.name, area: nullable(plot.area) })),
+      .map((plot) => ({
+        id: plot.id,
+        code: plot.code || '',
+        name: plot.name,
+        area: nullable(plot.area),
+        label: plotLabel(plot.code, plot.name),
+      })),
   }));
   const farmProducers: AgroProducer[] = farmProducerRows.map((producer) => ({
     id: producer.id,

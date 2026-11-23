@@ -10,6 +10,7 @@ import {
   syncDeliveryForm,
   syncDeliveryTotal,
   syncPlantingForm,
+  syncQtyPriceTotal,
 } from './agro-editor.js';
 import { AGRO_TABS, bodyHtml, shell, tabMeta } from './agro-list.js';
 import { openAgroPresets } from './agro-presets.js';
@@ -71,7 +72,7 @@ function ensureModal() {
   modal.addEventListener('input', (event) => {
     const form = event.target.closest('#agro-form');
     if (event.target?.name === 'unitPrice') event.target.dataset.touched = '1';
-    if (form?.dataset.kind === 'entrega') syncDeliveryTotal(form);
+    if (form?.dataset.kind === 'entrega' || form?.dataset.kind === 'custos') syncQtyPriceTotal(form);
   });
   modal.addEventListener('submit', onSubmit);
   return modal;
@@ -94,6 +95,7 @@ function openEditor(kind, record) {
   const form = modal.querySelector('#agro-form');
   if (form?.dataset.kind === 'plantio') syncPlantingForm(form, snapshot.catalog);
   if (form?.dataset.kind === 'entrega') syncDeliveryForm(form, snapshot.catalog, snapshot.plantings);
+  if (form?.dataset.kind === 'custos') syncQtyPriceTotal(form);
   modal.hidden = false;
   modal.classList.add('is-open');
   document.body.classList.add('agro-modal-open');
@@ -154,11 +156,16 @@ function bind(root) {
   if (root.dataset.agroBound === '1') return;
   root.dataset.agroBound = '1';
   root.addEventListener('input', (event) => {
-    if (!event.target.matches('[data-filter]')) return;
-    const query = event.target.value.trim().toLowerCase();
-    root.querySelectorAll('[data-search]').forEach((row) => {
-      row.hidden = Boolean(query) && !row.dataset.search.includes(query);
-    });
+    if (event.target.matches('[data-filter]')) {
+      const query = event.target.value.trim().toLowerCase();
+      root.querySelectorAll('[data-search]').forEach((row) => {
+        row.hidden = Boolean(query) && !row.dataset.search.includes(query);
+      });
+      return;
+    }
+  });
+  root.addEventListener('change', (event) => {
+    if (event.target.matches('[data-group-delivery]')) syncGroupSaleButton(root);
   });
   root.addEventListener('click', (event) => {
     const presets = event.target.closest('[data-presets]');
@@ -184,9 +191,80 @@ function bind(root) {
       location.hash = `#/agro/${go.dataset.go}`;
       return;
     }
+    const closePlanting = event.target.closest('[data-close-planting]');
+    if (closePlanting) {
+      closePlantingRecord(closePlanting.dataset.closePlanting);
+      return;
+    }
+    const groupSale = event.target.closest('[data-group-sale]');
+    if (groupSale) {
+      groupSelectedDeliveries(root);
+      return;
+    }
     const remove = event.target.closest('[data-delete]');
     if (remove) removeRecord(remove.dataset.delete, remove.dataset.id);
   });
+}
+
+function selectedGroupDeliveries(root) {
+  return [...root.querySelectorAll('[data-group-delivery]:checked')].map((input) => ({
+    id: input.value,
+    partnerId: input.dataset.partner || '',
+  }));
+}
+
+function syncGroupSaleButton(root) {
+  const button = root.querySelector('[data-group-sale]');
+  const hint = root.querySelector('[data-group-hint]');
+  if (!button) return;
+  const selected = selectedGroupDeliveries(root);
+  const partners = [...new Set(selected.map((item) => item.partnerId).filter(Boolean))];
+  const ok = selected.length > 0 && partners.length === 1;
+  button.disabled = !ok;
+  if (hint) {
+    if (!selected.length) {
+      hint.textContent = 'Selecione entregas do mesmo local (ainda sem pedido).';
+    } else if (partners.length > 1) {
+      hint.textContent = 'Selecione apenas um local de entrega por vez.';
+    } else {
+      hint.textContent = `${selected.length} entrega(s) pronta(s) para gerar um pedido no Odoo.`;
+    }
+  }
+}
+
+async function groupSelectedDeliveries(root) {
+  const selected = selectedGroupDeliveries(root);
+  const partners = [...new Set(selected.map((item) => item.partnerId).filter(Boolean))];
+  if (!selected.length || partners.length !== 1) {
+    toast('Selecione entregas do mesmo local', { tone: 'error' });
+    return;
+  }
+  if (!confirm(`Gerar um pedido no Odoo com ${selected.length} entrega(s)?`)) return;
+  const button = root.querySelector('[data-group-sale]');
+  if (button) button.disabled = true;
+  try {
+    const result = await api('/api/agro/deliveries/group-sale', {
+      method: 'POST',
+      body: { deliveryIds: selected.map((item) => item.id) },
+    });
+    toast(result.orderName ? `Pedido ${result.orderName} gerado` : 'Pedido gerado no Odoo');
+    await refresh();
+  } catch (error) {
+    toast(error.message || 'Não foi possível gerar o pedido', { tone: 'error' });
+    syncGroupSaleButton(root);
+  }
+}
+
+async function closePlantingRecord(id) {
+  if (!id) return;
+  if (!confirm('Encerrar a colheita deste plantio?')) return;
+  try {
+    await api(`/api/agro/plantings/${encodeURIComponent(id)}/close`, { method: 'POST', body: {} });
+    toast('Plantio encerrado');
+    await refresh();
+  } catch (error) {
+    toast(error.message || 'Não foi possível encerrar o plantio', { tone: 'error' });
+  }
 }
 
 function takePending(tab) {
@@ -270,6 +348,7 @@ export async function renderAgro(root, tab = 'dashboard', token = getNavToken(),
   }
   if (!isNavActive(token)) return;
   if (body) body.innerHTML = bodyHtml(currentTab, snapshot);
+  if (currentTab === 'entrega') syncGroupSaleButton(root);
   const pending = takePending(currentTab);
   if (!pending) return;
   if (pending.tab === 'colheita') openEditor('colheita', { plantingId: pending.plantingId });

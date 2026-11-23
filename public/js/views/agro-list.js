@@ -10,7 +10,13 @@ export const AGRO_TABS = [
   },
   { id: 'plantio', slug: 'plantio', label: 'Plantio', icon: 'sprout', description: 'O produtor é o fornecedor do Odoo. A estimativa da safra fica no plantio' },
   { id: 'colheita', slug: 'colheita', label: 'Colheita', icon: 'harvest', description: 'A quantidade colhida soma no estoque do talhão' },
-  { id: 'entrega', slug: 'entrega', label: 'Entrega', icon: 'truck', description: 'Gera o pedido de venda e baixa o estoque do talhão' },
+  {
+    id: 'entrega',
+    slug: 'entrega',
+    label: 'Entrega',
+    icon: 'truck',
+    description: 'Entrega nos locais cadastrados (Sacolão, escolas, Coara…). Gera pedido no Odoo',
+  },
   { id: 'custos', slug: 'custos', label: 'Custos', icon: 'money', description: 'Registra os custos por área (talhão) da empresa ativa' },
   {
     id: 'configuracoes',
@@ -115,11 +121,15 @@ function stats(tab, data) {
   ].join('');
 }
 
-function buttons(kind, id, extra = '') {
+function buttons(kind, id, extra = '', { allowDelete = true } = {}) {
   return `<td class="agro-actions">
     <button class="btn-ghost agro-mini" type="button" data-edit="${kind}" data-id="${escapeHtml(id)}">Editar</button>
     ${extra}
-    <button class="btn-ghost agro-mini" type="button" data-delete="${kind}" data-id="${escapeHtml(id)}">Excluir</button>
+    ${
+      allowDelete
+        ? `<button class="btn-ghost agro-mini" type="button" data-delete="${kind}" data-id="${escapeHtml(id)}">Excluir</button>`
+        : ''
+    }
   </td>`;
 }
 
@@ -149,6 +159,10 @@ function listHtml(tab, data) {
           remaining > 0.0001
             ? `<button class="btn-ghost agro-mini" type="button" data-go="entrega" data-planting="${escapeHtml(item.plantingId)}">Entregar</button>`
             : '';
+        const close =
+          item.plantingStatus !== 'colhido'
+            ? `<button class="btn-ghost agro-mini" type="button" data-close-planting="${escapeHtml(item.plantingId)}">Encerrar plantio</button>`
+            : '';
         return `<tr data-search="${escapeHtml(search)}">
           <td>${dateBr(item.harvestedOn)}</td>
           <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)}</span></td>
@@ -156,7 +170,7 @@ function listHtml(tab, data) {
           <td>${escapeHtml(area)}<span class="agro-sub">${escapeHtml(item.propertyName || '')}</span></td>
           <td>${money(revenue)}</td>
           <td>${escapeHtml(item.propertyName)}<span class="agro-sub">${statusPill(item.plantingStatus)}</span></td>
-          ${buttons('colheita', item.id, deliver)}
+          ${buttons('colheita', item.id, `${deliver}${close}`)}
         </tr>`;
       })
       .join('');
@@ -171,22 +185,32 @@ function listHtml(tab, data) {
       .map((item) => {
         const planting = (data.plantings || []).find((entry) => entry.id === item.plantingId);
         const sigla = productSigla(data.catalog, planting?.productId || '', item.productName);
-        const search = `${item.propertyName} ${item.partnerName} ${sigla} ${item.productName} ${item.document}`.toLowerCase();
+        const search = `${item.propertyName} ${item.partnerName} ${sigla} ${item.productName} ${item.document} ${item.odooOrderRef}`.toLowerCase();
+        const pending = !item.odooOrderId;
+        const pedido = item.odooOrderRef
+          ? `Pedido ${item.odooOrderRef}`
+          : item.odooOrderId
+            ? `Pedido #${item.odooOrderId}`
+            : 'Pendente pedido';
+        const select = pending
+          ? `<input type="checkbox" data-group-delivery value="${escapeHtml(item.id)}" data-partner="${escapeHtml(item.partnerId || '')}" aria-label="Selecionar entrega">`
+          : '';
         return `<tr data-search="${escapeHtml(search)}">
+          <td>${select}</td>
           <td>${dateBr(item.deliveredOn)}</td>
           <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)}</span></td>
           <td>${qty(item.quantity, item.unit)}</td>
-          <td>${escapeHtml(item.partnerName)}<span class="agro-sub">Cliente / local da entrega</span></td>
+          <td>${escapeHtml(item.partnerName)}<span class="agro-sub">Local de entrega</span></td>
           <td>${escapeHtml(item.propertyName)}</td>
           <td>${money(item.unitPrice)}</td>
           <td>${money(item.totalValue)}</td>
-          <td>${escapeHtml(item.document || '—')}</td>
-          ${buttons('entrega', item.id)}
+          <td>${escapeHtml(item.document || '—')}<span class="agro-sub">${escapeHtml(pedido)}</span></td>
+          ${buttons('entrega', item.id, '', { allowDelete: pending })}
         </tr>`;
       })
       .join('');
     return table(
-      ['Data', 'Produto', 'Quantidade', 'Cliente', 'Origem', 'Unitário', 'Total', 'Documento'],
+      ['', 'Data', 'Produto', 'Quantidade', 'Local', 'Origem', 'Unitário', 'Total', 'Documento / Pedido'],
       rows,
       'Nenhuma entrega registrada.',
     );
@@ -215,6 +239,10 @@ function listHtml(tab, data) {
         item.status === 'colhido'
           ? ''
           : `<button class="btn-ghost agro-mini" type="button" data-go="colheita" data-planting="${escapeHtml(item.id)}">Colher</button>`;
+      const close =
+        item.status === 'em_colheita'
+          ? `<button class="btn-ghost agro-mini" type="button" data-close-planting="${escapeHtml(item.id)}">Encerrar plantio</button>`
+          : '';
       return `<tr data-search="${escapeHtml(search)}">
         <td>${dateBr(item.plantedOn)}</td>
         <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)} · ${escapeHtml(item.unit || '')}</span></td>
@@ -225,7 +253,7 @@ function listHtml(tab, data) {
         <td>${qty(item.areaPlanned, 'ha')}</td>
         <td>${qty(item.harvestedQty, item.unit)}</td>
         <td>${statusPill(item.status)}</td>
-        ${buttons('plantio', item.id, harvest)}
+        ${buttons('plantio', item.id, `${harvest}${close}`)}
       </tr>`;
     })
     .join('');
@@ -300,6 +328,13 @@ export function bodyHtml(tab, data) {
         : tab === 'custos'
           ? data.costs
           : data.plantings;
+  const groupBar =
+    tab === 'entrega'
+      ? `<div class="row agro-group-bar">
+          <button class="btn" type="button" data-group-sale disabled>Gerar pedido Odoo</button>
+          <span class="muted" data-group-hint>Selecione entregas do mesmo local (ainda sem pedido).</span>
+        </div>`
+      : '';
   return `
     <div class="stat-row stat-row--3">${stats(tab, data)}</div>
     <section class="card data-results agro-panel">
@@ -307,6 +342,7 @@ export function bodyHtml(tab, data) {
         <label class="forms-filter-search">Busca
           <input data-filter placeholder="Propriedade, produto, talhão, custo ou comprador" />
         </label>
+        ${groupBar}
       </div>
       ${rows?.length ? listHtml(tab, data) : `<p class="muted">${escapeHtml(emptyLabel(tab))}</p>`}
     </section>`;

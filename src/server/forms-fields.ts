@@ -190,6 +190,16 @@ export const PRODUCT_FIELDS: FormField[] = [
       { value: 'False', label: 'Não' },
     ],
   },
+  {
+    key: 'cycle_days',
+    label: 'Dias até a colheita',
+    placeholder: 'ex.: 90 (Vertice Agro)',
+  },
+  {
+    key: 'yield_per_ha',
+    label: 'Produtividade estimada / ha',
+    placeholder: 'ex.: 12000 (mesma unidade do produto)',
+  },
 ];
 
 /** Unidade da linha (uom.uom do Odoo); vazio = unidade do produto. */

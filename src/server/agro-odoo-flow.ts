@@ -96,80 +96,23 @@ export async function revertHarvestStock(input: PlantingRef & { harvestId: strin
   await addProductStockAtLocation(Number(input.companyId), variantId, place.plotLocationId, stockDelta(quantity, 0));
 }
 
-type DeliveryPush = {
-  companyId: string;
+export type DeliverySaleLine = {
   deliveryId: string;
-  created: boolean;
-  saleDocumentId: string;
   propertyId: string;
   plotId: string;
-  customerName: string;
   productName: string;
   unit: string;
   quantity: number;
   unitPrice: number | null;
   deliveredOn: string;
-  document: string;
 };
 
-async function pushAgroSale(
-  input: DeliveryPush,
-  plotLocationId: number,
-): Promise<{ saleDocumentId: string; odooOrderId: string; orderName: string }> {
-  const existing = input.saleDocumentId ? await getFormDocument(input.saleDocumentId) : undefined;
-  const sale = existing?.kind === 'sale' ? existing : undefined;
-  const doc = sale || (await createFormDocument('sale', { companyOdooId: input.companyId }));
-  const reference = `AGRO:${input.deliveryId}`;
-  const saved = await saveSale(doc.id, sale?.status || 'draft', sale?.lines[0]?.id, input, input.document);
-  try {
-    const pushed = await pushSaleToOdoo(saved, { confirm: true, sourceLocationId: plotLocationId });
-    return {
-      saleDocumentId: pushed.id,
-      odooOrderId: pushed.header.odoo_id || '',
-      orderName: pushed.header.order_reference || '',
-    };
-  } catch (error) {
-    if (!sale) {
-      await cancelSaleByReference(input.companyId, reference);
-      const current = (await getFormDocument(saved.id)) || saved;
-      if (Number(current.header.odoo_id || 0) > 0) {
-        await odooExecuteKw('sale.order', 'action_cancel', [[Number(current.header.odoo_id)]]).catch(() => undefined);
-      }
-      await deleteFormDocument(saved.id).catch(() => undefined);
-    }
-    throw error;
-  }
-}
-
-function saveSale(
-  id: string,
-  status: string,
-  lineId: string | undefined,
-  input: DeliveryPush,
-  reference: string,
-) {
-  return saveFormDocument(id, {
-    status,
-    header: {
-      customer: input.customerName,
-      order_date: `${input.deliveredOn} 12:00:00`,
-      customer_reference: reference,
-      source: 'agro',
-      source_delivery_id: input.deliveryId,
-    },
-    lines: [
-      {
-        id: lineId,
-        values: {
-          product: input.productName,
-          quantity: String(input.quantity),
-          uom: input.unit,
-          unit_price: input.unitPrice == null ? '' : String(input.unitPrice),
-        },
-      },
-    ],
-  });
-}
+export type GroupedDeliverySale = {
+  companyId: string;
+  customerName: string;
+  deliveryIds: string[];
+  lines: DeliverySaleLine[];
+};
 
 async function cancelSaleByReference(companyId: string, reference: string): Promise<void> {
   const rows = await odooSearchRead<{ id: number }>(
@@ -186,22 +129,79 @@ async function cancelSaleByReference(companyId: string, reference: string): Prom
   await odooExecuteKw('sale.order', 'action_cancel', [[rows[0].id]]).catch(() => undefined);
 }
 
-export async function publishDelivery(input: DeliveryPush): Promise<void> {
+/** Um pedido de venda no Odoo com N linhas (entregas do mesmo local). */
+export async function publishGroupedDeliverySale(
+  input: GroupedDeliverySale,
+): Promise<{ saleDocumentId: string; odooOrderId: string; orderName: string }> {
+  assertOdooReady();
+  if (!input.lines.length) throw new Error('Selecione ao menos uma entrega');
+  const groupId = randomGroupId();
+  const reference = `AGRO:group:${groupId}`;
+  const orderDate = input.lines
+    .map((line) => line.deliveredOn)
+    .sort()
+    .at(-1) || new Date().toISOString().slice(0, 10);
+
+  const plotIds = [...new Set(input.lines.map((line) => line.plotId).filter(Boolean))];
+  let sourceLocationId = 0;
+  if (plotIds.length === 1) {
+    const first = input.lines.find((line) => line.plotId === plotIds[0]);
+    if (first) {
+      const place = await syncAgroPlace(input.companyId, first.propertyId, first.plotId);
+      sourceLocationId = place.plotLocationId;
+    }
+  } else {
+    // Locais diferentes: sincroniza cada talhão; o pedido usa o depósito padrão.
+    for (const line of input.lines) {
+      if (line.plotId) await syncAgroPlace(input.companyId, line.propertyId, line.plotId);
+    }
+  }
+
+  const doc = await createFormDocument('sale', { companyOdooId: input.companyId });
+  const saved = await saveFormDocument(doc.id, {
+    status: 'draft',
+    header: {
+      customer: input.customerName,
+      order_date: `${orderDate} 12:00:00`,
+      customer_reference: reference,
+      source: 'agro',
+      source_delivery_ids: input.deliveryIds.join(','),
+    },
+    lines: input.lines.map((line) => ({
+      values: {
+        product: line.productName,
+        quantity: String(line.quantity),
+        uom: line.unit,
+        unit_price: line.unitPrice == null ? '' : String(line.unitPrice),
+      },
+    })),
+  });
+
   try {
-    const place = await syncAgroPlace(input.companyId, input.propertyId, input.plotId);
-    const result = await pushAgroSale(input, place.plotLocationId);
+    const pushed = await pushSaleToOdoo(saved, { confirm: true, sourceLocationId });
+    const saleDocumentId = pushed.id;
+    const odooOrderId = pushed.header.odoo_id || '';
+    const orderName = pushed.header.order_reference || '';
     await run(
       `UPDATE agro_deliveries
-       SET sale_document_id = $2, odoo_order_id = $3,
-           document = CASE WHEN document = '' THEN $4 ELSE document END,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [input.deliveryId, result.saleDocumentId, result.odooOrderId, result.orderName],
+       SET sale_document_id = $2, odoo_order_id = $3, odoo_order_ref = $4, updated_at = NOW()
+       WHERE id = ANY($1::text[])`,
+      [input.deliveryIds, saleDocumentId, odooOrderId, orderName],
     );
+    return { saleDocumentId, odooOrderId, orderName };
   } catch (error) {
-    if (input.created) await run(`DELETE FROM agro_deliveries WHERE id = $1`, [input.deliveryId]);
+    await cancelSaleByReference(input.companyId, reference);
+    const current = (await getFormDocument(saved.id)) || saved;
+    if (Number(current.header.odoo_id || 0) > 0) {
+      await odooExecuteKw('sale.order', 'action_cancel', [[Number(current.header.odoo_id)]]).catch(() => undefined);
+    }
+    await deleteFormDocument(saved.id).catch(() => undefined);
     throw error;
   }
+}
+
+function randomGroupId(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export async function revertSavedDelivery(

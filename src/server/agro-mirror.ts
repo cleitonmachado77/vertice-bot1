@@ -78,9 +78,10 @@ async function syncProductNames(companyId: string): Promise<void> {
 
 async function syncSaleDocuments(companyId: string): Promise<void> {
   try {
+    // Documento (NF/romaneio) é do usuário — não sobrescreve. Só preenche odoo_order_ref.
     await run(
       `UPDATE agro_deliveries e
-       SET document = sub.ref, updated_at = NOW()
+       SET odoo_order_ref = sub.ref, updated_at = NOW()
        FROM (
          SELECT id, COALESCE(header_json::json->>'order_reference', '') AS ref
          FROM forms_documents
@@ -90,7 +91,7 @@ async function syncSaleDocuments(companyId: string): Promise<void> {
          AND p.id = e.planting_id
          AND p.company_odoo_id = $1
          AND sub.ref <> ''
-         AND e.document IS DISTINCT FROM sub.ref`,
+         AND COALESCE(e.odoo_order_ref, '') IS DISTINCT FROM sub.ref`,
       [companyId],
     );
   } catch (error) {

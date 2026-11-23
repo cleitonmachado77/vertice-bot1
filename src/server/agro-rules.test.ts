@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  addDaysIso,
   assertCanDeliver,
   assertHarvestCoversDeliveries,
   deliveryTotal,
+  derivePlantingForecast,
   stockDelta,
   parseIsoDate,
   parseMoney,
@@ -42,4 +44,16 @@ test('o status do plantio acompanha a colheita', () => {
   assert.equal(statusAfterHarvestRemoval(0, 'em_colheita'), 'planejado');
   assert.equal(statusAfterHarvestRemoval(2, 'colhido'), 'colhido');
   assert.equal(statusAfterHarvestRemoval(1, 'em_colheita'), 'em_colheita');
+});
+
+test('previsão e estimativa saem dos parâmetros do produto', () => {
+  assert.equal(addDaysIso('2026-11-09', 105), '2027-02-22');
+  assert.deepEqual(
+    derivePlantingForecast({ plantedOn: '2026-11-09', areaHa: 1.5, cycleDays: 105, yieldPerHa: 500 }),
+    { forecastOn: '2027-02-22', forecastQty: 750 },
+  );
+  assert.deepEqual(
+    derivePlantingForecast({ plantedOn: '2026-11-09', areaHa: 1.5, cycleDays: null, yieldPerHa: null }),
+    { forecastOn: null, forecastQty: null },
+  );
 });

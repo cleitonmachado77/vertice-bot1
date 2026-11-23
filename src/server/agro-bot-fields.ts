@@ -24,14 +24,16 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
   agro_plantio: [
     { key: 'propertyName', label: 'Propriedade', required: true, odoo: true, body: 'Qual é a propriedade? Vira local de estoque.' },
     { key: 'producerName', label: 'Fornecedor (produtor)', catalog: 'producer', odoo: true, body: 'Qual é o fornecedor (produtor)?' },
-    { key: 'plotName', label: 'Talhão', required: true, odoo: true, body: 'Qual é o talhão? Vira local de estoque.' },
-    { key: 'plotArea', label: 'Área do talhão (ha)', body: 'Qual a área do talhão em hectares?' },
+    {
+      key: 'plotName',
+      label: 'Código do talhão',
+      required: true,
+      odoo: true,
+      body: 'Qual é o código do talhão/área? (ex.: 1 ou A1). Vira local de estoque.',
+    },
     { key: 'productName', label: 'Produto', required: true, catalog: 'product', odoo: true, body: 'Qual produto do inventário foi plantado?' },
     { key: 'unit', label: 'Unidade', odoo: true, body: 'Qual a unidade do produto? (ex.: KG)' },
-    { key: 'areaPlanned', label: 'Área plantada (ha)', required: true, body: 'Quantos hectares foram plantados?' },
     { key: 'plantedOn', label: 'Data do plantio', required: true, body: 'Qual a data do plantio? (dd/mm/aaaa ou hoje)' },
-    { key: 'forecastOn', label: 'Previsão de colheita', body: 'Qual a previsão de colheita? (dd/mm/aaaa)' },
-    { key: 'forecastQty', label: 'Estimativa da safra', body: 'Qual a estimativa da safra?' },
     { key: 'notes', label: 'Observações', body: 'Alguma observação?' },
   ],
   agro_colheita: [
@@ -43,11 +45,16 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
   ],
   agro_entrega: [
     { key: 'planting', label: 'Plantio', required: true, body: 'De qual plantio é a entrega? (propriedade ou produto)' },
-    { key: 'partnerName', label: 'Comprador', required: true, catalog: 'buyer', odoo: true, body: 'Para qual cliente?' },
+    {
+      key: 'partnerName',
+      label: 'Local de entrega',
+      required: true,
+      catalog: 'buyer',
+      odoo: true,
+      body: 'Qual o local de entrega? (Sacolão, Escola Municipal, Escola Estadual, Coara…)',
+    },
     { key: 'deliveredOn', label: 'Data', required: true, body: 'Qual a data da entrega? (dd/mm/aaaa ou hoje)' },
     { key: 'quantity', label: 'Quantidade', required: true, odoo: true, body: 'Qual a quantidade entregue?' },
-    { key: 'unitPrice', label: 'Valor unitário', odoo: true, body: 'Qual o valor unitário? (vazio usa o preço do produto)' },
-    { key: 'document', label: 'Documento', odoo: true, body: 'Qual o documento? (NF ou romaneio). Vazio usa o pedido do Odoo.' },
     { key: 'notes', label: 'Observações', body: 'Alguma observação?' },
   ],
 };

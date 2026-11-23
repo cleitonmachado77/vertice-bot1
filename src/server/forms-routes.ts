@@ -345,6 +345,8 @@ export function registerFormsRoutes(): void {
         weight: text(input.weight),
         qty_on_hand: text(input.qty_on_hand),
         track_inventory: text(input.track_inventory) || 'True',
+        cycle_days: text(input.cycle_days),
+        yield_per_ha: text(input.yield_per_ha),
       });
       await markDocSyncPending(item.id).catch(() => undefined);
       json(ctx.res, 200, { item, sync_status: 'syncing' });
@@ -370,6 +372,8 @@ export function registerFormsRoutes(): void {
         weight: text(input.weight),
         qty_on_hand: text(input.qty_on_hand),
         track_inventory: text(input.track_inventory) || 'True',
+        cycle_days: text(input.cycle_days),
+        yield_per_ha: text(input.yield_per_ha),
       });
       await markDocSyncPending(item.id).catch(() => undefined);
       json(ctx.res, 200, { item, sync_status: 'syncing' });
