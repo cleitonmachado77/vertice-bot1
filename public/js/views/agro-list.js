@@ -295,7 +295,7 @@ export function shell(tab) {
       <div id="agro-body"></div>
     </div>`;
   }
-  const presets = tab === 'custos' ? '' : `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
+  const presets = `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
   return `
     <div class="view-pane forms-pane agro-pane">
       <div class="forms-toolbar">

@@ -307,7 +307,7 @@ function updateToolbar(root) {
   }
   actions.removeAttribute('id');
   const presets =
-    currentTab === 'custos' ? '' : `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
+    `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
   actions.innerHTML = `
     ${presets}
     <button class="btn" type="button" data-new="${escapeHtml(currentTab)}">Novo</button>`;

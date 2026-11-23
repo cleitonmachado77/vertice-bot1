@@ -130,8 +130,9 @@ export async function runQuestionnaireDispatches(): Promise<QuestionnaireDispatc
         });
         continue;
       }
-      // Menu ligado: os formulários do contato viram uma única mensagem com o menu (enviada após o laço).
-      if (menuMode && isFormsBotQuestionnaire(questionnaire)) {
+      // Menu ligado: Forms + Agro do contato viram uma única mensagem de menu (enviada após o laço).
+      const isAgroPreset = String(questionnaire.id || '').startsWith('agro-preset:');
+      if (menuMode && (isFormsBotQuestionnaire(questionnaire) || isAgroPreset)) {
         const batch = menuBatches.get(item.contact_id) || {
           item,
           templateId: questionnaire.template_id || '',

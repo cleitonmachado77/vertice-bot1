@@ -118,7 +118,16 @@ function paintEditor(tab, pack, preset) {
           <label>Template Meta (janela 24h)
             <select name="bot_template_id"><option value="">Automático (template padrão)</option></select>
           </label>
-          <p class="muted">Fica no menu do WhatsApp deste contato. O lembrete sai no horário do Vertice Bot.</p>
+          <p class="muted">Fica no menu do WhatsApp deste contato. Em dias úteis o menu sai no horário abaixo (ou no horário próprio do contato).</p>
+          <label>Frequência
+            <select name="bot_frequency">
+              <option value="weekdays" ${(preset?.bot_frequency || 'weekdays') === 'weekdays' ? 'selected' : ''}>Dias úteis</option>
+              <option value="daily" ${preset?.bot_frequency === 'daily' ? 'selected' : ''}>Todos os dias</option>
+            </select>
+          </label>
+          <label>Horário
+            <input name="bot_send_time" type="time" value="${escapeHtml(preset?.bot_send_time || '15:20')}" required>
+          </label>
           <label class="forms-preset-show">
             <input type="checkbox" name="confirm_before_close" value="1" ${preset?.bot_rules?.confirm_before_close ? 'checked' : ''}>
             <span>Pedir confirmação antes de registrar</span>
@@ -261,6 +270,8 @@ async function savePreset(event, tab, pack, preset) {
     bot_enabled: data.get('bot_enabled') === '1',
     bot_contact_id: String(data.get('bot_contact_id') || ''),
     bot_template_id: String(data.get('bot_template_id') || ''),
+    bot_frequency: String(data.get('bot_frequency') || 'weekdays'),
+    bot_send_time: String(data.get('bot_send_time') || '15:20'),
     bot_rules: { confirm_before_close: data.get('confirm_before_close') === '1' },
   };
   const button = form.querySelector('[type=submit]');

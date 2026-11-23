@@ -10,11 +10,11 @@ import {
   isAgroBotKind,
 } from './agro-bot-fields.js';
 import { saveDelivery, saveHarvest, savePlanting } from './agro.js';
-import { listPlantings, type AgroPlanting } from './agro-model.js';
+import { saveCost } from './agro-costs.js';
+import { listPlantings, type AgroPlanting, type AgroProduct } from './agro-model.js';
 import { deleteAgroPreset, getAgroPresetById, type AgroPreset } from './agro-presets.js';
 import { enqueueOutbound } from './outbound-outbox.js';
 import { normalizeWhatsappPhone } from './phone.js';
-import { formsReminderSchedule } from './forms-reminder.js';
 import { CONFIRM_QUESTION_BODY } from './forms-bot-fields.js';
 import {
   getQuestionnaire,
@@ -52,14 +52,13 @@ export async function syncAgroBotQuestionnaire(preset: AgroPreset): Promise<Ques
   }
   const contact = await resolveContact(preset.bot_contact_id);
   const existing = await getQuestionnaire(questionnaireId, true);
-  const schedule = formsReminderSchedule();
   const saved = await upsertQuestionnaire({
     id: questionnaireId,
     name: `[Agro] ${AGRO_BOT_LABELS[preset.kind]} · ${preset.name}`,
     greeting: `Oi {{1}}! ${AGRO_BOT_LABELS[preset.kind]} — ${preset.name}`,
-    frequency: schedule.frequency,
-    weekday: schedule.weekday,
-    sendTime: schedule.sendTime,
+    frequency: preset.bot_frequency === 'weekly' ? 'weekly' : preset.bot_frequency,
+    weekday: preset.bot_weekday,
+    sendTime: preset.bot_send_time,
     templateId: preset.bot_template_id || existing?.template_id || '',
     active: true,
     defaultValues: defaultsFor(preset),
@@ -127,6 +126,85 @@ export async function materializeAgroFromCycle(cycleId: string): Promise<void> {
   if (preset.kind === 'agro_plantio') await savePlantingFromBot(preset.company_odoo_id, cycleId, values, today);
   if (preset.kind === 'agro_colheita') await saveHarvestFromBot(preset.company_odoo_id, cycleId, values, today);
   if (preset.kind === 'agro_entrega') await saveDeliveryFromBot(preset.company_odoo_id, cycleId, values, today);
+  if (preset.kind === 'agro_custo') await saveCostFromBot(preset.company_odoo_id, values, today);
+}
+
+function fold(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findCatalogProduct(products: AgroProduct[], raw: string): AgroProduct | undefined {
+  const needle = fold(raw);
+  if (!needle) return undefined;
+  const exact = products.find(
+    (item) => fold(item.name) === needle || fold(item.sigla || '') === needle,
+  );
+  if (exact) return exact;
+  return products.find(
+    (item) =>
+      (item.sigla && fold(item.sigla) === needle) ||
+      fold(item.name).includes(needle) ||
+      (item.sigla && needle.includes(fold(item.sigla))),
+  );
+}
+
+function plotMatches(planting: AgroPlanting, plotRaw: string): boolean {
+  const needle = fold(plotRaw);
+  if (!needle) return true;
+  const code = fold(planting.plotName.split('·')[0] || planting.plotName);
+  const full = fold(planting.plotName);
+  return code === needle || full === needle || full.includes(needle) || needle.includes(code);
+}
+
+function pickPlanting(
+  plantings: AgroPlanting[],
+  values: { productName?: string; plotName?: string; planting?: string },
+  products: AgroProduct[],
+): AgroPlanting {
+  const pool = plantings.filter((item) => item.status !== 'colhido');
+  const source = pool.length ? pool : plantings;
+  const product = findCatalogProduct(products, values.productName || '');
+  const productNeedle = fold(values.productName || '');
+  const plotNeedle = fold(values.plotName || '');
+  const legacy = fold(values.planting || '');
+
+  let hits = source;
+  if (product || productNeedle) {
+    hits = hits.filter((item) => {
+      if (product && item.productId === product.id) return true;
+      const name = fold(item.productName);
+      const sigla = fold(product?.sigla || '');
+      return (
+        name === productNeedle ||
+        (sigla && name.includes(sigla)) ||
+        (productNeedle && name.includes(productNeedle)) ||
+        (sigla && productNeedle === sigla)
+      );
+    });
+  }
+  if (plotNeedle) hits = hits.filter((item) => plotMatches(item, plotNeedle));
+  if (!hits.length && legacy) {
+    hits = source.filter((item) => {
+      const hay = fold(`${item.propertyName} ${item.plotName} ${item.productName}`);
+      return hay.includes(legacy) || legacy.includes(fold(item.productName));
+    });
+  }
+  if (!hits.length) {
+    if (!productNeedle && !plotNeedle && !legacy && source.length === 1) return source[0];
+    throw new Error('Plantio não encontrado para produto/área informados');
+  }
+  if (hits.length > 1 && !plotNeedle) {
+    // Prefer exact product match; if still many, require area.
+    const exact = product ? hits.filter((item) => item.productId === product.id) : hits;
+    if (exact.length === 1) return exact[0];
+    throw new Error('Há mais de um plantio. Informe também a área (ex.: 1 ou A1)');
+  }
+  return hits[0];
 }
 
 async function savePlantingFromBot(
@@ -137,7 +215,7 @@ async function savePlantingFromBot(
 ): Promise<void> {
   const catalog = await listAgroCatalog(companyId);
   const named = values.productName || '';
-  const product = catalog.products.find((item) => item.name.toLowerCase() === named.toLowerCase());
+  const product = findCatalogProduct(catalog.products, named);
   const existing = await one<{ id: string }>(
     `SELECT id FROM agro_plantings WHERE source_cycle_id = $1`,
     [cycleId],
@@ -151,39 +229,15 @@ async function savePlantingFromBot(
       plotId: '__new__',
       plotName: values.plotName || '',
       productId: product?.id || '__custom__',
-      productName: named,
+      productName: product?.name || named,
       unit: values.unit || product?.uom || '',
       plantedOn: agroAnswerDate(values.plantedOn || '', today),
+      forecastQty: values.forecastQty || '',
       notes: values.notes || '',
     },
     existing?.id || '',
   );
   await run(`UPDATE agro_plantings SET source_cycle_id = $2 WHERE id = $1`, [saved.id, cycleId]);
-}
-
-function fold(value: string): string {
-  return value
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function pickPlanting(plantings: AgroPlanting[], text: string): AgroPlanting {
-  const needle = fold(text);
-  const pool = plantings.filter((item) => item.status !== 'colhido');
-  const source = pool.length ? pool : plantings;
-  if (!needle) {
-    if (source.length === 1) return source[0];
-    throw new Error('Informe a propriedade ou a cultura do plantio');
-  }
-  const hits = source.filter((item) => {
-    const hay = fold(`${item.propertyName} ${item.plotName} ${item.productName}`);
-    return hay.includes(needle) || needle.includes(fold(item.productName)) || needle.includes(fold(item.propertyName));
-  });
-  if (!hits.length) throw new Error('Plantio não encontrado para essa resposta');
-  return hits[0];
 }
 
 async function saveHarvestFromBot(
@@ -192,7 +246,8 @@ async function saveHarvestFromBot(
   values: Record<string, string>,
   today: string,
 ): Promise<void> {
-  const planting = pickPlanting(await listPlantings(companyId), values.planting || '');
+  const catalog = await listAgroCatalog(companyId);
+  const planting = pickPlanting(await listPlantings(companyId), values, catalog.products);
   const existing = await one<{ id: string }>(`SELECT id FROM agro_harvests WHERE source_cycle_id = $1`, [cycleId]);
   const saved = await saveHarvest(
     companyId,
@@ -214,10 +269,10 @@ async function saveDeliveryFromBot(
   values: Record<string, string>,
   today: string,
 ): Promise<void> {
-  const planting = pickPlanting(await listPlantings(companyId), values.planting || '');
   const catalog = await listAgroCatalog(companyId);
+  const planting = pickPlanting(await listPlantings(companyId), values, catalog.products);
   const named = values.partnerName || '';
-  const buyer = catalog.buyers.find((item) => item.name.toLowerCase() === named.toLowerCase());
+  const buyer = catalog.buyers.find((item) => fold(item.name) === fold(named));
   const existing = await one<{ id: string }>(`SELECT id FROM agro_deliveries WHERE source_cycle_id = $1`, [cycleId]);
   const saved = await saveDelivery(
     companyId,
@@ -232,6 +287,34 @@ async function saveDeliveryFromBot(
     existing?.id || '',
   );
   await run(`UPDATE agro_deliveries SET source_cycle_id = $2 WHERE id = $1`, [saved.id, cycleId]);
+}
+
+async function saveCostFromBot(
+  companyId: string,
+  values: Record<string, string>,
+  today: string,
+): Promise<void> {
+  const plotCode = String(values.plotName || '').trim();
+  if (!plotCode) throw new Error('Informe a área (talhão)');
+  const plot = await one<{ id: string }>(
+    `SELECT pl.id
+     FROM agro_plots pl
+     JOIN agro_properties pr ON pr.id = pl.property_id
+     WHERE pr.company_odoo_id = $1 AND pl.active = 1 AND pr.active = 1
+       AND (lower(pl.code) = lower($2) OR lower(pl.name) = lower($2))
+     ORDER BY lower(pl.code) ASC
+     LIMIT 1`,
+    [companyId, plotCode],
+  );
+  if (!plot) throw new Error(`Área "${plotCode}" não encontrada. Cadastre o talhão em Configurações.`);
+  await saveCost(companyId, {
+    plotId: plot.id,
+    costOn: agroAnswerDate(values.costOn || '', today),
+    name: values.name || '',
+    quantity: values.quantity || '',
+    unitPrice: '',
+    notes: values.notes || '',
+  });
 }
 
 export async function sendAgroBotPresetNow(companyId: string, presetId: string): Promise<{ phone: string }> {

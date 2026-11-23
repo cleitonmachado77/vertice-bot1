@@ -1,12 +1,13 @@
 /** Perguntas do Vertice Bot para o Agro. O padrão escolhe quais campos aparecem. */
 
-export const AGRO_BOT_KINDS = ['agro_plantio', 'agro_colheita', 'agro_entrega'] as const;
+export const AGRO_BOT_KINDS = ['agro_plantio', 'agro_colheita', 'agro_entrega', 'agro_custo'] as const;
 export type AgroBotKind = (typeof AGRO_BOT_KINDS)[number];
 
 export const AGRO_BOT_LABELS: Record<AgroBotKind, string> = {
   agro_plantio: 'Plantio',
   agro_colheita: 'Colheita',
   agro_entrega: 'Entrega',
+  agro_custo: 'Custos',
 };
 
 export type AgroBotField = {
@@ -22,29 +23,89 @@ export type AgroBotField = {
 
 export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
   agro_plantio: [
-    { key: 'propertyName', label: 'Propriedade', required: true, odoo: true, body: 'Qual é a propriedade? Vira local de estoque.' },
+    { key: 'propertyName', label: 'Propriedade', required: true, odoo: true, body: 'Qual é a propriedade?' },
     { key: 'producerName', label: 'Fornecedor (produtor)', catalog: 'producer', odoo: true, body: 'Qual é o fornecedor (produtor)?' },
     {
+      key: 'plantedOn',
+      label: 'Data do plantio',
+      required: true,
+      body: 'Qual a data do plantio? (hoje ou dd/mm/aaaa)',
+    },
+    {
+      key: 'productName',
+      label: 'Produto (sigla)',
+      required: true,
+      catalog: 'product',
+      odoo: true,
+      body: 'Qual o produto? (sigla, ex.: ABA, CEN)',
+    },
+    { key: 'unit', label: 'Unidade', odoo: true, body: 'Qual a unidade do produto? (ex.: KG)' },
+    {
+      key: 'forecastQty',
+      label: 'Produção estimada',
+      required: true,
+      body: 'Qual a produção estimada? (número)',
+    },
+    {
       key: 'plotName',
-      label: 'Código do talhão',
+      label: 'Área (talhão)',
       required: true,
       odoo: true,
-      body: 'Qual é o código do talhão/área? (ex.: 1 ou A1). Vira local de estoque.',
+      body: 'Qual a área? (código, ex.: 1 ou A1)',
     },
-    { key: 'productName', label: 'Produto', required: true, catalog: 'product', odoo: true, body: 'Qual produto do inventário foi plantado?' },
-    { key: 'unit', label: 'Unidade', odoo: true, body: 'Qual a unidade do produto? (ex.: KG)' },
-    { key: 'plantedOn', label: 'Data do plantio', required: true, body: 'Qual a data do plantio? (dd/mm/aaaa ou hoje)' },
     { key: 'notes', label: 'Observações', body: 'Alguma observação?' },
   ],
   agro_colheita: [
-    { key: 'planting', label: 'Plantio', required: true, body: 'De qual plantio é a colheita? (propriedade ou produto)' },
-    { key: 'harvestedOn', label: 'Data', required: true, body: 'Qual a data da colheita? (dd/mm/aaaa ou hoje)' },
-    { key: 'quantity', label: 'Quantidade', required: true, odoo: true, body: 'Qual a quantidade colhida? Entra no estoque do talhão.' },
+    {
+      key: 'harvestedOn',
+      label: 'Data',
+      required: true,
+      body: 'Qual a data da colheita? (hoje ou dd/mm/aaaa)',
+    },
+    {
+      key: 'productName',
+      label: 'Produto (sigla)',
+      required: true,
+      catalog: 'product',
+      body: 'Qual o produto colhido? (sigla, ex.: ABA, CEN)',
+    },
+    {
+      key: 'quantity',
+      label: 'Quantidade',
+      required: true,
+      odoo: true,
+      body: 'Qual a quantidade colhida?',
+    },
+    {
+      key: 'plotName',
+      label: 'Área (talhão)',
+      required: true,
+      body: 'Qual a área? (código, ex.: 1 ou A1)',
+    },
     { key: 'close', label: 'Encerrar', body: 'Encerrar a colheita deste plantio? (sim ou não)' },
     { key: 'notes', label: 'Observações', body: 'Alguma observação?' },
   ],
   agro_entrega: [
-    { key: 'planting', label: 'Plantio', required: true, body: 'De qual plantio é a entrega? (propriedade ou produto)' },
+    {
+      key: 'deliveredOn',
+      label: 'Data',
+      required: true,
+      body: 'Qual a data da entrega? (hoje ou dd/mm/aaaa)',
+    },
+    {
+      key: 'productName',
+      label: 'Produto (sigla)',
+      required: true,
+      catalog: 'product',
+      body: 'Qual o produto entregue? (sigla, ex.: ABA, CEN)',
+    },
+    {
+      key: 'quantity',
+      label: 'Quantidade',
+      required: true,
+      odoo: true,
+      body: 'Qual a quantidade entregue?',
+    },
     {
       key: 'partnerName',
       label: 'Local de entrega',
@@ -53,8 +114,38 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
       odoo: true,
       body: 'Qual o local de entrega? (Sacolão, Escola Municipal, Escola Estadual, Coara…)',
     },
-    { key: 'deliveredOn', label: 'Data', required: true, body: 'Qual a data da entrega? (dd/mm/aaaa ou hoje)' },
-    { key: 'quantity', label: 'Quantidade', required: true, odoo: true, body: 'Qual a quantidade entregue?' },
+    {
+      key: 'plotName',
+      label: 'Área (talhão)',
+      body: 'Qual a área de origem? (código, ex.: 1 ou A1 — opcional se só houver um plantio)',
+    },
+    { key: 'notes', label: 'Observações', body: 'Alguma observação?' },
+  ],
+  agro_custo: [
+    {
+      key: 'costOn',
+      label: 'Data',
+      required: true,
+      body: 'Qual a data do custo? (hoje ou dd/mm/aaaa)',
+    },
+    {
+      key: 'name',
+      label: 'Nome do custo',
+      required: true,
+      body: 'Qual o nome do custo? (ex.: adubo, veneno)',
+    },
+    {
+      key: 'quantity',
+      label: 'Quantidade / valor',
+      required: true,
+      body: 'Qual a quantidade ou valor do custo?',
+    },
+    {
+      key: 'plotName',
+      label: 'Área (talhão)',
+      required: true,
+      body: 'Qual a área? (código, ex.: 1 ou A1)',
+    },
     { key: 'notes', label: 'Observações', body: 'Alguma observação?' },
   ],
 };
@@ -77,6 +168,7 @@ export function isAgroBotField(kind: string, key: string): boolean {
 export function agroTabKind(tab: string): AgroBotKind {
   if (tab === 'colheita' || tab === 'agro_colheita') return 'agro_colheita';
   if (tab === 'entrega' || tab === 'agro_entrega') return 'agro_entrega';
+  if (tab === 'custos' || tab === 'custo' || tab === 'agro_custo') return 'agro_custo';
   return 'agro_plantio';
 }
 
