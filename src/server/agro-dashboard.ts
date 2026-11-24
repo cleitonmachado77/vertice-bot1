@@ -139,13 +139,17 @@ export async function agroDashboard(
     if (isActivePlanting(item.status)) {
       plantedAreaHa += Number(item.areaPlanned || 0);
       estimatedQty += Number(item.forecastQty || 0);
+      // Mesma base do KPI: estimativa dos plantios ativos (não só forecastOn no mês).
+      if (Number(item.forecastQty || 0) > 0) {
+        addMap(forecastByProduct, label, Number(item.forecastQty || 0));
+      }
     }
 
     if (inPeriod(item.plantedOn, periodMonth, periodYear)) {
-      addMap(plantingByProduct, label, Number(item.forecastQty || 0));
+      const planted = Number(item.plantedQty ?? item.forecastQty ?? 0);
+      if (planted > 0) addMap(plantingByProduct, label, planted);
     }
     if (item.forecastQty != null && item.forecastOn && inPeriod(item.forecastOn, periodMonth, periodYear)) {
-      addMap(forecastByProduct, label, Number(item.forecastQty || 0));
       forecastTimeline.push({
         product: label,
         date: item.forecastOn,

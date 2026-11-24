@@ -28,7 +28,7 @@ const PRESETS: AgroPresetInput[] = [
       propertyName: 'Fazenda Wagner',
       producerName: 'Wagner',
     },
-    visible: ['propertyName', 'producerName', 'plantedOn', 'productName', 'forecastQty', 'plotName'],
+    visible: ['propertyName', 'producerName', 'plantedOn', 'productName', 'plantedQty', 'plotName'],
   },
   {
     kind: 'agro_colheita',

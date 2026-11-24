@@ -22,6 +22,7 @@ import {
 import { ensureCycleMaterialized, formsBotCompletionNote } from './forms-bot.js';
 import { missingPromptFor, questionIdForCatalogList } from './forms-bot-capture.js';
 import { tryFormsCatalogListReply } from './forms-bot-catalog-context.js';
+import { formatAgroCatalogList, matchAgroCatalogAsk } from './agro-bot-catalog.js';
 import {
   confirmStoredAnswer,
   draftQuestionnaireReply,
@@ -449,6 +450,27 @@ async function answerInboundTransaction(input: AnswerInboundInput): Promise<Agen
           }
         : cycle
           ? await (async () => {
+              if (String(cycle.questionnaire.id || '').startsWith('agro-preset:')) {
+                const agroAsk = matchAgroCatalogAsk(inboundText);
+                if (agroAsk) {
+                  const companyId =
+                    String(cycle.questionnaire.companyOdooId || '').trim() ||
+                    getSetting('odoo_active_company_id', '1') ||
+                    '1';
+                  const agroList = await formatAgroCatalogList(companyId, agroAsk);
+                  await rememberCyclePrompt(
+                    cycle.cycle.id,
+                    cycle.missing[0]?.id || cycle.questionnaire.questions[0]?.id || '',
+                    'reply: lista de catálogo Agro',
+                  );
+                  return {
+                    text: `${agroList}\n\nQuando terminar, responda a pergunta atual.`,
+                    source: 'fallback' as const,
+                    detail: `listagem de catálogo Agro (${agroAsk})`,
+                    completed: cycle.cycle.status === 'completed',
+                  };
+                }
+              }
               const catalogList = await tryFormsCatalogListReply({
                 inbound: inboundText,
                 questionnaire: cycle.questionnaire,

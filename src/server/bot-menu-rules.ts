@@ -3,7 +3,7 @@ import { KIND_LABELS, isFormKind } from './forms-fields.js';
 
 // Menu numerado do WhatsApp: só guia até o formulário certo; a coleta segue no fluxo do questionário.
 
-export type MenuAction = 'node' | 'register' | 'correct' | 'view' | 'human' | 'back';
+export type MenuAction = 'node' | 'register' | 'correct' | 'view' | 'human' | 'back' | 'catalog';
 
 export type MenuOption = {
   key: string;
@@ -160,9 +160,12 @@ function formsInMenuOrder(forms: MenuForm[]): MenuForm[] {
   return KIND_ORDER.flatMap((kind) => forms.filter((form) => form.kind === kind));
 }
 
+function isRsuMenuKind(kind: string): boolean {
+  return isFormKind(kind);
+}
+
 /**
- * Menu principal: um item por padrão (nome que demos a ele) + atendente.
- * Sem rótulo de estado do dia: o usuário pode enviar informações quantas vezes quiser.
+ * Menu principal: separa Agro e RSU quando os dois existem; consultas Agro no fim.
  */
 export function buildMainMenu(input: {
   forms: MenuForm[];
@@ -170,13 +173,55 @@ export function buildMainMenu(input: {
   attendant: boolean;
   title: string;
 }): MenuNode {
-  const options: Omit<MenuOption, 'key'>[] = formsInMenuOrder(input.forms).map((form) => ({
-    label: form.name,
-    action: 'node' as const,
-    target: `form:${form.questionnaireId}`,
-  }));
+  const agro = input.forms.filter((form) => isAgroBotKind(form.kind));
+  const rsu = input.forms.filter((form) => isRsuMenuKind(form.kind));
+  const options: Omit<MenuOption, 'key'>[] = [];
+
+  if (agro.length && rsu.length) {
+    options.push({ label: 'Vertice Agro', action: 'node', target: 'group:agro' });
+    options.push({ label: 'Vertice RSU', action: 'node', target: 'group:rsu' });
+  } else {
+    for (const form of formsInMenuOrder(input.forms)) {
+      options.push({
+        label: form.name,
+        action: 'node',
+        target: `form:${form.questionnaireId}`,
+      });
+    }
+  }
+
+  if (agro.length) {
+    options.push({ label: 'Listar produtos', action: 'catalog', target: 'products' });
+    options.push({ label: 'Listar fornecedores', action: 'catalog', target: 'producers' });
+    options.push({ label: 'Listar áreas (talhões)', action: 'catalog', target: 'plots' });
+  }
+
   if (input.attendant) options.push({ label: 'Falar com um atendente', action: 'human' });
   return { node: 'main', parent: '', title: input.title, options: numbered(options) };
+}
+
+export function buildGroupMenu(
+  group: 'agro' | 'rsu',
+  forms: MenuForm[],
+  cycles: MenuCycle[],
+): MenuNode {
+  const ofGroup =
+    group === 'agro'
+      ? forms.filter((form) => isAgroBotKind(form.kind))
+      : forms.filter((form) => isRsuMenuKind(form.kind));
+  return {
+    node: `group:${group}`,
+    parent: 'main',
+    title: group === 'agro' ? 'Vertice Agro — escolha:' : 'Vertice RSU — escolha:',
+    options: numbered([
+      ...formsInMenuOrder(ofGroup).map((form) => ({
+        label: form.name,
+        action: 'node' as const,
+        target: `form:${form.questionnaireId}`,
+      })),
+      { label: 'Voltar', action: 'back' as const },
+    ]),
+  };
 }
 
 /** Só há uma ação útil (registrar): entra direto no formulário em vez de mostrar submenu de 1 item. */

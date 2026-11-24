@@ -7,6 +7,7 @@ import {
   deliveryTotal,
   derivePlantingForecast,
   stockDelta,
+  assertDateNotFuture,
   parseIsoDate,
   parseMoney,
   parseOptionalDate,
@@ -29,6 +30,8 @@ test('datas e quantidades do ciclo agrícola aceitam o formato usado na tela', (
   assert.equal(stockDelta(10, 10), 0);
   assert.throws(() => parseIsoDate('2026-02-31'), /data válida/);
   assert.throws(() => parseQuantity('0', 'Área planejada'), /maior que zero/);
+  assert.equal(assertDateNotFuture('2026-11-12', '2026-11-12', 'Data do plantio'), '2026-11-12');
+  assert.throws(() => assertDateNotFuture('2026-11-13', '2026-11-12', 'Data do plantio'), /não pode ser futura/);
 });
 
 test('entrega só sai da quantidade já colhida', () => {

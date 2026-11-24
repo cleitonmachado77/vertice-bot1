@@ -137,7 +137,7 @@ function productFilter(products, selected) {
     </label>`;
 }
 
-function sectionCard(id, title, hint = '') {
+function sectionCard(id, title, hint = '', emptyText = 'Sem dados neste período') {
   return `
     <section class="card agro-dash-card" data-chart="${escapeHtml(id)}">
       <header class="agro-dash-card-head">
@@ -146,7 +146,7 @@ function sectionCard(id, title, hint = '') {
       </header>
       <div class="agro-dash-chart-wrap">
         <canvas id="agro-chart-${escapeHtml(id)}" height="220" aria-label="${escapeHtml(title)}"></canvas>
-        <p class="agro-dash-empty muted" id="agro-chart-empty-${escapeHtml(id)}" hidden>Sem dados neste período</p>
+        <p class="agro-dash-empty muted" id="agro-chart-empty-${escapeHtml(id)}" hidden>${escapeHtml(emptyText)}</p>
       </div>
     </section>`;
 }
@@ -394,7 +394,7 @@ function paintChartsSync(Chart, data) {
 
   const pairs = [
     ['forecast', data.forecast?.byProduct || [], 'Estimativa', '#2e8b57', formatQty],
-    ['planting', data.plantingByProduct || [], 'Mudas', '#3d8b6e', formatQty],
+    ['planting', data.plantingByProduct || [], 'Plantado', '#3d8b6e', formatQty],
     ['harvest', data.harvestByProduct || [], 'Colheita', '#d4a017', formatQty],
     ['delivery', data.deliveryByProduct || [], 'Entrega', '#c45c26', formatQty],
     ['sales', data.salesByProduct || [], 'Venda (R$)', '#2b5aa8', formatMoney],
@@ -414,6 +414,19 @@ function paintChartsSync(Chart, data) {
         color,
         format,
       );
+      if (id === 'stock' && !(rows || []).some((item) => Number(item.value) > 0)) {
+        const emptyEl = document.getElementById('agro-chart-empty-stock');
+        const harvested = Number(data.summary?.harvestedQty || 0);
+        const delivered = Number(data.summary?.deliveredQty || 0);
+        if (emptyEl) {
+          emptyEl.textContent =
+            harvested > 0 && delivered >= harvested - 0.0001
+              ? 'Sem saldo: a colheita já foi entregue'
+              : harvested > 0
+                ? 'Sem saldo em estoque (colhido − entregue)'
+                : 'Sem saldo em estoque';
+        }
+      }
     } catch (error) {
       console.warn(`[agro-dash] falha no gráfico ${id}`, error);
       if (!chartInstances.has(canvas.id)) setChartEmpty(canvas, true);
@@ -465,12 +478,12 @@ async function paint(root, data, productFilterValue = '', epoch = agroDashEpoch)
   body.innerHTML = `
     <div class="stat-row agro-dash-stats" aria-label="Resumo agro">${summaryCards(data.summary)}</div>
     <div class="agro-dash-grid">
-      ${sectionCard('forecast', 'Estimativa de produção', 'Quantidades na data estimada')}
-      ${sectionCard('planting', 'Plantio', 'Quantidade prevista por produto no período')}
+      ${sectionCard('forecast', 'Estimativa de produção', 'Produção estimada dos plantios ativos')}
+      ${sectionCard('planting', 'Plantio', 'Quantidade plantada por produto no período')}
       ${sectionCard('harvest', 'Colheita', 'Unidade por produto')}
       ${sectionCard('delivery', 'Entrega', 'Unidade por produto')}
       ${sectionCard('sales', 'Venda', 'R$ por produto')}
-      ${sectionCard('stock', 'Estoque', 'Colhido − entregue por produto')}
+      ${sectionCard('stock', 'Estoque', 'Saldo atual: colhido − entregue', 'Sem saldo em estoque')}
       ${sectionCard('costs', 'Custos por área', 'Talhão')}
       ${sectionCard('revenue', 'Receita × Despesas por área', 'Colheita × preço médio vs custos')}
     </div>

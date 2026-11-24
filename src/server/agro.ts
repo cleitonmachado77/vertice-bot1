@@ -24,8 +24,10 @@ import { assignProducer, clip, resolveBuyer, resolvePlot, resolveProperty } from
 import { upsertPartner } from './forms-catalog.js';
 import { refreshAgroMirror } from './agro-mirror.js';
 import { ensureAgroSchema } from './agro-schema.js';
+import { zonedNow } from './clock.js';
 import {
   assertCanDeliver,
+  assertDateNotFuture,
   assertHarvestCoversDeliveries,
   deliveryTotal,
   derivePlantingForecast,
@@ -100,7 +102,7 @@ export async function savePlanting(
   id = '',
 ): Promise<AgroPlanting> {
   await ensureAgroSchema();
-  const plantedOn = parseIsoDate(input.plantedOn);
+  const plantedOn = assertDateNotFuture(parseIsoDate(input.plantedOn), zonedNow().date, 'Data do plantio');
   const notes = clip(input.notes, 500);
   const product = await syncAgroProduct(companyId, input);
   const current = id ? await getPlanting(companyId, id) : undefined;
@@ -114,6 +116,7 @@ export async function savePlanting(
   const params = await productAgroParams(companyId, product.id);
 
   let areaPlanned = 0;
+  let plantedQty: number | null = null;
   let forecastOn: string | null = null;
   let forecastQty: number | null = null;
 
@@ -133,15 +136,17 @@ export async function savePlanting(
       throw new Error('Cadastre a área do talhão em Configurações antes do plantio');
     }
 
+    plantedQty = parseOptionalQuantity(input.plantedQty, 'Quantidade plantada');
+
     const derived = derivePlantingForecast({
       plantedOn,
       areaHa: areaPlanned,
       cycleDays: params.cycleDays,
       yieldPerHa: params.yieldPerHa,
     });
-    forecastOn = parseOptionalDate(input.forecastOn) || derived.forecastOn;
-    forecastQty =
-      parseOptionalQuantity(input.forecastQty, 'Quantidade prevista') ?? derived.forecastQty;
+    // Previsão e estimativa são calculadas pelo produto; não aceitam edição manual.
+    forecastOn = derived.forecastOn;
+    forecastQty = derived.forecastQty;
     if (forecastOn && forecastOn < plantedOn) {
       throw new Error('A previsão de colheita não pode ser anterior ao plantio');
     }
@@ -150,11 +155,11 @@ export async function savePlanting(
       await run(
         `INSERT INTO agro_plantings(
            id, company_odoo_id, property_id, plot_id, product_id, product_name, unit,
-           area_planned, planted_on, forecast_on, forecast_qty, notes, status, created_at, updated_at
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)`,
+           area_planned, planted_qty, planted_on, forecast_on, forecast_qty, notes, status, created_at, updated_at
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
         [
           plantingId, companyId, propertyId, plotId, product.id, product.name, product.unit,
-          areaPlanned, plantedOn, forecastOn, forecastQty, notes, status, stamp,
+          areaPlanned, plantedQty, plantedOn, forecastOn, forecastQty, notes, status, stamp,
         ],
       );
       return;
@@ -162,11 +167,11 @@ export async function savePlanting(
     await run(
       `UPDATE agro_plantings SET
          property_id = $1, plot_id = $2, product_id = $3, product_name = $4, unit = $5,
-         area_planned = $6, planted_on = $7, forecast_on = $8, forecast_qty = $9,
-         notes = $10, status = $11, updated_at = $12
-       WHERE id = $13 AND company_odoo_id = $14`,
+         area_planned = $6, planted_qty = $7, planted_on = $8, forecast_on = $9, forecast_qty = $10,
+         notes = $11, status = $12, updated_at = $13
+       WHERE id = $14 AND company_odoo_id = $15`,
       [
-        propertyId, plotId, product.id, product.name, product.unit, areaPlanned, plantedOn,
+        propertyId, plotId, product.id, product.name, product.unit, areaPlanned, plantedQty, plantedOn,
         forecastOn, forecastQty, notes, status, stamp, plantingId, companyId,
       ],
     );

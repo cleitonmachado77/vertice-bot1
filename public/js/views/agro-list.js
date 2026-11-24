@@ -246,6 +246,7 @@ function listHtml(tab, data) {
       return `<tr data-search="${escapeHtml(search)}">
         <td>${dateBr(item.plantedOn)}</td>
         <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)} · ${escapeHtml(item.unit || '')}</span></td>
+        <td>${qty(item.plantedQty, item.unit)}</td>
         <td>${qty(item.forecastQty, item.unit)}</td>
         <td>${escapeHtml(item.propertyName)}</td>
         <td>${escapeHtml(item.producerName || '—')}</td>
@@ -258,7 +259,7 @@ function listHtml(tab, data) {
     })
     .join('');
   return table(
-    ['Data', 'Produto', 'Quantidade', 'Propriedade', 'Fornecedor', 'Talhão', 'Área', 'Colhido', 'Situação'],
+    ['Data', 'Produto', 'Plantado', 'Estimativa', 'Propriedade', 'Fornecedor', 'Talhão', 'Área', 'Colhido', 'Situação'],
     rows,
     'Nenhum plantio nesta empresa.',
   );

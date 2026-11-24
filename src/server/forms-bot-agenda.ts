@@ -169,9 +169,27 @@ export function formatFormsBotAgendaOffer(remaining: FormsBotAgendaItem[]): stri
 export async function formatFormsBotAgendaIntro(item: FormsBotAgendaItem): Promise<string> {
   const { buildFormsBotGuidedPrompt } = await import('./forms-bot-catalog-context.js');
   const { rememberCyclePrompt } = await import('./questionnaire-cycles.js');
+  const { agroLineExample } = await import('./agro-bot-catalog.js');
   const questions = item.context.missing.length
     ? item.context.missing
     : item.context.questionnaire.questions;
+  const kind = String(item.context.questionnaire.formKind || '');
+  const isAgro = String(item.context.questionnaire.id || '').startsWith('agro-preset:');
+  if (isAgro) {
+    const first = questions[0]?.body || 'Responda a primeira pergunta.';
+    const example = agroLineExample(kind);
+    await rememberCyclePrompt(item.context.cycle.id, questions[0]?.id || '', 'agenda: intro agro');
+    return [
+      `Certo! Vamos responder “${item.label}”:`,
+      '',
+      example,
+      '',
+      `Comece por: ${first}`,
+      'Você também pode pedir: listar produtos, listar fornecedores ou listar áreas.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
   const guided = await buildFormsBotGuidedPrompt({
     questionnaire: item.context.questionnaire,
     questions,

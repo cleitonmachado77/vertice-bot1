@@ -27,6 +27,14 @@ export function parseOptionalDate(value: unknown): string | null {
   return parseIsoDate(value);
 }
 
+/** Impede data futura (comparação em YYYY-MM-DD). */
+export function assertDateNotFuture(iso: string, todayIso: string, label = 'Data'): string {
+  const date = parseIsoDate(iso);
+  const today = parseIsoDate(todayIso);
+  if (date > today) throw new Error(`${label} não pode ser futura`);
+  return date;
+}
+
 function normalizeNumber(value: unknown): number {
   const raw = String(value ?? '').trim().replace(/\s/g, '');
   if (!raw) throw new Error('Informe um número');

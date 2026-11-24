@@ -172,8 +172,17 @@ async function createAgroTables(): Promise<void> {
        AND document ~ '^S[0-9]+$'`,
   );
   await run(`ALTER TABLE agro_plantings ADD COLUMN IF NOT EXISTS source_cycle_id TEXT NOT NULL DEFAULT ''`);
+  await run(`ALTER TABLE agro_plantings ADD COLUMN IF NOT EXISTS planted_qty DOUBLE PRECISION`);
   await run(`ALTER TABLE agro_harvests ADD COLUMN IF NOT EXISTS source_cycle_id TEXT NOT NULL DEFAULT ''`);
   await run(`ALTER TABLE agro_deliveries ADD COLUMN IF NOT EXISTS source_cycle_id TEXT NOT NULL DEFAULT ''`);
+  await run(`
+    DO $$ BEGIN
+      ALTER TABLE agro_plantings
+        ADD CONSTRAINT agro_plantings_planted_qty_nonneg
+        CHECK (planted_qty IS NULL OR planted_qty >= 0);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$
+  `);
   await run(
     `CREATE UNIQUE INDEX IF NOT EXISTS ux_agro_plantings_cycle
      ON agro_plantings(source_cycle_id) WHERE source_cycle_id <> ''`,

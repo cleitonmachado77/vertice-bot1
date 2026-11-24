@@ -109,7 +109,27 @@ function syncPlantingDerived(form, catalog) {
       ? Math.round(areaNum * yieldPerHa * 1000) / 1000
       : null;
   if (form.forecastOn) form.forecastOn.value = forecastOn;
-  if (form.forecastQty) form.forecastQty.value = forecastQty == null ? '' : String(forecastQty);
+  if (form.forecastQty) {
+    form.forecastQty.value = forecastQty == null ? '' : String(forecastQty);
+  }
+  const uomEl = form.querySelector('[data-forecast-uom]');
+  if (uomEl) {
+    const uom =
+      product?.uom ||
+      form.unit?.value ||
+      form.productId?.selectedOptions?.[0]?.getAttribute('data-uom') ||
+      '';
+    uomEl.textContent = uom ? String(uom) : '';
+  }
+  const plantedUom = form.querySelector('[data-planted-uom]');
+  if (plantedUom) {
+    const uom =
+      product?.uom ||
+      form.unit?.value ||
+      form.productId?.selectedOptions?.[0]?.getAttribute('data-uom') ||
+      '';
+    plantedUom.textContent = uom ? String(uom) : 'un';
+  }
   const hint = form.querySelector('[data-forecast-hint]');
   if (hint) {
     const missing = [];
@@ -117,8 +137,17 @@ function syncPlantingDerived(form, catalog) {
     if (!Number.isFinite(yieldPerHa) || yieldPerHa <= 0) missing.push('produtividade / ha');
     hint.textContent = missing.length
       ? `Preencha ${missing.join(' e ')} no cadastro do produto para calcular automaticamente.`
-      : 'Calculado pelos parâmetros do produto (dias e produtividade / ha).';
+      : 'Calculado pelos parâmetros do produto (dias e produtividade / ha). Não é editável.';
   }
+}
+
+function todayIsoLocal() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
 }
 
 export function syncPlantingForm(form, catalog) {
@@ -279,16 +308,27 @@ export function plantingFormHtml(item, catalog) {
         <label>Nome da cultura<input name="productName" maxlength="150" value="${escapeHtml(item && !item.productId ? item.productName : '')}"></label>
         <label>Unidade<input name="unit" maxlength="20" value="${escapeHtml(item?.unit || '')}" placeholder="kg, sc, t"></label>
       </div>
-      <label>Data do plantio<input name="plantedOn" type="date" required value="${escapeHtml(item?.plantedOn || '')}"></label>
+      <label>Data do plantio
+        <input name="plantedOn" type="date" required max="${todayIsoLocal()}" value="${escapeHtml(item?.plantedOn || '')}">
+      </label>
+      <label>Quantidade plantada
+        <span class="agro-input-with-unit">
+          <input name="plantedQty" inputmode="decimal" required value="${escapeHtml(item?.plantedQty ?? '')}" placeholder="Ex.: 5000">
+          <span class="agro-unit" data-planted-uom></span>
+        </span>
+      </label>
       <div class="grid-2">
         <label>Previsão de colheita
-          <input name="forecastOn" type="date" readonly value="${escapeHtml(item?.forecastOn || '')}">
+          <input class="agro-calculated" name="forecastOn" type="date" readonly tabindex="-1" value="${escapeHtml(item?.forecastOn || '')}">
         </label>
         <label>Estimativa da safra
-          <input name="forecastQty" inputmode="decimal" readonly value="${escapeHtml(item?.forecastQty ?? '')}" placeholder="Calculada pelo produto">
+          <span class="agro-input-with-unit">
+            <input class="agro-calculated" name="forecastQty" inputmode="decimal" readonly tabindex="-1" value="${escapeHtml(item?.forecastQty ?? '')}" placeholder="Calculada">
+            <span class="agro-unit" data-forecast-uom></span>
+          </span>
         </label>
       </div>
-      <p class="muted" data-forecast-hint>Calculado pelos parâmetros do produto (dias e produtividade / ha).</p>
+      <p class="muted" data-forecast-hint>Calculado pelos parâmetros do produto (dias e produtividade / ha). Não é editável.</p>
       ${
         item
           ? `<label>Situação

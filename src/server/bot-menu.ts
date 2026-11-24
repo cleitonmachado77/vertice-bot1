@@ -7,8 +7,10 @@ import {
   unskipFormsBotQuestionnaire,
 } from './forms-bot-agenda.js';
 import { formsAnswersSummary } from './forms-bot-closing.js';
+import { formatAgroCatalogList, isAgroCatalogKind } from './agro-bot-catalog.js';
 import {
   buildFormMenu,
+  buildGroupMenu,
   buildKindMenu,
   buildMainMenu,
   classifyOpenQuestion,
@@ -244,6 +246,23 @@ async function runOption(
     };
   }
 
+  if (option.action === 'catalog' && option.target && isAgroCatalogKind(option.target)) {
+    const companyId = await resolveAgroCompanyId(forms);
+    const text = await formatAgroCatalogList(companyId, option.target);
+    const node = buildMainMenu({
+      forms,
+      cycles,
+      attendant: ctx.settings.attendant,
+      title: ctx.settings.intro,
+    });
+    await saveMenuState(input.conversationId, node);
+    return {
+      handled: true,
+      text: `${text}\n\n${formatMenu(node, { hint: 'Menu principal:' })}`,
+      detail: `menu: catálogo ${option.target}`,
+    };
+  }
+
   const form = forms.find((item) => item.questionnaireId === option.target);
   if (!form) return ctx.showMain('Esse formulário não está mais disponível.');
   const context = await openCycleContext(form.questionnaireId, input.contactId, input.date);
@@ -302,6 +321,9 @@ function resolveNode(
   settings: BotMenuSettings,
   parent = 'main',
 ): MenuNode {
+  if (target === 'group:agro' || target === 'group:rsu') {
+    return buildGroupMenu(target === 'group:agro' ? 'agro' : 'rsu', forms, cycles);
+  }
   if (target.startsWith('kind:')) {
     const kind = target.slice('kind:'.length);
     if (isMenuFormKind(kind)) return buildKindMenu(kind, forms, cycles);
@@ -311,6 +333,16 @@ function resolveNode(
     if (form) return buildFormMenu(form, cycles, parent);
   }
   return buildMainMenu({ forms, cycles, attendant: settings.attendant, title: settings.intro });
+}
+
+async function resolveAgroCompanyId(forms: MenuForm[]): Promise<string> {
+  const agroId = forms.find((form) => form.questionnaireId.startsWith('agro-preset:'))?.questionnaireId;
+  if (!agroId) return getSetting('odoo_active_company_id', '1') || '1';
+  const row = await one<{ company_odoo_id: string }>(
+    `SELECT COALESCE(company_odoo_id, '') AS company_odoo_id FROM questionnaires WHERE id = $1`,
+    [agroId],
+  );
+  return row?.company_odoo_id || getSetting('odoo_active_company_id', '1') || '1';
 }
 
 async function showNode(conversationId: string, node: MenuNode): Promise<BotMenuResult> {

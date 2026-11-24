@@ -31,6 +31,34 @@
   min-height: 72px;
 }
 
+.agro-form input.agro-calculated[readonly],
+.agro-form .agro-calculated[readonly] {
+  background: color-mix(in srgb, var(--sheet, #f3f3f3) 80%, transparent);
+  color: var(--muted, #6b6b70);
+  cursor: default;
+  border-style: dashed;
+  pointer-events: none;
+}
+
+.agro-input-with-unit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agro-input-with-unit input {
+  flex: 1;
+  min-width: 0;
+}
+
+.agro-unit {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  color: var(--muted, #6b6b70);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
 .agro-form-actions {
   display: flex;
   flex-wrap: wrap;

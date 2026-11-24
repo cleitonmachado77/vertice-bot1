@@ -13,7 +13,7 @@ test('datas do WhatsApp do Agro viram o formato do registro', () => {
   assert.equal(isAgroBotKind('sale'), false);
 });
 
-test('padrão do Agro entra no menu do WhatsApp junto com os formulários', () => {
+test('menu principal separa Agro e RSU e oferece consultas Agro', () => {
   const forms = normalizeMenuForms([
     { questionnaire_id: 'forms-preset:p1', name: '[Forms] Compras · Ademir', form_kind: 'purchase' },
     { questionnaire_id: 'agro-preset:a1', name: '[Agro] Plantio · Semana', form_kind: 'agro_plantio' },
@@ -21,6 +21,12 @@ test('padrão do Agro entra no menu do WhatsApp junto com os formulários', () =
   const node = buildMainMenu({ forms, cycles: [], attendant: false, title: 'Menu' });
   assert.deepEqual(
     node.options.map((option) => option.label),
-    ['Ademir', 'Semana'],
+    [
+      'Vertice Agro',
+      'Vertice RSU',
+      'Listar produtos',
+      'Listar fornecedores',
+      'Listar áreas (talhões)',
+    ],
   );
 });

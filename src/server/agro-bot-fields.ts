@@ -41,10 +41,10 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
     },
     { key: 'unit', label: 'Unidade', odoo: true, body: 'Qual a unidade do produto? (ex.: KG)' },
     {
-      key: 'forecastQty',
-      label: 'Produção estimada',
+      key: 'plantedQty',
+      label: 'Quantidade plantada',
       required: true,
-      body: 'Qual a produção estimada? (número)',
+      body: 'Qual a quantidade plantada? (número, ex.: 5000)',
     },
     {
       key: 'plotName',
@@ -74,7 +74,7 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
       label: 'Quantidade',
       required: true,
       odoo: true,
-      body: 'Qual a quantidade colhida?',
+      body: 'Qual a quantidade colhida? (número, ex.: 200)',
     },
     {
       key: 'plotName',
@@ -104,7 +104,7 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
       label: 'Quantidade',
       required: true,
       odoo: true,
-      body: 'Qual a quantidade entregue?',
+      body: 'Qual a quantidade entregue? (número, ex.: 100)',
     },
     {
       key: 'partnerName',
@@ -138,7 +138,7 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
       key: 'quantity',
       label: 'Quantidade / valor',
       required: true,
-      body: 'Qual a quantidade ou valor do custo?',
+      body: 'Qual a quantidade ou valor do custo? (número, ex.: 150)',
     },
     {
       key: 'plotName',

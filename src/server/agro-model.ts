@@ -51,6 +51,7 @@ export type AgroPlanting = {
   productName: string;
   unit: string;
   areaPlanned: number;
+  plantedQty: number | null;
   plantedOn: string;
   forecastOn: string;
   forecastQty: number | null;
@@ -107,6 +108,7 @@ type PlantingRow = {
   product_name: string;
   unit: string;
   area_planned: number;
+  planted_qty: number | null;
   planted_on: string;
   forecast_on: string;
   forecast_qty: number | null;
@@ -121,7 +123,7 @@ const PLANTING_SQL = `
   SELECT p.id, p.property_id, pr.name AS property_name,
     COALESCE(pr.producer_partner_id, '') AS producer_partner_id, pr.producer_name,
     COALESCE(p.plot_id, '') AS plot_id, ${PLOT_LABEL_SQL} AS plot_name,
-    p.product_id, p.product_name, p.unit, p.area_planned,
+    p.product_id, p.product_name, p.unit, p.area_planned, p.planted_qty,
     to_char(p.planted_on, 'YYYY-MM-DD') AS planted_on,
     COALESCE(to_char(p.forecast_on, 'YYYY-MM-DD'), '') AS forecast_on,
     p.forecast_qty, p.notes, p.status,
@@ -164,6 +166,7 @@ function mapPlanting(row: PlantingRow): AgroPlanting {
     productName: row.product_name,
     unit: row.unit || '',
     areaPlanned: num(row.area_planned),
+    plantedQty: nullable(row.planted_qty),
     plantedOn: row.planted_on,
     forecastOn: row.forecast_on || '',
     forecastQty: nullable(row.forecast_qty),

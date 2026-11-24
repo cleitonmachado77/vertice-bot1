@@ -319,7 +319,7 @@ async function resolvePlantingForHarvest(
       productName: product.name,
       unit: product.uom || '',
       plantedOn,
-      forecastQty: values.quantity || '',
+      plantedQty: values.quantity || '',
       notes: 'Criado automaticamente a partir da colheita via Bot',
       status: 'em_colheita',
     });
@@ -351,7 +351,7 @@ async function savePlantingFromBot(
       productName: product?.name || named,
       unit: values.unit || product?.uom || '',
       plantedOn: agroAnswerDate(values.plantedOn || '', today),
-      forecastQty: values.forecastQty || '',
+      plantedQty: values.plantedQty || '',
       notes: values.notes || '',
     },
     existing?.id || '',
