@@ -42,10 +42,47 @@ export function formsHomeHash() {
   return isRsuDashboardAvailable() ? '#/forms/dashboard' : '#/forms/compras';
 }
 
+/**
+ * Nome curto para o seletor: marca/sigla principal, não a razão social longa.
+ * Ex.: "... Arapongas - COARA" → "COARA"; "... Cambé - RECICLA BRASIL" → "Reciclabrasil".
+ */
+export function principalCompanyName(name) {
+  const raw = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!raw) return '';
+
+  if (/^reciclarenda$/i.test(raw) || /^recicla\s*renda$/i.test(raw)) return 'Reciclarenda';
+  if (/\bcoara\b/i.test(raw)) return 'COARA';
+  if (/\brecicla\s*brasil\b/i.test(raw) || /\breciclabrasil\b/i.test(raw)) return 'Reciclabrasil';
+
+  const parts = raw
+    .split(/\s[-–—]\s/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 2) {
+    const tail = parts[parts.length - 1];
+    // Evita cair só em UF ("PR") ou sufixo genérico curto demais.
+    if (tail.length >= 3 && !/^(PR|SP|SC|RS|MG|RJ|BA|GO|DF)$/i.test(tail)) {
+      return compactBrand(tail);
+    }
+    return compactBrand(parts[0]);
+  }
+
+  if (raw.length <= 28) return compactBrand(raw);
+  return `${compactBrand(raw.slice(0, 25))}…`;
+}
+
+function compactBrand(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^recicla\s+brasil$/i.test(text)) return 'Reciclabrasil';
+  if (/^[A-Z0-9][A-Z0-9 ./-]{1,24}$/.test(text) && text === text.toUpperCase()) {
+    return text.replace(/\s+/g, '');
+  }
+  return text;
+}
+
 function shortName(name) {
-  const value = String(name || '').trim();
-  if (value.length <= 36) return value;
-  return `${value.slice(0, 33)}…`;
+  return principalCompanyName(name) || String(name || '').trim();
 }
 
 function readStored() {
@@ -205,8 +242,9 @@ function paintSwitcher(host, data, meta = {}) {
                 .map(
                   (item) => `
           <button type="button" class="company-switcher-option${item.id === active?.id ? ' is-active' : ''}"
-            role="option" data-company-id="${escapeHtml(item.id)}" aria-selected="${item.id === active?.id}">
-            <strong>${escapeHtml(item.name)}</strong>
+            role="option" data-company-id="${escapeHtml(item.id)}" aria-selected="${item.id === active?.id}"
+            title="${escapeHtml(item.name)}">
+            <strong>${escapeHtml(shortName(item.name))}</strong>
             <span>${escapeHtml([item.vat && `CNPJ ${item.vat}`, item.currency].filter(Boolean).join(' · ') || 'Odoo')}</span>
           </button>`,
                 )
