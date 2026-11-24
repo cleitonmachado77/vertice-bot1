@@ -60,12 +60,22 @@ function destroyCharts() {
   chartInstances.clear();
 }
 
+function toNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value && typeof value === 'object') {
+    const nested = value.y ?? value.value ?? value.qty;
+    if (typeof nested === 'number') return Number.isFinite(nested) ? nested : 0;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function formatQty(value) {
-  return Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+  return toNumber(value).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
 }
 
 function formatMoney(value) {
-  return Number(value || 0).toLocaleString('pt-BR', {
+  return toNumber(value).toLocaleString('pt-BR', {
     style: 'currency',
     currency: 'BRL',
     maximumFractionDigits: 2,
@@ -195,8 +205,8 @@ const barValueLabels = {
       const meta = chart.getDatasetMeta(datasetIndex);
       if (!meta || meta.hidden) return;
       meta.data.forEach((element, index) => {
-        const raw = Number(dataset.data[index]);
-        if (!Number.isFinite(raw) || raw === 0) return;
+        const raw = toNumber(dataset.data[index]);
+        if (!raw) return;
         const { x, y, base } = element.getProps(['x', 'y', 'base'], true);
         const text = format(raw);
         const barHeight = Math.abs(base - y);
