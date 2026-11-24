@@ -79,6 +79,18 @@ window.addEventListener('hashchange', () => {
 });
 
 window.addEventListener('vertice:company-changed', () => {
+  // No dashboard agro: recarrega só os indicadores (sem remontar shell) — mais rápido e evita race nos charts.
+  const agroView = document.querySelector('#agro-view');
+  const onAgroDash =
+    Boolean(agroView?._agroDashLoad) &&
+    /^#\/agro\/dashboard\/?$/.test(location.hash || '');
+  if (onAgroDash) {
+    drawnKey = `agro|dashboard|${getActiveCompanyId() || ''}`;
+    agroView
+      ._agroDashLoad({ resetProduct: true })
+      .catch((error) => showError(error));
+    return;
+  }
   drawnKey = '';
   draw().catch((error) => showError(error));
 });

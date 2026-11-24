@@ -222,6 +222,15 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
   setChartEmpty(canvas, !hasData);
   if (!hasData) return;
 
+  const existing = typeof Chart.getChart === 'function' ? Chart.getChart(canvas) : null;
+  if (existing) {
+    try {
+      existing.destroy();
+    } catch {
+      /* ignore */
+    }
+  }
+
   const chart = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -239,6 +248,7 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
       layout: { padding: { top: 22, right: 8 } },
       plugins: {
         legend: { display: false },
@@ -269,6 +279,7 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
     },
     plugins: [barValueLabels],
   });
+  chart.resize();
   chartInstances.set(canvas.id, chart);
 }
 
@@ -276,6 +287,15 @@ function makeGrouped(Chart, canvas, rows) {
   const hasData = rows.some((item) => Number(item.revenue) > 0 || Number(item.expense) > 0);
   setChartEmpty(canvas, !hasData);
   if (!hasData) return;
+
+  const existing = typeof Chart.getChart === 'function' ? Chart.getChart(canvas) : null;
+  if (existing) {
+    try {
+      existing.destroy();
+    } catch {
+      /* ignore */
+    }
+  }
 
   const chart = new Chart(canvas, {
     type: 'bar',
@@ -301,6 +321,7 @@ function makeGrouped(Chart, canvas, rows) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
       layout: { padding: { top: 22, right: 8 } },
       plugins: {
         legend: { position: 'bottom' },
@@ -327,17 +348,16 @@ function makeGrouped(Chart, canvas, rows) {
     },
     plugins: [barValueLabels],
   });
+  chart.resize();
   chartInstances.set(canvas.id, chart);
 }
 
-async function paintCharts(data, epoch) {
-  const { Chart } = await loadChartJs();
-  if (epoch !== agroDashEpoch) return;
+/** Pintura síncrona — sem await entre montar o DOM e criar os charts (evita canvas em branco). */
+function paintChartsSync(Chart, data) {
   Chart.defaults.color = '#6b6b70';
   Chart.defaults.borderColor = 'rgba(26, 26, 28, 0.06)';
   Chart.defaults.font.family = 'Outfit, "Segoe UI", sans-serif';
   destroyCharts();
-  if (epoch !== agroDashEpoch) return;
 
   const pairs = [
     ['forecast', data.forecast?.byProduct || [], 'Estimativa', '#2e8b57', formatQty],
@@ -349,7 +369,6 @@ async function paintCharts(data, epoch) {
     ['costs', data.costsByArea || [], 'Custos por área', '#8b4513', formatMoney],
   ];
   for (const [id, rows, label, color, format] of pairs) {
-    if (epoch !== agroDashEpoch) return;
     const canvas = document.getElementById(`agro-chart-${id}`);
     if (!canvas || !canvas.isConnected) continue;
     makeBar(
@@ -362,13 +381,33 @@ async function paintCharts(data, epoch) {
       format,
     );
   }
-  if (epoch !== agroDashEpoch) return;
   const revenueCanvas = document.getElementById('agro-chart-revenue');
   if (revenueCanvas?.isConnected) makeGrouped(Chart, revenueCanvas, data.revenueExpenseByArea || []);
 }
 
 async function paint(root, data, productFilterValue = '', epoch = agroDashEpoch) {
   if (epoch !== agroDashEpoch) return;
+
+  // Chart.js ANTES de tocar no DOM: se a epoch mudar no await, não deixamos cards vazios.
+  let Chart;
+  try {
+    ({ Chart } = await loadChartJs());
+  } catch (error) {
+    if (epoch !== agroDashEpoch) return;
+    destroyCharts();
+    const actions = root.querySelector('#agro-dash-actions') || root.querySelector('.forms-top-actions');
+    if (actions) {
+      actions.innerHTML = `${productFilter(data.products, productFilterValue)}${periodPicker(data.period)}`;
+    }
+    const body = root.querySelector('#agro-body');
+    if (!body) return;
+    body.innerHTML = `
+      <div class="stat-row agro-dash-stats" aria-label="Resumo agro">${summaryCards(data.summary)}</div>
+      <p class="muted agro-dash-chart-error">Gráficos indisponíveis: ${escapeHtml(error.message || 'falha ao carregar Chart.js')}</p>`;
+    return;
+  }
+  if (epoch !== agroDashEpoch) return;
+
   destroyCharts();
   const actions = root.querySelector('#agro-dash-actions') || root.querySelector('.forms-top-actions');
   if (actions) {
@@ -389,16 +428,8 @@ async function paint(root, data, productFilterValue = '', epoch = agroDashEpoch)
       ${sectionCard('revenue', 'Receita × Despesas por área', 'Colheita × preço médio vs custos')}
     </div>
     <p class="muted agro-dash-chart-error" id="agro-dash-chart-error" hidden></p>`;
-  try {
-    await paintCharts(data, epoch);
-  } catch (error) {
-    if (epoch !== agroDashEpoch) return;
-    const tip = body.querySelector('#agro-dash-chart-error');
-    if (tip) {
-      tip.hidden = false;
-      tip.textContent = `Gráficos indisponíveis: ${error.message || 'falha ao carregar Chart.js'}`;
-    }
-  }
+  if (epoch !== agroDashEpoch) return;
+  paintChartsSync(Chart, data);
 }
 
 export function stopAgroDashboard() {
@@ -409,6 +440,8 @@ export function stopAgroDashboard() {
 export async function renderAgroDashboard(root) {
   const epoch = (agroDashEpoch += 1);
   destroyCharts();
+  // Pré-aquece Chart.js em paralelo com o fetch (não bloqueia o DOM).
+  const chartWarm = loadChartJs().catch(() => null);
   const body = root.querySelector('#agro-body');
   if (body) body.innerHTML = `<p class="muted">Carregando indicadores…</p>`;
   const now = new Date();
@@ -430,7 +463,7 @@ export async function renderAgroDashboard(root) {
       year: String(state.year),
     });
     if (state.product) qs.set('productId', state.product);
-    const data = await api(`/api/agro/dashboard?${qs}`);
+    const [data] = await Promise.all([api(`/api/agro/dashboard?${qs}`), chartWarm]);
     if (loadEpoch !== agroDashEpoch) return;
     state.companyId = String(data.companyId || state.companyId || '');
     await paint(root, data, state.product, loadEpoch);

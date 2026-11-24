@@ -1,4 +1,3 @@
-import { listAgroCatalog } from './agro-catalog.js';
 import { listCosts } from './agro-costs.js';
 import { listDeliveries, listHarvests, listPlantings } from './agro-model.js';
 import { ensureAgroSchema } from './agro-schema.js';
@@ -18,6 +17,37 @@ function inPeriod(iso: string, month: number, year: number): boolean {
 
 function productLabel(name: string, sigla: string): string {
   return (sigla || name || '—').trim() || '—';
+}
+
+function parseProductHeader(raw: string): { sigla: string; salesPrice: number } {
+  try {
+    const value = JSON.parse(raw || '{}') as Record<string, unknown>;
+    const sigla = value.sigla == null ? '' : String(value.sigla).trim();
+    const salesPrice = Number(String(value.sales_price ?? '').replace(',', '.')) || 0;
+    return { sigla, salesPrice };
+  } catch {
+    return { sigla: '', salesPrice: 0 };
+  }
+}
+
+/** Só metadados dos produtos usados nos plantios — evita varrer o catálogo inteiro (~250+). */
+async function loadProductMeta(productIds: string[]) {
+  const ids = [...new Set(productIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  const siglaByProductId = new Map<string, string>();
+  const salesPriceByProductId = new Map<string, number>();
+  if (!ids.length) return { siglaByProductId, salesPriceByProductId };
+
+  const rows = await many<{ id: string; header_json: string }>(
+    `SELECT id, header_json FROM forms_documents
+     WHERE kind = 'product' AND id = ANY($1::text[])`,
+    [ids],
+  );
+  for (const row of rows) {
+    const header = parseProductHeader(row.header_json);
+    siglaByProductId.set(row.id, header.sigla);
+    salesPriceByProductId.set(row.id, header.salesPrice);
+  }
+  return { siglaByProductId, salesPriceByProductId };
 }
 
 function addMap(map: Map<string, number>, key: string, value: number) {
@@ -46,22 +76,18 @@ export async function agroDashboard(
   const periodYear = year >= 2000 && year <= 2100 ? year : now.getFullYear();
   const selectedProductId = String(productId || '').trim();
 
-  const [plantings, harvests, deliveries, costs, catalog] = await Promise.all([
+  const [plantings, harvests, deliveries, costs] = await Promise.all([
     listPlantings(companyId),
     listHarvests(companyId),
     listDeliveries(companyId),
     listCosts(companyId),
-    listAgroCatalog(companyId),
   ]);
+  const { siglaByProductId, salesPriceByProductId } = await loadProductMeta(
+    plantings.map((item) => item.productId),
+  );
 
   const matchProduct = (id: string) => !selectedProductId || id === selectedProductId;
 
-  const siglaByProductId = new Map(
-    (catalog.products || []).map((item) => [item.id, String(item.sigla || '').trim()]),
-  );
-  const salesPriceByProductId = new Map(
-    (catalog.products || []).map((item) => [item.id, Number(String(item.salesPrice || '').replace(',', '.')) || 0]),
-  );
   const labelOf = (id: string, productName: string) =>
     productLabel(productName, siglaByProductId.get(id) || '');
 
@@ -179,6 +205,7 @@ export async function agroDashboard(
     }))
     .sort((a, b) => b.revenue - a.revenue || a.label.localeCompare(b.label, 'pt-BR'));
 
+  // Filtro só com culturas que têm plantio nesta empresa (não o catálogo inteiro).
   const productOptions = new Map<string, { id: string; name: string; sigla: string; label: string }>();
   for (const item of plantings) {
     if (!item.productId || productOptions.has(item.productId)) continue;
@@ -187,15 +214,6 @@ export async function agroDashboard(
       name: item.productName,
       sigla: siglaByProductId.get(item.productId) || '',
       label: labelOf(item.productId, item.productName),
-    });
-  }
-  for (const item of catalog.products || []) {
-    if (productOptions.has(item.id)) continue;
-    productOptions.set(item.id, {
-      id: item.id,
-      name: item.name,
-      sigla: item.sigla || '',
-      label: productLabel(item.name, item.sigla || ''),
     });
   }
 
