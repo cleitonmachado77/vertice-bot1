@@ -206,28 +206,41 @@ function summaryCards(summary) {
 const barValueLabels = {
   id: 'barValueLabels',
   afterDatasetsDraw(chart) {
-    const { ctx, chartArea } = chart;
-    const format = chart.options.plugins?.barValueLabels?.format || formatQty;
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.font = '600 11px Outfit, "Segoe UI", sans-serif';
-    chart.data.datasets.forEach((dataset, datasetIndex) => {
-      const meta = chart.getDatasetMeta(datasetIndex);
-      if (!meta || meta.hidden) return;
-      meta.data.forEach((element, index) => {
-        const raw = toNumber(dataset.data[index]);
-        if (!raw) return;
-        const { x, y, base } = element.getProps(['x', 'y', 'base'], true);
-        const text = format(raw);
-        const barHeight = Math.abs(base - y);
-        const inside = barHeight > 22;
-        ctx.textBaseline = inside ? 'top' : 'bottom';
-        ctx.fillStyle = inside ? '#ffffff' : '#3a3a3e';
-        const ty = inside ? Math.min(y + 6, (chartArea?.bottom || y) - 4) : y - 4;
-        ctx.fillText(text, x, ty);
+    try {
+      const { ctx, chartArea } = chart;
+      if (!ctx) return;
+      const format = chart.options.plugins?.barValueLabels?.format || formatQty;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.font = '600 11px Outfit, "Segoe UI", sans-serif';
+      chart.data.datasets.forEach((dataset, datasetIndex) => {
+        const meta = chart.getDatasetMeta(datasetIndex);
+        if (!meta || meta.hidden) return;
+        meta.data.forEach((element, index) => {
+          if (!element || typeof element.getProps !== 'function') return;
+          const raw = toNumber(dataset.data[index]);
+          if (!raw) return;
+          const { x, y, base } = element.getProps(['x', 'y', 'base'], true);
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(base)) return;
+          let text = '';
+          try {
+            text = String(format(raw) ?? '');
+          } catch {
+            text = String(raw);
+          }
+          if (!text) return;
+          const barHeight = Math.abs(base - y);
+          const inside = barHeight > 22;
+          ctx.textBaseline = inside ? 'top' : 'bottom';
+          ctx.fillStyle = inside ? '#ffffff' : '#3a3a3e';
+          const ty = inside ? Math.min(y + 6, (chartArea?.bottom || y) - 4) : y - 4;
+          ctx.fillText(text, x, ty);
+        });
       });
-    });
-    ctx.restore();
+      ctx.restore();
+    } catch {
+      /* nunca derrubar o Chart por rótulo */
+    }
   },
 };
 
@@ -299,8 +312,8 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
     },
     plugins: [barValueLabels],
   });
-  chart.resize();
   chartInstances.set(canvas.id, chart);
+  setChartEmpty(canvas, false);
 }
 
 function makeGrouped(Chart, canvas, rows) {
@@ -368,8 +381,8 @@ function makeGrouped(Chart, canvas, rows) {
     },
     plugins: [barValueLabels],
   });
-  chart.resize();
   chartInstances.set(canvas.id, chart);
+  setChartEmpty(canvas, false);
 }
 
 /** Pintura síncrona — sem await entre montar o DOM e criar os charts (evita canvas em branco). */
@@ -403,7 +416,8 @@ function paintChartsSync(Chart, data) {
       );
     } catch (error) {
       console.warn(`[agro-dash] falha no gráfico ${id}`, error);
-      setChartEmpty(canvas, true);
+      if (!chartInstances.has(canvas.id)) setChartEmpty(canvas, true);
+      else setChartEmpty(canvas, false);
     }
   }
   const revenueCanvas = document.getElementById('agro-chart-revenue');
@@ -412,7 +426,8 @@ function paintChartsSync(Chart, data) {
       makeGrouped(Chart, revenueCanvas, data.revenueExpenseByArea || []);
     } catch (error) {
       console.warn('[agro-dash] falha no gráfico revenue', error);
-      setChartEmpty(revenueCanvas, true);
+      if (!chartInstances.has(revenueCanvas.id)) setChartEmpty(revenueCanvas, true);
+      else setChartEmpty(revenueCanvas, false);
     }
   }
 }
