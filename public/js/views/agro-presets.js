@@ -126,7 +126,7 @@ function paintEditor(tab, pack, preset) {
             </select>
           </label>
           <label>Horário
-            <input name="bot_send_time" type="time" value="${escapeHtml(preset?.bot_send_time || '15:20')}" required>
+            <input name="bot_send_time" type="time" value="${escapeHtml(preset?.bot_send_time || '13:30')}" required>
           </label>
           <label class="forms-preset-show">
             <input type="checkbox" name="confirm_before_close" value="1" ${preset?.bot_rules?.confirm_before_close ? 'checked' : ''}>
@@ -271,7 +271,7 @@ async function savePreset(event, tab, pack, preset) {
     bot_contact_id: String(data.get('bot_contact_id') || ''),
     bot_template_id: String(data.get('bot_template_id') || ''),
     bot_frequency: String(data.get('bot_frequency') || 'weekdays'),
-    bot_send_time: String(data.get('bot_send_time') || '15:20'),
+    bot_send_time: String(data.get('bot_send_time') || '13:30'),
     bot_rules: { confirm_before_close: data.get('confirm_before_close') === '1' },
   };
   const button = form.querySelector('[type=submit]');

@@ -1,6 +1,6 @@
 /**
  * Cadastra os padrões Agro da Coara (empresa 2) para o contato Wagner,
- * com menu agendado em dias úteis às 15:20.
+ * com menu agendado em dias úteis às 13:30.
  *
  *   npx tsx scripts/seed-coara-agro-presets.ts
  */
@@ -12,7 +12,7 @@ import { ensureDefaultDeliveryPoints } from '../src/server/agro-delivery-points.
 
 const COMPANY_ID = '2';
 const WAGNER_CONTACT_ID = '0af220b9-ed99-455b-bd72-ea1078f8d462';
-const SEND_TIME = '15:20';
+const SEND_TIME = '13:30';
 const FREQUENCY = 'weekdays' as const;
 
 const PRESETS: AgroPresetInput[] = [
