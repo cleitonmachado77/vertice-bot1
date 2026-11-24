@@ -9,14 +9,41 @@ const MONTHS = [
 let chartReady = null;
 const chartInstances = new Map();
 
+const CHART_CDN_CANDIDATES = [
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/+esm',
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.6/+esm',
+  'https://unpkg.com/chart.js@4.4.1/auto/+esm',
+];
+
 async function loadChartJs() {
   if (chartReady) return chartReady;
   chartReady = (async () => {
-    const mod = await import('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/+esm');
-    const { Chart, BarController, BarElement, CategoryScale, LinearScale, Legend, Tooltip } = mod;
-    Chart.register(BarController, BarElement, CategoryScale, LinearScale, Legend, Tooltip);
-    return { Chart };
-  })();
+    let lastError = null;
+    for (const url of CHART_CDN_CANDIDATES) {
+      try {
+        const mod = await import(/* @vite-ignore */ url);
+        const Chart = mod.Chart || mod.default;
+        if (!Chart) throw new Error('Chart.js sem export Chart');
+        if (mod.BarController && mod.BarElement && mod.CategoryScale && mod.LinearScale) {
+          Chart.register(
+            mod.BarController,
+            mod.BarElement,
+            mod.CategoryScale,
+            mod.LinearScale,
+            mod.Legend,
+            mod.Tooltip,
+          );
+        }
+        return { Chart };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('Não foi possível carregar Chart.js');
+  })().catch((error) => {
+    chartReady = null;
+    throw error;
+  });
   return chartReady;
 }
 
@@ -96,7 +123,8 @@ function sectionCard(id, title, hint = '') {
         ${hint ? `<p class="muted">${escapeHtml(hint)}</p>` : ''}
       </header>
       <div class="agro-dash-chart-wrap">
-        <canvas id="agro-chart-${escapeHtml(id)}" height="180"></canvas>
+        <canvas id="agro-chart-${escapeHtml(id)}" height="220" aria-label="${escapeHtml(title)}"></canvas>
+        <p class="agro-dash-empty muted" id="agro-chart-empty-${escapeHtml(id)}" hidden>Sem dados neste período</p>
       </div>
     </section>`;
 }
@@ -156,12 +184,10 @@ function summaryCards(summary) {
 const barValueLabels = {
   id: 'barValueLabels',
   afterDatasetsDraw(chart) {
-    const { ctx } = chart;
+    const { ctx, chartArea } = chart;
     const format = chart.options.plugins?.barValueLabels?.format || formatQty;
     ctx.save();
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.fillStyle = '#3a3a3e';
     ctx.font = '600 11px Outfit, "Segoe UI", sans-serif';
     chart.data.datasets.forEach((dataset, datasetIndex) => {
       const meta = chart.getDatasetMeta(datasetIndex);
@@ -169,15 +195,31 @@ const barValueLabels = {
       meta.data.forEach((element, index) => {
         const raw = Number(dataset.data[index]);
         if (!Number.isFinite(raw) || raw === 0) return;
-        const { x, y } = element.getProps(['x', 'y'], true);
-        ctx.fillText(format(raw), x, y - 4);
+        const { x, y, base } = element.getProps(['x', 'y', 'base'], true);
+        const text = format(raw);
+        const barHeight = Math.abs(base - y);
+        const inside = barHeight > 22;
+        ctx.textBaseline = inside ? 'top' : 'bottom';
+        ctx.fillStyle = inside ? '#ffffff' : '#3a3a3e';
+        const ty = inside ? Math.min(y + 6, (chartArea?.bottom || y) - 4) : y - 4;
+        ctx.fillText(text, x, ty);
       });
     });
     ctx.restore();
   },
 };
 
+function setChartEmpty(canvas, empty) {
+  const emptyEl = document.getElementById(`agro-chart-empty-${canvas.id.replace(/^agro-chart-/, '')}`);
+  canvas.hidden = Boolean(empty);
+  if (emptyEl) emptyEl.hidden = !empty;
+}
+
 function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format = formatQty) {
+  const hasData = values.some((value) => Number(value) > 0);
+  setChartEmpty(canvas, !hasData);
+  if (!hasData) return;
+
   const chart = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -188,21 +230,39 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
           data: values,
           backgroundColor: color,
           borderRadius: 8,
-          maxBarThickness: 42,
+          maxBarThickness: 48,
         },
       ],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      layout: { padding: { top: 18 } },
+      layout: { padding: { top: 22, right: 8 } },
       plugins: {
         legend: { display: false },
         barValueLabels: { format },
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              return `${ctx.dataset.label}: ${format(ctx.parsed.y)}`;
+            },
+          },
+        },
       },
       scales: {
-        x: { grid: { display: false } },
-        y: { beginAtZero: true, ticks: { precision: 0 } },
+        x: {
+          grid: { display: false },
+          ticks: { autoSkip: false, maxRotation: 0, minRotation: 0 },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: {
+            precision: 0,
+            callback(value) {
+              return format(value);
+            },
+          },
+        },
       },
     },
     plugins: [barValueLabels],
@@ -211,6 +271,10 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
 }
 
 function makeGrouped(Chart, canvas, rows) {
+  const hasData = rows.some((item) => Number(item.revenue) > 0 || Number(item.expense) > 0);
+  setChartEmpty(canvas, !hasData);
+  if (!hasData) return;
+
   const chart = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -235,14 +299,28 @@ function makeGrouped(Chart, canvas, rows) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      layout: { padding: { top: 18 } },
+      layout: { padding: { top: 22, right: 8 } },
       plugins: {
         legend: { position: 'bottom' },
         barValueLabels: { format: formatMoney },
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              return `${ctx.dataset.label}: ${formatMoney(ctx.parsed.y)}`;
+            },
+          },
+        },
       },
       scales: {
         x: { grid: { display: false } },
-        y: { beginAtZero: true },
+        y: {
+          beginAtZero: true,
+          ticks: {
+            callback(value) {
+              return formatMoney(value);
+            },
+          },
+        },
       },
     },
     plugins: [barValueLabels],
@@ -291,18 +369,25 @@ function paint(root, data, productFilterValue = '') {
   const body = root.querySelector('#agro-body');
   if (!body) return;
   body.innerHTML = `
-    <div class="stat-row stat-row--6 agro-dash-stats">${summaryCards(data.summary)}</div>
+    <div class="stat-row agro-dash-stats" aria-label="Resumo agro">${summaryCards(data.summary)}</div>
     <div class="agro-dash-grid">
       ${sectionCard('forecast', 'Estimativa de produção', 'Quantidades na data estimada')}
-      ${sectionCard('planting', 'Plantio', 'Quantidade de mudas por produto')}
+      ${sectionCard('planting', 'Plantio', 'Quantidade prevista por produto no período')}
       ${sectionCard('harvest', 'Colheita', 'Unidade por produto')}
       ${sectionCard('delivery', 'Entrega', 'Unidade por produto')}
       ${sectionCard('sales', 'Venda', 'R$ por produto')}
       ${sectionCard('stock', 'Estoque', 'Colhido − entregue por produto')}
       ${sectionCard('costs', 'Custos por área', 'Talhão')}
       ${sectionCard('revenue', 'Receita × Despesas por área', 'Colheita × preço médio vs custos')}
-    </div>`;
-  paintCharts(data).catch(() => {});
+    </div>
+    <p class="muted agro-dash-chart-error" id="agro-dash-chart-error" hidden></p>`;
+  paintCharts(data).catch((error) => {
+    const tip = body.querySelector('#agro-dash-chart-error');
+    if (tip) {
+      tip.hidden = false;
+      tip.textContent = `Gráficos indisponíveis: ${error.message || 'falha ao carregar Chart.js'}`;
+    }
+  });
 }
 
 export function stopAgroDashboard() {
