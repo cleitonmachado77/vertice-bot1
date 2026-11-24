@@ -884,8 +884,8 @@ export async function onQuestionnaireCycleCompleted(cycleId: string): Promise<vo
     );
   }
   try {
-    const { materializeAgroFromCycle } = await import('./agro-bot.js');
-    await materializeAgroFromCycle(cycleId);
+    const { materializeAgroFromCycleNotifying } = await import('./agro-bot.js');
+    await materializeAgroFromCycleNotifying(cycleId);
   } catch (error) {
     console.error(
       'agro-bot: falha ao materializar Agro',

@@ -1,3 +1,4 @@
+import { hubAgroDashboard } from './agro-dashboard.js';
 import { getSetting, many } from './db.js';
 import { json, route, type Ctx } from './http.js';
 import { requireAuth } from './auth.js';
@@ -447,13 +448,14 @@ export async function hubDashboardPayload(input: {
   companyOdooId?: string;
 }) {
   const { year, month, companyOdooId } = input;
-  const [purchases, productions, sales, products, bags, uoms] = await Promise.all([
+  const [purchases, productions, sales, products, bags, uoms, agro] = await Promise.all([
     loadKind('purchase', companyOdooId),
     loadKind('production', companyOdooId),
     loadKind('sale', companyOdooId),
     loadProducts(companyOdooId),
     loadBagInventory(companyOdooId),
     listUomInfos(),
+    hubAgroDashboard(month, year, companyOdooId).catch(() => null),
   ]);
   const units: Units = { uoms, productUoms: productUomByName(products) };
   return {
@@ -465,6 +467,7 @@ export async function hubDashboardPayload(input: {
     pressing: buildPressing(productions, year, month, units),
     deliveries: buildDeliveries(sales, year, month, units),
     sales: buildSales(sales, year, month),
+    agro,
   };
 }
 

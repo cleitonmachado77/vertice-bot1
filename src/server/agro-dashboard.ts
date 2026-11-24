@@ -2,9 +2,12 @@ import { listAgroCatalog } from './agro-catalog.js';
 import { listCosts } from './agro-costs.js';
 import { listDeliveries, listHarvests, listPlantings } from './agro-model.js';
 import { ensureAgroSchema } from './agro-schema.js';
+import { many } from './db.js';
+import { listCompanies } from './forms-companies.js';
 
 export type AgroDashBar = { label: string; value: number; unit?: string };
 export type AgroDashSeries = { label: string; revenue: number; expense: number };
+export type AgroDashboardPayload = Awaited<ReturnType<typeof agroDashboard>>;
 
 function inPeriod(iso: string, month: number, year: number): boolean {
   if (!iso || iso.length < 7) return false;
@@ -224,4 +227,129 @@ export async function agroDashboard(
     costsByArea: barsFromMap(costsByArea, 'R$'),
     revenueExpenseByArea,
   };
+}
+
+function mergeBars(target: Map<string, number>, bars: AgroDashBar[]) {
+  for (const bar of bars) addMap(target, bar.label, Number(bar.value || 0));
+}
+
+function emptyAgroSummary() {
+  return {
+    plantedAreaHa: 0,
+    estimatedQty: 0,
+    harvestedQty: 0,
+    deliveredQty: 0,
+    soldValue: 0,
+    costs: 0,
+  };
+}
+
+/**
+ * Agro no hub Recicla Renda: consolida todas as empresas com plantio,
+ * ou filtra por companyOdooId quando o escopo é de uma entidade.
+ */
+export async function hubAgroDashboard(
+  month: number,
+  year: number,
+  companyOdooId?: string,
+): Promise<{
+  period: { month: number; year: number };
+  scope: 'all' | 'entity';
+  summary: ReturnType<typeof emptyAgroSummary>;
+  plantingByProduct: AgroDashBar[];
+  harvestByProduct: AgroDashBar[];
+  deliveryByProduct: AgroDashBar[];
+  costsByArea: AgroDashBar[];
+  byCompany: Array<{
+    companyId: string;
+    companyName: string;
+    summary: ReturnType<typeof emptyAgroSummary>;
+    plantingByProduct: AgroDashBar[];
+    harvestByProduct: AgroDashBar[];
+    deliveryByProduct: AgroDashBar[];
+  }>;
+}> {
+  await ensureAgroSchema();
+  const now = new Date();
+  const periodMonth = month >= 1 && month <= 12 ? month : now.getMonth() + 1;
+  const periodYear = year >= 2000 && year <= 2100 ? year : now.getFullYear();
+
+  const companies = await listCompanies();
+  const nameById = new Map(companies.map((item) => [item.id, item.name]));
+  let companyIds: string[];
+  if (companyOdooId) {
+    companyIds = [companyOdooId];
+  } else {
+    const rows = await many<{ company_odoo_id: string }>(
+      `SELECT DISTINCT company_odoo_id FROM agro_plantings WHERE COALESCE(company_odoo_id, '') <> ''`,
+    );
+    companyIds = rows.map((row) => row.company_odoo_id);
+  }
+
+  const summary = emptyAgroSummary();
+  const plantingMap = new Map<string, number>();
+  const harvestMap = new Map<string, number>();
+  const deliveryMap = new Map<string, number>();
+  const costsMap = new Map<string, number>();
+  const byCompany: Array<{
+    companyId: string;
+    companyName: string;
+    summary: ReturnType<typeof emptyAgroSummary>;
+    plantingByProduct: AgroDashBar[];
+    harvestByProduct: AgroDashBar[];
+    deliveryByProduct: AgroDashBar[];
+  }> = [];
+
+  for (const companyId of companyIds) {
+    const dash = await agroDashboard(companyId, periodMonth, periodYear);
+    const companyName = nameById.get(companyId) || `Empresa ${companyId}`;
+    summary.plantedAreaHa += dash.summary.plantedAreaHa;
+    summary.estimatedQty += dash.summary.estimatedQty;
+    summary.harvestedQty += dash.summary.harvestedQty;
+    summary.deliveredQty += dash.summary.deliveredQty;
+    summary.soldValue += dash.summary.soldValue;
+    summary.costs += dash.summary.costs;
+    mergeBars(plantingMap, dash.plantingByProduct);
+    mergeBars(harvestMap, dash.harvestByProduct);
+    mergeBars(deliveryMap, dash.deliveryByProduct);
+    for (const bar of dash.costsByArea) {
+      addMap(costsMap, `${shortCompanyName(companyName)} · ${bar.label}`, Number(bar.value || 0));
+    }
+    byCompany.push({
+      companyId,
+      companyName,
+      summary: dash.summary,
+      plantingByProduct: dash.plantingByProduct,
+      harvestByProduct: dash.harvestByProduct,
+      deliveryByProduct: dash.deliveryByProduct,
+    });
+  }
+
+  byCompany.sort((a, b) => a.companyName.localeCompare(b.companyName, 'pt-BR'));
+
+  return {
+    period: { month: periodMonth, year: periodYear },
+    scope: companyOdooId ? 'entity' : 'all',
+    summary: {
+      plantedAreaHa: Math.round(summary.plantedAreaHa * 1000) / 1000,
+      estimatedQty: Math.round(summary.estimatedQty * 1000) / 1000,
+      harvestedQty: Math.round(summary.harvestedQty * 1000) / 1000,
+      deliveredQty: Math.round(summary.deliveredQty * 1000) / 1000,
+      soldValue: Math.round(summary.soldValue * 100) / 100,
+      costs: Math.round(summary.costs * 100) / 100,
+    },
+    plantingByProduct: barsFromMap(plantingMap),
+    harvestByProduct: barsFromMap(harvestMap),
+    deliveryByProduct: barsFromMap(deliveryMap),
+    costsByArea: barsFromMap(costsMap, 'R$'),
+    byCompany,
+  };
+}
+
+function shortCompanyName(name: string): string {
+  const text = String(name || '').trim();
+  if (/coara/i.test(text)) return 'COARA';
+  if (/recicla/i.test(text)) return 'Reciclarenda';
+  const dash = text.split(' - ')[0]?.trim();
+  return (dash || text).slice(0, 28);
 }

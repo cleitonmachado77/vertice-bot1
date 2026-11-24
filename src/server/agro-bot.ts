@@ -129,6 +129,58 @@ export async function materializeAgroFromCycle(cycleId: string): Promise<void> {
   if (preset.kind === 'agro_custo') await saveCostFromBot(preset.company_odoo_id, values, today);
 }
 
+/** Materializa e, se falhar, avisa o contato no WhatsApp com o motivo. */
+export async function materializeAgroFromCycleNotifying(cycleId: string): Promise<void> {
+  try {
+    await materializeAgroFromCycle(cycleId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('agro-bot: falha ao materializar Agro', cycleId, message);
+    await notifyAgroMaterializeFailure(cycleId, message).catch((notifyError) => {
+      console.error(
+        'agro-bot: falha ao avisar materialização',
+        cycleId,
+        notifyError instanceof Error ? notifyError.message : notifyError,
+      );
+    });
+    throw error;
+  }
+}
+
+async function notifyAgroMaterializeFailure(cycleId: string, reason: string): Promise<void> {
+  const cycle = await one<{ contact_id: string; questionnaire_id: string }>(
+    `SELECT contact_id, questionnaire_id FROM questionnaire_cycles WHERE id = $1`,
+    [cycleId],
+  );
+  if (!cycle?.contact_id) return;
+  const contact = await getContact(cycle.contact_id);
+  if (!contact || Number(contact.hidden) === 1) return;
+  const phone = normalizeWhatsappPhone(contact.phone || '');
+  if (!phone) return;
+  const channelId = getSetting('nevoa_channel_id');
+  if (!channelId) return;
+  const questionnaire = await getQuestionnaire(cycle.questionnaire_id, true);
+  const title = questionnaire?.name || 'lançamento Agro';
+  const text = [
+    `Não consegui registrar *${title}* no painel.`,
+    '',
+    `Motivo: ${reason}`,
+    '',
+    'Confira a sigla do produto e o código da área (talhão) cadastrados no Agro e envie de novo, ou fale com o suporte.',
+  ].join('\n');
+  await enqueueOutbound({
+    dedupeKey: `agro-bot:materialize-fail:${cycleId}`,
+    kind: 'text',
+    phone,
+    text,
+    channelId,
+    contactId: contact.id,
+    cycleId,
+    origin: 'agent',
+    raw: { source: 'agro-bot-materialize-fail', cycleId, reason },
+  });
+}
+
 function fold(value: string): string {
   return value
     .toLowerCase()
@@ -196,7 +248,14 @@ function pickPlanting(
   }
   if (!hits.length) {
     if (!productNeedle && !plotNeedle && !legacy && source.length === 1) return source[0];
-    throw new Error('Plantio não encontrado para produto/área informados');
+    const hint = [productNeedle && `produto "${values.productName}"`, plotNeedle && `área "${values.plotName}"`]
+      .filter(Boolean)
+      .join(' e ');
+    throw new Error(
+      hint
+        ? `Plantio não encontrado para ${hint}. Cadastre o plantio/talhão no Agro ou use a sigla e o código corretos.`
+        : 'Plantio não encontrado para produto/área informados',
+    );
   }
   if (hits.length > 1 && !plotNeedle) {
     // Prefer exact product match; if still many, require area.
@@ -205,6 +264,66 @@ function pickPlanting(
     throw new Error('Há mais de um plantio. Informe também a área (ex.: 1 ou A1)');
   }
   return hits[0];
+}
+
+async function findPlotByCode(
+  companyId: string,
+  plotCode: string,
+): Promise<{ id: string; propertyId: string; area: number | null } | undefined> {
+  const code = String(plotCode || '').trim();
+  if (!code) return undefined;
+  return one<{ id: string; propertyId: string; area: number | null }>(
+    `SELECT pl.id, pl.property_id AS "propertyId", pl.area
+     FROM agro_plots pl
+     JOIN agro_properties pr ON pr.id = pl.property_id
+     WHERE pr.company_odoo_id = $1 AND pl.active = 1 AND pr.active = 1
+       AND (lower(pl.code) = lower($2) OR lower(pl.name) = lower($2))
+     ORDER BY lower(pl.code) ASC
+     LIMIT 1`,
+    [companyId, code],
+  );
+}
+
+/** Se não houver plantio aberto, cria um a partir do produto + talhão já cadastrados. */
+async function resolvePlantingForHarvest(
+  companyId: string,
+  values: Record<string, string>,
+  products: AgroProduct[],
+  today: string,
+): Promise<AgroPlanting> {
+  const plantings = await listPlantings(companyId);
+  try {
+    return pickPlanting(plantings, values, products);
+  } catch (error) {
+    const product = findCatalogProduct(products, values.productName || '');
+    if (!product) {
+      throw new Error(
+        `Produto "${values.productName || ''}" não encontrado no catálogo. Use a sigla cadastrada (ex.: ABA, INH).`,
+      );
+    }
+    const plotCode = String(values.plotName || '').trim();
+    if (!plotCode) {
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+    const plot = await findPlotByCode(companyId, plotCode);
+    if (!plot) {
+      throw new Error(
+        `Área "${plotCode}" não encontrada. Cadastre o talhão em Configurações Agro antes da colheita.`,
+      );
+    }
+    const plantedOn = agroAnswerDate(values.harvestedOn || '', today);
+    return savePlanting(companyId, {
+      propertyId: plot.propertyId,
+      plotId: plot.id,
+      productId: product.id,
+      productName: product.name,
+      unit: product.uom || '',
+      plantedOn,
+      forecastQty: values.quantity || '',
+      notes: 'Criado automaticamente a partir da colheita via Bot',
+      status: 'em_colheita',
+    });
+  }
 }
 
 async function savePlantingFromBot(
@@ -247,7 +366,7 @@ async function saveHarvestFromBot(
   today: string,
 ): Promise<void> {
   const catalog = await listAgroCatalog(companyId);
-  const planting = pickPlanting(await listPlantings(companyId), values, catalog.products);
+  const planting = await resolvePlantingForHarvest(companyId, values, catalog.products, today);
   const existing = await one<{ id: string }>(`SELECT id FROM agro_harvests WHERE source_cycle_id = $1`, [cycleId]);
   const saved = await saveHarvest(
     companyId,
@@ -270,7 +389,7 @@ async function saveDeliveryFromBot(
   today: string,
 ): Promise<void> {
   const catalog = await listAgroCatalog(companyId);
-  const planting = pickPlanting(await listPlantings(companyId), values, catalog.products);
+  const planting = await resolvePlantingForHarvest(companyId, values, catalog.products, today);
   const named = values.partnerName || '';
   const buyer = catalog.buyers.find((item) => fold(item.name) === fold(named));
   const existing = await one<{ id: string }>(`SELECT id FROM agro_deliveries WHERE source_cycle_id = $1`, [cycleId]);

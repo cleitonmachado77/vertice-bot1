@@ -112,6 +112,53 @@ const SECTIONS = [
   },
 ];
 
+const AGRO_CHARTS = [
+  {
+    id: 'planting',
+    key: 'plantingByProduct',
+    title: 'Plantio',
+    chartTitle: 'Produção estimada plantada no período',
+    totalKey: 'estimatedQty',
+    totalLabel: 'Estimado no período',
+    tone: 'green',
+    color: '#22c55e',
+    unit: '',
+  },
+  {
+    id: 'harvest',
+    key: 'harvestByProduct',
+    title: 'Colheita',
+    chartTitle: 'Quantidade colhida no período',
+    totalKey: 'harvestedQty',
+    totalLabel: 'Colhido no período',
+    tone: 'amber',
+    color: '#e07b20',
+    unit: '',
+  },
+  {
+    id: 'agro-delivery',
+    key: 'deliveryByProduct',
+    title: 'Entrega agro',
+    chartTitle: 'Produção entregue no período',
+    totalKey: 'deliveredQty',
+    totalLabel: 'Entregue no período',
+    tone: 'teal',
+    color: '#1aa897',
+    unit: '',
+  },
+  {
+    id: 'agro-costs',
+    key: 'costsByArea',
+    title: 'Custos agro',
+    chartTitle: 'Custos de produção por área',
+    totalKey: 'costs',
+    totalLabel: 'Custos no período',
+    tone: 'navy',
+    color: '#2b5aa8',
+    unit: 'R$',
+  },
+];
+
 let chartReady = null;
 const chartInstances = new Map();
 
@@ -387,12 +434,85 @@ async function loadStock(body, scope = 'hub') {
   });
 }
 
+function agroSummaryHtml(agro) {
+  if (!agro?.summary) return '';
+  const s = agro.summary;
+  const cards = [
+    { label: 'Área plantada', value: `${formatQty(s.plantedAreaHa)} ha` },
+    { label: 'Colheita agro', value: formatQty(s.harvestedQty) },
+    { label: 'Entrega agro', value: formatQty(s.deliveredQty) },
+    { label: 'Custos agro', value: formatMoney(s.costs) },
+  ];
+  return `
+    <div class="hub-agro-summary" aria-label="Resumo agro">
+      ${cards
+        .map(
+          (card) => `
+        <div class="hub-agro-summary-card">
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(card.value)}</strong>
+        </div>`,
+        )
+        .join('')}
+    </div>`;
+}
+
+function agroSectionHtml(def, agro) {
+  const bars = agro?.[def.key] || [];
+  const total = agro?.summary?.[def.totalKey] ?? bars.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  return `
+    <article class="card hub-dash-section tone-${def.tone}" data-section="agro-${escapeHtml(def.id)}">
+      <div class="hub-dash-section-head">
+        <h3>${escapeHtml(def.title)}</h3>
+        <p class="hub-dash-total">${escapeHtml(def.totalLabel)} <strong>${escapeHtml(formatValue(def.unit, total))}</strong></p>
+      </div>
+      <p class="hub-dash-chart-title">${escapeHtml(def.chartTitle)}</p>
+      <div class="hub-dash-canvas-wrap hub-agro-canvas">
+        <canvas id="chart-agro-${escapeHtml(def.id)}"></canvas>
+      </div>
+    </article>`;
+}
+
+function agroBlockHtml(agro) {
+  if (!agro) return '';
+  const hasData =
+    Number(agro.summary?.harvestedQty || 0) > 0 ||
+    Number(agro.summary?.deliveredQty || 0) > 0 ||
+    Number(agro.summary?.estimatedQty || 0) > 0 ||
+    Number(agro.summary?.costs || 0) > 0 ||
+    Number(agro.summary?.plantedAreaHa || 0) > 0 ||
+    (agro.plantingByProduct || []).length > 0;
+  if (!hasData) {
+    return `
+      <article class="card hub-dash-section hub-dash-wide tone-green" data-section="agro">
+        <div class="hub-dash-section-head">
+          <h3>Agro</h3>
+        </div>
+        <p class="muted hub-agro-empty">Sem lançamentos agro neste período.</p>
+      </article>`;
+  }
+  return `
+    <article class="card hub-dash-section hub-dash-wide tone-green hub-agro-block" data-section="agro">
+      <div class="hub-dash-section-head">
+        <h3>Agro</h3>
+        <p class="hub-dash-total">Visão geral <strong>${escapeHtml(agro.scope === 'all' ? 'todas as empresas' : 'empresa ativa')}</strong></p>
+      </div>
+      ${agroSummaryHtml(agro)}
+      <div class="hub-agro-grid">
+        ${AGRO_CHARTS.map((def) => agroSectionHtml(def, agro)).join('')}
+      </div>
+    </article>`;
+}
+
 function paintBody(data, scope = 'hub') {
   const stats = document.querySelector('#hub-stats');
   if (stats) stats.innerHTML = statsCards(data);
   const body = document.querySelector('#hub-dashboard-body');
   if (!body) return;
-  body.innerHTML = SECTIONS.map((def) => sectionHtml(def, data[def.id])).join('') + stockHtml();
+  body.innerHTML =
+    SECTIONS.map((def) => sectionHtml(def, data[def.id])).join('') +
+    agroBlockHtml(data.agro) +
+    stockHtml();
   loadStock(body, scope).catch(() => {});
 }
 
@@ -553,6 +673,65 @@ function alignChartHeights(data) {
   });
 }
 
+function makeAgroBar(Chart, canvas, def, bars) {
+  if (!canvas) return;
+  const existing = chartInstances.get(canvas.id);
+  if (existing) existing.destroy();
+  const rows = Array.isArray(bars) ? bars : [];
+  const chart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: rows.map((row) => row.label),
+      datasets: [
+        {
+          label: def.title,
+          data: rows.map((row) => Number(row.value || 0)),
+          backgroundColor: def.color,
+          borderRadius: 4,
+        },
+      ],
+    },
+    options: {
+      indexAxis: rows.length > 6 ? 'y' : 'x',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label(ctx) {
+              const value = ctx.parsed.y == null ? ctx.parsed.x : ctx.parsed.y;
+              return formatValue(def.unit, value);
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          beginAtZero: true,
+          grid: { display: false },
+          ticks: {
+            callback(value) {
+              return def.unit === 'R$' ? formatMoney(value) : formatQty(value);
+            },
+          },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { display: false },
+          ticks: {
+            callback(value) {
+              if (rows.length > 6) return value;
+              return def.unit === 'R$' ? formatMoney(value) : formatQty(value);
+            },
+          },
+        },
+      },
+    },
+  });
+  chartInstances.set(canvas.id, chart);
+}
+
 async function paintCharts(data) {
   const { Chart } = await loadChartJs();
   chartDefaults(Chart);
@@ -560,6 +739,11 @@ async function paintCharts(data) {
   alignChartHeights(data);
   for (const def of SECTIONS) {
     makeBar(Chart, document.querySelector(`#chart-${def.id}`), def, data[def.id] || {});
+  }
+  if (data.agro) {
+    for (const def of AGRO_CHARTS) {
+      makeAgroBar(Chart, document.querySelector(`#chart-agro-${def.id}`), def, data.agro[def.key] || []);
+    }
   }
 }
 
