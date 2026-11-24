@@ -62,12 +62,22 @@ function destroyCharts() {
 
 function toNumber(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-  if (value && typeof value === 'object') {
+  if (value == null || value === '') return 0;
+  if (typeof value === 'object') {
     const nested = value.y ?? value.value ?? value.qty;
     if (typeof nested === 'number') return Number.isFinite(nested) ? nested : 0;
+    if (typeof nested === 'string' && nested.trim() !== '') {
+      const parsedNested = Number(nested);
+      return Number.isFinite(parsedNested) ? parsedNested : 0;
+    }
+    return 0;
   }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  try {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function formatQty(value) {
@@ -381,18 +391,30 @@ function paintChartsSync(Chart, data) {
   for (const [id, rows, label, color, format] of pairs) {
     const canvas = document.getElementById(`agro-chart-${id}`);
     if (!canvas || !canvas.isConnected) continue;
-    makeBar(
-      Chart,
-      canvas,
-      rows.map((item) => item.label),
-      rows.map((item) => item.value),
-      label,
-      color,
-      format,
-    );
+    try {
+      makeBar(
+        Chart,
+        canvas,
+        rows.map((item) => item.label),
+        rows.map((item) => item.value),
+        label,
+        color,
+        format,
+      );
+    } catch (error) {
+      console.warn(`[agro-dash] falha no gráfico ${id}`, error);
+      setChartEmpty(canvas, true);
+    }
   }
   const revenueCanvas = document.getElementById('agro-chart-revenue');
-  if (revenueCanvas?.isConnected) makeGrouped(Chart, revenueCanvas, data.revenueExpenseByArea || []);
+  if (revenueCanvas?.isConnected) {
+    try {
+      makeGrouped(Chart, revenueCanvas, data.revenueExpenseByArea || []);
+    } catch (error) {
+      console.warn('[agro-dash] falha no gráfico revenue', error);
+      setChartEmpty(revenueCanvas, true);
+    }
+  }
 }
 
 async function paint(root, data, productFilterValue = '', epoch = agroDashEpoch) {
