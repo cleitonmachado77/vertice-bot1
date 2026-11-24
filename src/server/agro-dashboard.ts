@@ -200,6 +200,7 @@ export async function agroDashboard(
   }
 
   return {
+    companyId,
     period: { month: periodMonth, year: periodYear },
     productId: selectedProductId,
     products: [...productOptions.values()].sort((a, b) =>

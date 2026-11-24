@@ -8,6 +8,8 @@ const MONTHS = [
 
 let chartReady = null;
 const chartInstances = new Map();
+/** Invalida pinturas/carregamentos antigos ao trocar empresa ou período. */
+let agroDashEpoch = 0;
 
 const CHART_CDN_CANDIDATES = [
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/+esm',
@@ -328,12 +330,14 @@ function makeGrouped(Chart, canvas, rows) {
   chartInstances.set(canvas.id, chart);
 }
 
-async function paintCharts(data) {
+async function paintCharts(data, epoch) {
   const { Chart } = await loadChartJs();
+  if (epoch !== agroDashEpoch) return;
   Chart.defaults.color = '#6b6b70';
   Chart.defaults.borderColor = 'rgba(26, 26, 28, 0.06)';
   Chart.defaults.font.family = 'Outfit, "Segoe UI", sans-serif';
   destroyCharts();
+  if (epoch !== agroDashEpoch) return;
 
   const pairs = [
     ['forecast', data.forecast?.byProduct || [], 'Estimativa', '#2e8b57', formatQty],
@@ -345,8 +349,9 @@ async function paintCharts(data) {
     ['costs', data.costsByArea || [], 'Custos por área', '#8b4513', formatMoney],
   ];
   for (const [id, rows, label, color, format] of pairs) {
+    if (epoch !== agroDashEpoch) return;
     const canvas = document.getElementById(`agro-chart-${id}`);
-    if (!canvas) continue;
+    if (!canvas || !canvas.isConnected) continue;
     makeBar(
       Chart,
       canvas,
@@ -357,11 +362,14 @@ async function paintCharts(data) {
       format,
     );
   }
+  if (epoch !== agroDashEpoch) return;
   const revenueCanvas = document.getElementById('agro-chart-revenue');
-  if (revenueCanvas) makeGrouped(Chart, revenueCanvas, data.revenueExpenseByArea || []);
+  if (revenueCanvas?.isConnected) makeGrouped(Chart, revenueCanvas, data.revenueExpenseByArea || []);
 }
 
-function paint(root, data, productFilterValue = '') {
+async function paint(root, data, productFilterValue = '', epoch = agroDashEpoch) {
+  if (epoch !== agroDashEpoch) return;
+  destroyCharts();
   const actions = root.querySelector('#agro-dash-actions') || root.querySelector('.forms-top-actions');
   if (actions) {
     actions.innerHTML = `${productFilter(data.products, productFilterValue)}${periodPicker(data.period)}`;
@@ -381,20 +389,26 @@ function paint(root, data, productFilterValue = '') {
       ${sectionCard('revenue', 'Receita × Despesas por área', 'Colheita × preço médio vs custos')}
     </div>
     <p class="muted agro-dash-chart-error" id="agro-dash-chart-error" hidden></p>`;
-  paintCharts(data).catch((error) => {
+  try {
+    await paintCharts(data, epoch);
+  } catch (error) {
+    if (epoch !== agroDashEpoch) return;
     const tip = body.querySelector('#agro-dash-chart-error');
     if (tip) {
       tip.hidden = false;
       tip.textContent = `Gráficos indisponíveis: ${error.message || 'falha ao carregar Chart.js'}`;
     }
-  });
+  }
 }
 
 export function stopAgroDashboard() {
+  agroDashEpoch += 1;
   destroyCharts();
 }
 
 export async function renderAgroDashboard(root) {
+  const epoch = (agroDashEpoch += 1);
+  destroyCharts();
   const body = root.querySelector('#agro-body');
   if (body) body.innerHTML = `<p class="muted">Carregando indicadores…</p>`;
   const now = new Date();
@@ -402,18 +416,26 @@ export async function renderAgroDashboard(root) {
     month: now.getMonth() + 1,
     year: now.getFullYear(),
     product: '',
+    companyId: '',
   };
   root._agroDashState = state;
 
-  const load = async () => {
+  const load = async ({ resetProduct = false } = {}) => {
+    const loadEpoch = (agroDashEpoch += 1);
+    if (resetProduct) state.product = '';
+    const targetBody = root.querySelector('#agro-body');
+    if (targetBody) targetBody.innerHTML = `<p class="muted">Carregando indicadores…</p>`;
     const qs = new URLSearchParams({
       month: String(state.month),
       year: String(state.year),
     });
     if (state.product) qs.set('productId', state.product);
     const data = await api(`/api/agro/dashboard?${qs}`);
-    paint(root, data, state.product);
+    if (loadEpoch !== agroDashEpoch) return;
+    state.companyId = String(data.companyId || state.companyId || '');
+    await paint(root, data, state.product, loadEpoch);
   };
+  root._agroDashLoad = load;
 
   if (root.dataset.agroDashBound !== '1') {
     root.dataset.agroDashBound = '1';
@@ -424,7 +446,7 @@ export async function renderAgroDashboard(root) {
       if (event.target?.id === 'agro-dash-month') {
         current.month = Number(event.target.value);
         load().catch((error) => {
-          if (targetBody) {
+          if (targetBody && agroDashEpoch) {
             targetBody.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Falha ao carregar')}</p>`;
           }
         });
@@ -447,8 +469,13 @@ export async function renderAgroDashboard(root) {
   }
 
   try {
-    await load();
+    if (epoch !== agroDashEpoch) return;
+    await load({ resetProduct: true });
   } catch (error) {
-    if (body) body.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Não foi possível carregar o dashboard')}</p>`;
+    if (epoch !== agroDashEpoch && agroDashEpoch > epoch) return;
+    const currentBody = root.querySelector('#agro-body');
+    if (currentBody) {
+      currentBody.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Não foi possível carregar o dashboard')}</p>`;
+    }
   }
 }

@@ -6,6 +6,7 @@ import { initTheme } from './theme.js';
 import {
   clearCompaniesCache,
   formsHomeHash,
+  getActiveCompanyId,
   isHubDashboardAvailable,
   isRsuDashboardAvailable,
   loadCompanies,
@@ -150,7 +151,8 @@ function currentRoute() {
       formsSlug: '',
       agroTab,
       name: 'agro',
-      key: `agro|${agroTab}`,
+      // companyId no key força redesenho ao trocar entidade no seletor.
+      key: `agro|${agroTab}|${getActiveCompanyId() || ''}`,
     };
   }
   if (LEGACY[raw]) {
