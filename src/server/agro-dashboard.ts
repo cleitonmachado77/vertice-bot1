@@ -1,8 +1,8 @@
 import { listCosts } from './agro-costs.js';
-import { listDeliveries, listHarvests, listPlantings } from './agro-model.js';
+import { listDeliveries, listHarvests, listPlantingEstimates, listPlantings } from './agro-model.js';
 import { ensureAgroSchema } from './agro-schema.js';
 import { many } from './db.js';
-import { listCompanies } from './forms-companies.js';
+import { DEFAULT_COMPANY_ODOO_ID, listCompanies } from './forms-companies.js';
 
 export type AgroDashBar = { label: string; value: number; unit?: string };
 export type AgroDashSeries = { label: string; revenue: number; expense: number };
@@ -15,8 +15,12 @@ function inPeriod(iso: string, month: number, year: number): boolean {
   return y === year && m === month;
 }
 
+/** Rótulo legível nos gráficos: sigla · nome quando ambos existem. */
 function productLabel(name: string, sigla: string): string {
-  return (sigla || name || '—').trim() || '—';
+  const n = (name || '').trim();
+  const s = (sigla || '').trim();
+  if (s && n && s.toLowerCase() !== n.toLowerCase()) return `${s} · ${n}`;
+  return (s || n || '—').trim() || '—';
 }
 
 function parseProductHeader(raw: string): { sigla: string; salesPrice: number } {
@@ -64,7 +68,209 @@ function isActivePlanting(status: string): boolean {
   return status !== 'colhido';
 }
 
+type ForecastTimelineRow = {
+  product: string;
+  productId: string;
+  date: string;
+  qty: number;
+  plantingId: string;
+  harvestIndex: number;
+  propertyName: string;
+  plotName: string;
+  unit: string;
+  producerId: string;
+  producerName: string;
+  producerPhone: string;
+};
+
+type ForecastContact = {
+  producerId: string;
+  name: string;
+  phone: string;
+  products: string[];
+  nextDate: string;
+  properties: string[];
+  qty: number;
+};
+
+/** Série do gráfico: eixo X = data, séries empilhadas por produto. */
+function forecastByDateSeries(timeline: ForecastTimelineRow[]): {
+  dates: string[];
+  series: Array<{ product: string; values: number[] }>;
+} {
+  const dates = [...new Set(timeline.map((row) => row.date))].sort((a, b) => a.localeCompare(b));
+  const products = [...new Set(timeline.map((row) => row.product))].sort((a, b) =>
+    a.localeCompare(b, 'pt-BR'),
+  );
+  const series = products.map((product) => {
+    const values = dates.map((date) => {
+      const sum = timeline
+        .filter((row) => row.date === date && row.product === product)
+        .reduce((acc, row) => acc + Number(row.qty || 0), 0);
+      return Math.round(sum * 1000) / 1000;
+    });
+    return { product, values };
+  });
+  return { dates, series };
+}
+
+function forecastContactsFromTimeline(timeline: ForecastTimelineRow[]): ForecastContact[] {
+  const map = new Map<string, ForecastContact>();
+  for (const row of timeline) {
+    const name = (row.producerName || '').trim() || 'Sem produtor';
+    const key = row.producerId || `name:${name.toLowerCase()}`;
+    const current = map.get(key) || {
+      producerId: row.producerId || '',
+      name,
+      phone: row.producerPhone || '',
+      products: [],
+      nextDate: row.date,
+      properties: [],
+      qty: 0,
+    };
+    if (row.producerPhone && !current.phone) current.phone = row.producerPhone;
+    if (row.product && !current.products.includes(row.product)) current.products.push(row.product);
+    if (row.propertyName && !current.properties.includes(row.propertyName)) {
+      current.properties.push(row.propertyName);
+    }
+    if (row.date < current.nextDate) current.nextDate = row.date;
+    current.qty += Number(row.qty || 0);
+    map.set(key, current);
+  }
+  return [...map.values()]
+    .map((item) => ({
+      ...item,
+      products: item.products.sort((a, b) => a.localeCompare(b, 'pt-BR')),
+      properties: item.properties.sort((a, b) => a.localeCompare(b, 'pt-BR')),
+      qty: Math.round(item.qty * 1000) / 1000,
+    }))
+    .sort(
+      (a, b) =>
+        a.nextDate.localeCompare(b.nextDate) || a.name.localeCompare(b.name, 'pt-BR'),
+    );
+}
+
+/**
+ * Dashboard do Agro.
+ * Em Reciclarenda (empresa 1 / "Todas") consolida todas as empresas com plantio —
+ * alinhado ao seletor "Todas Reciclarenda".
+ */
 export async function agroDashboard(
+  companyId: string,
+  month: number,
+  year: number,
+  productId = '',
+) {
+  const activeId = String(companyId || '').trim() || DEFAULT_COMPANY_ODOO_ID;
+  if (activeId === DEFAULT_COMPANY_ODOO_ID) {
+    return agroDashboardConsolidated(month, year, productId);
+  }
+  return agroDashboardCompany(activeId, month, year, productId);
+}
+
+async function agroDashboardConsolidated(month: number, year: number, productId = '') {
+  await ensureAgroSchema();
+  const now = new Date();
+  const periodMonth = month >= 1 && month <= 12 ? month : now.getMonth() + 1;
+  const periodYear = year >= 2000 && year <= 2100 ? year : now.getFullYear();
+
+  const rows = await many<{ company_odoo_id: string }>(
+    `SELECT DISTINCT company_odoo_id FROM agro_plantings WHERE COALESCE(company_odoo_id, '') <> ''`,
+  );
+  const companyIds = rows.map((row) => row.company_odoo_id).filter((id) => id && id !== DEFAULT_COMPANY_ODOO_ID);
+  // Inclui a própria Reciclarenda se tiver plantio local.
+  if (rows.some((row) => row.company_odoo_id === DEFAULT_COMPANY_ODOO_ID)) {
+    companyIds.unshift(DEFAULT_COMPANY_ODOO_ID);
+  }
+  if (!companyIds.length) {
+    return agroDashboardCompany(DEFAULT_COMPANY_ODOO_ID, periodMonth, periodYear, productId);
+  }
+
+  const parts = await Promise.all(
+    companyIds.map((id) => agroDashboardCompany(id, periodMonth, periodYear, productId)),
+  );
+  const first = parts[0];
+  const summary = emptyAgroSummary();
+  const forecastByProduct = new Map<string, number>();
+  const plantingByProduct = new Map<string, number>();
+  const harvestByProduct = new Map<string, number>();
+  const deliveryByProduct = new Map<string, number>();
+  const salesByProduct = new Map<string, number>();
+  const stockByProduct = new Map<string, number>();
+  const costsByArea = new Map<string, number>();
+  const revenueByArea = new Map<string, number>();
+  const expenseByArea = new Map<string, number>();
+  const products = new Map<string, { id: string; name: string; sigla: string; label: string }>();
+  const timeline: ForecastTimelineRow[] = [];
+
+  for (const dash of parts) {
+    summary.plantedAreaHa += dash.summary.plantedAreaHa;
+    summary.estimatedQty += dash.summary.estimatedQty;
+    summary.harvestedQty += dash.summary.harvestedQty;
+    summary.deliveredQty += dash.summary.deliveredQty;
+    summary.soldValue += dash.summary.soldValue;
+    summary.costs += dash.summary.costs;
+    mergeBars(forecastByProduct, dash.forecast.byProduct);
+    mergeBars(plantingByProduct, dash.plantingByProduct);
+    mergeBars(harvestByProduct, dash.harvestByProduct);
+    mergeBars(deliveryByProduct, dash.deliveryByProduct);
+    mergeBars(salesByProduct, dash.salesByProduct);
+    mergeBars(stockByProduct, dash.stockByProduct);
+    mergeBars(costsByArea, dash.costsByArea);
+    for (const row of dash.revenueExpenseByArea || []) {
+      revenueByArea.set(row.label, (revenueByArea.get(row.label) || 0) + row.revenue);
+      expenseByArea.set(row.label, (expenseByArea.get(row.label) || 0) + row.expense);
+    }
+    for (const product of dash.products || []) {
+      if (!products.has(product.id)) products.set(product.id, product);
+    }
+    timeline.push(...(dash.forecast.timeline || []));
+  }
+
+  const sortedTimeline = timeline.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product),
+  );
+  const areaKeys = new Set([...revenueByArea.keys(), ...expenseByArea.keys()]);
+  return {
+    companyId: DEFAULT_COMPANY_ODOO_ID,
+    scope: 'all' as const,
+    period: { month: periodMonth, year: periodYear },
+    productId: String(productId || '').trim(),
+    products: [...products.values()].sort((a, b) => a.label.localeCompare(b.label, 'pt-BR')),
+    summary: {
+      plantedAreaHa: Math.round(summary.plantedAreaHa * 1000) / 1000,
+      estimatedQty: Math.round(summary.estimatedQty * 1000) / 1000,
+      harvestedQty: Math.round(summary.harvestedQty * 1000) / 1000,
+      deliveredQty: Math.round(summary.deliveredQty * 1000) / 1000,
+      soldValue: Math.round(summary.soldValue * 100) / 100,
+      costs: Math.round(summary.costs * 100) / 100,
+    },
+    forecast: {
+      byProduct: barsFromMap(forecastByProduct),
+      byDate: forecastByDateSeries(sortedTimeline),
+      timeline: sortedTimeline,
+      contacts: forecastContactsFromTimeline(sortedTimeline),
+      periodEmpty: parts.every((dash) => dash.forecast.periodEmpty),
+      showingUpcoming: parts.some((dash) => dash.forecast.showingUpcoming) &&
+        parts.every((dash) => dash.forecast.periodEmpty),
+    },
+    plantingByProduct: barsFromMap(plantingByProduct),
+    harvestByProduct: barsFromMap(harvestByProduct),
+    deliveryByProduct: barsFromMap(deliveryByProduct),
+    salesByProduct: barsFromMap(salesByProduct, 'R$'),
+    stockByProduct: barsFromMap(stockByProduct),
+    costsByArea: barsFromMap(costsByArea, 'R$'),
+    revenueExpenseByArea: [...areaKeys]
+      .map((label) => ({
+        label,
+        revenue: Math.round((revenueByArea.get(label) || 0) * 100) / 100,
+        expense: Math.round((expenseByArea.get(label) || 0) * 100) / 100,
+      }))
+      .sort((a, b) => b.revenue - a.revenue || a.label.localeCompare(b.label, 'pt-BR')),
+  };
+}
+
+async function agroDashboardCompany(
   companyId: string,
   month: number,
   year: number,
@@ -76,11 +282,12 @@ export async function agroDashboard(
   const periodYear = year >= 2000 && year <= 2100 ? year : now.getFullYear();
   const selectedProductId = String(productId || '').trim();
 
-  const [plantings, harvests, deliveries, costs] = await Promise.all([
+  const [plantings, harvests, deliveries, costs, estimates] = await Promise.all([
     listPlantings(companyId),
     listHarvests(companyId),
     listDeliveries(companyId),
     listCosts(companyId),
+    listPlantingEstimates(companyId),
   ]);
   const { siglaByProductId, salesPriceByProductId } = await loadProductMeta(
     plantings.map((item) => item.productId),
@@ -119,7 +326,7 @@ export async function agroDashboard(
   }
 
   const forecastByProduct = new Map<string, number>();
-  const forecastTimeline: Array<{ product: string; date: string; qty: number }> = [];
+  const forecastTimeline: ForecastTimelineRow[] = [];
   const plantingByProduct = new Map<string, number>();
   const harvestByProduct = new Map<string, number>();
   const deliveryByProduct = new Map<string, number>();
@@ -131,33 +338,84 @@ export async function agroDashboard(
 
   let plantedAreaHa = 0;
   let estimatedQty = 0;
+  const estimateQtyByPlanting = new Map<string, number>();
+  for (const line of estimates) {
+    estimateQtyByPlanting.set(
+      line.plantingId,
+      (estimateQtyByPlanting.get(line.plantingId) || 0) + Number(line.estimatedQty || 0),
+    );
+  }
 
   for (const item of plantings) {
     if (!matchProduct(item.productId)) continue;
     const label = labelOf(item.productId, item.productName);
+    const plantingEstimate =
+      estimateQtyByPlanting.get(item.id) ?? Number(item.forecastQty || 0);
 
     if (isActivePlanting(item.status)) {
       plantedAreaHa += Number(item.areaPlanned || 0);
-      estimatedQty += Number(item.forecastQty || 0);
-      // Mesma base do KPI: estimativa dos plantios ativos (não só forecastOn no mês).
-      if (Number(item.forecastQty || 0) > 0) {
-        addMap(forecastByProduct, label, Number(item.forecastQty || 0));
-      }
+estimatedQty += plantingEstimate;
     }
 
     if (inPeriod(item.plantedOn, periodMonth, periodYear)) {
-      const planted = Number(item.plantedQty ?? item.forecastQty ?? 0);
+      const planted = Number(item.plantedQty ?? plantingEstimate ?? 0);
       if (planted > 0) addMap(plantingByProduct, label, planted);
-    }
-    if (item.forecastQty != null && item.forecastOn && inPeriod(item.forecastOn, periodMonth, periodYear)) {
-      forecastTimeline.push({
-        product: label,
-        date: item.forecastOn,
-        qty: Number(item.forecastQty || 0),
-      });
     }
     const stock = Number(item.harvestedQty || 0) - Number(item.deliveredQty || 0);
     if (stock > 0.0001) addMap(stockByProduct, label, stock);
+  }
+
+  function pushForecastRow(row: ForecastTimelineRow) {
+    if (!(row.qty > 0) || !row.date) return;
+    addMap(forecastByProduct, row.product, row.qty);
+    forecastTimeline.push(row);
+  }
+
+  // Estimativa: só plantios em aberto, por data prevista de colheita.
+  for (const line of estimates) {
+    if (!matchProduct(line.productId)) continue;
+    if (!isActivePlanting(line.plantingStatus)) continue;
+    if (!inPeriod(line.forecastOn, periodMonth, periodYear)) continue;
+    const planting = plantingById.get(line.plantingId);
+    pushForecastRow({
+      product: labelOf(line.productId, line.productName),
+      productId: line.productId,
+      date: line.forecastOn,
+      qty: Number(line.estimatedQty || 0),
+      plantingId: line.plantingId,
+      harvestIndex: line.harvestIndex,
+      propertyName: line.propertyName,
+      plotName: line.plotName,
+      unit: line.unit,
+      producerId: line.producerId || '',
+      producerName: line.producerName || planting?.producerName || '',
+      producerPhone: line.producerPhone || '',
+    });
+  }
+
+  // Fallback legado: plantio aberto com forecast_* sem linhas em agro_planting_estimates.
+  if (!forecastTimeline.length) {
+    for (const item of plantings) {
+      if (!matchProduct(item.productId)) continue;
+      if (!isActivePlanting(item.status)) continue;
+      if (item.forecastQty == null || !item.forecastOn) continue;
+      if (!inPeriod(item.forecastOn, periodMonth, periodYear)) continue;
+      if (estimateQtyByPlanting.has(item.id)) continue;
+      pushForecastRow({
+        product: labelOf(item.productId, item.productName),
+        productId: item.productId,
+        date: item.forecastOn,
+        qty: Number(item.forecastQty || 0),
+        plantingId: item.id,
+        harvestIndex: 1,
+        propertyName: item.propertyName,
+        plotName: item.plotName,
+        unit: item.unit,
+        producerId: '',
+        producerName: item.producerName || '',
+        producerPhone: '',
+      });
+    }
   }
 
   let harvestedQty = 0;
@@ -221,8 +479,76 @@ export async function agroDashboard(
     });
   }
 
+  // Se o mês filtrado não tem previsão, oferece as próximas colheitas ativas.
+  let upcomingTimeline: ForecastTimelineRow[] = [];
+  if (!forecastTimeline.length) {
+    const today = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0'),
+    ].join('-');
+    const fromEstimates = estimates
+      .filter((line) => matchProduct(line.productId))
+      .filter((line) => isActivePlanting(line.plantingStatus))
+      .filter((line) => line.forecastOn >= today)
+      .sort((a, b) => a.forecastOn.localeCompare(b.forecastOn))
+      .slice(0, 40)
+      .map((line) => {
+        const planting = plantingById.get(line.plantingId);
+        return {
+          product: labelOf(line.productId, line.productName),
+          productId: line.productId,
+          date: line.forecastOn,
+          qty: Number(line.estimatedQty || 0),
+          plantingId: line.plantingId,
+          harvestIndex: line.harvestIndex,
+          propertyName: line.propertyName,
+          plotName: line.plotName,
+          unit: line.unit,
+          producerId: line.producerId || '',
+          producerName: line.producerName || planting?.producerName || '',
+          producerPhone: line.producerPhone || '',
+        } satisfies ForecastTimelineRow;
+      });
+    if (fromEstimates.length) {
+      upcomingTimeline = fromEstimates;
+      for (const line of fromEstimates) addMap(forecastByProduct, line.product, line.qty);
+    } else {
+      for (const item of plantings) {
+        if (!matchProduct(item.productId)) continue;
+        if (!isActivePlanting(item.status)) continue;
+        if (!item.forecastOn || item.forecastQty == null) continue;
+        if (item.forecastOn < today) continue;
+        const label = labelOf(item.productId, item.productName);
+        addMap(forecastByProduct, label, Number(item.forecastQty || 0));
+        upcomingTimeline.push({
+          product: label,
+          productId: item.productId,
+          date: item.forecastOn,
+          qty: Number(item.forecastQty || 0),
+          plantingId: item.id,
+          harvestIndex: 1,
+          propertyName: item.propertyName,
+          plotName: item.plotName,
+          unit: item.unit,
+          producerId: '',
+          producerName: item.producerName || '',
+          producerPhone: '',
+        });
+      }
+      upcomingTimeline.sort((a, b) => a.date.localeCompare(b.date));
+    }
+  }
+
+  const timeline = (forecastTimeline.length ? forecastTimeline : upcomingTimeline).sort(
+    (a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product),
+  );
+  const byDate = forecastByDateSeries(timeline);
+  const contacts = forecastContactsFromTimeline(timeline);
+
   return {
     companyId,
+    scope: 'entity' as const,
     period: { month: periodMonth, year: periodYear },
     productId: selectedProductId,
     products: [...productOptions.values()].sort((a, b) =>
@@ -238,9 +564,11 @@ export async function agroDashboard(
     },
     forecast: {
       byProduct: barsFromMap(forecastByProduct),
-      timeline: forecastTimeline.sort(
-        (a, b) => a.date.localeCompare(b.date) || a.product.localeCompare(b.product),
-      ),
+      byDate,
+      timeline,
+      contacts,
+      periodEmpty: !forecastTimeline.length,
+      showingUpcoming: !forecastTimeline.length && timeline.length > 0,
     },
     plantingByProduct: barsFromMap(plantingByProduct),
     harvestByProduct: barsFromMap(harvestByProduct),
@@ -324,7 +652,7 @@ export async function hubAgroDashboard(
   }> = [];
 
   for (const companyId of companyIds) {
-    const dash = await agroDashboard(companyId, periodMonth, periodYear);
+    const dash = await agroDashboardCompany(companyId, periodMonth, periodYear);
     const companyName = nameById.get(companyId) || `Empresa ${companyId}`;
     summary.plantedAreaHa += dash.summary.plantedAreaHa;
     summary.estimatedQty += dash.summary.estimatedQty;

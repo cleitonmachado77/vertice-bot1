@@ -8,8 +8,20 @@ export const AGRO_TABS = [
     icon: 'dashboard',
     description: 'Indicadores de plantio, colheita, entrega e custos da empresa ativa',
   },
-  { id: 'plantio', slug: 'plantio', label: 'Plantio', icon: 'sprout', description: 'O produtor é o fornecedor do Odoo. A estimativa da safra fica no plantio' },
-  { id: 'colheita', slug: 'colheita', label: 'Colheita', icon: 'harvest', description: 'A quantidade colhida soma no estoque do talhão' },
+  {
+    id: 'plantio',
+    slug: 'plantio',
+    label: 'Plantio',
+    icon: 'sprout',
+    description: 'Registra o plantio e gera as datas previstas de colheita pela curva do produto',
+  },
+  {
+    id: 'colheita',
+    slug: 'colheita',
+    label: 'Colheita',
+    icon: 'harvest',
+    description: 'Lista plantios com data prevista próxima (±30 dias) e registra a quantidade colhida',
+  },
   {
     id: 'entrega',
     slug: 'entrega',
@@ -36,6 +48,40 @@ const STATUS = {
 function dateBr(value) {
   const [year, month, day] = String(value || '').slice(0, 10).split('-');
   return year && month && day ? `${day}/${month}/${year}` : '—';
+}
+
+/** Datas de colheita previstas do plantio (estimativas ou forecast_on). */
+function plantingHarvestDates(item, estimates) {
+  const lines = (estimates || [])
+    .filter((line) => line.plantingId === item.id)
+    .sort((a, b) => Number(a.harvestIndex || 0) - Number(b.harvestIndex || 0));
+  if (lines.length) {
+    return lines.map((line) => ({
+      index: line.harvestIndex,
+      date: line.forecastOn,
+      qty: line.estimatedQty,
+    }));
+  }
+  if (item.forecastOn) {
+    return [{ index: 1, date: item.forecastOn, qty: item.forecastQty }];
+  }
+  return [];
+}
+
+function forecastCell(item, estimates) {
+  const dates = plantingHarvestDates(item, estimates);
+  if (!dates.length) {
+    return `<span class="agro-forecast-missing">Sem data prevista</span>`;
+  }
+  const first = dates[0];
+  const extra =
+    dates.length > 1
+      ? `<span class="agro-sub">+${dates.length - 1} colheita(s): ${dates
+          .slice(1, 4)
+          .map((line) => dateBr(line.date))
+          .join(', ')}${dates.length > 4 ? '…' : ''}</span>`
+      : `<span class="agro-sub">1ª colheita prevista</span>`;
+  return `<span class="agro-forecast-date">${escapeHtml(dateBr(first.date))}</span>${extra}`;
 }
 
 function qty(value, unit = '') {
@@ -231,10 +277,15 @@ function listHtml(tab, data) {
       .join('');
     return table(['Data', 'Nome', 'Quantidade', 'Área', 'Valor'], rows, 'Nenhum custo registrado.');
   }
+  const estimates = data.estimates || [];
   const rows = (data.plantings || [])
     .map((item) => {
       const sigla = productSigla(data.catalog, item.productId, item.productName);
-      const search = `${item.propertyName} ${item.producerName} ${item.plotName} ${sigla} ${item.productName}`.toLowerCase();
+      const harvestDates = plantingHarvestDates(item, estimates)
+        .map((line) => dateBr(line.date))
+        .join(' ');
+      const search =
+        `${item.propertyName} ${item.producerName} ${item.plotName} ${sigla} ${item.productName} ${harvestDates}`.toLowerCase();
       const harvest =
         item.status === 'colhido'
           ? ''
@@ -244,12 +295,12 @@ function listHtml(tab, data) {
           ? `<button class="btn-ghost agro-mini" type="button" data-close-planting="${escapeHtml(item.id)}">Encerrar plantio</button>`
           : '';
       return `<tr data-search="${escapeHtml(search)}">
-        <td>${dateBr(item.plantedOn)}</td>
+        <td>${dateBr(item.plantedOn)}<span class="agro-sub">Plantio</span></td>
+        <td class="agro-forecast-col">${forecastCell(item, estimates)}</td>
         <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)} · ${escapeHtml(item.unit || '')}</span></td>
         <td>${qty(item.plantedQty, item.unit)}</td>
         <td>${qty(item.forecastQty, item.unit)}</td>
         <td>${escapeHtml(item.propertyName)}</td>
-        <td>${escapeHtml(item.producerName || '—')}</td>
         <td>${escapeHtml(item.plotName || '—')}</td>
         <td>${qty(item.areaPlanned, 'ha')}</td>
         <td>${qty(item.harvestedQty, item.unit)}</td>
@@ -259,7 +310,7 @@ function listHtml(tab, data) {
     })
     .join('');
   return table(
-    ['Data', 'Produto', 'Plantado', 'Estimativa', 'Propriedade', 'Fornecedor', 'Talhão', 'Área', 'Colhido', 'Situação'],
+    ['Plantio', 'Colheita prevista', 'Produto', 'Plantado', 'Estimativa', 'Propriedade', 'Talhão', 'Área', 'Colhido', 'Situação'],
     rows,
     'Nenhum plantio nesta empresa.',
   );

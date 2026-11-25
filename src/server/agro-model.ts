@@ -36,6 +36,12 @@ export type AgroProduct = {
   salesPrice: string;
   cycleDays: number | null;
   yieldPerHa: number | null;
+  harvestCount: number | null;
+  harvestIntervalDays: number | null;
+  harvestCurve: string;
+  curveIntensity: number | null;
+  cyclesPerYear: number | null;
+  plantsPerArea: number | null;
 };
 export type AgroBuyer = { id: string; name: string };
 
@@ -62,11 +68,29 @@ export type AgroPlanting = {
   deliveredValue: number;
 };
 
+export type AgroPlantingEstimate = {
+  id: string;
+  plantingId: string;
+  harvestIndex: number;
+  forecastOn: string;
+  estimatedQty: number;
+  productId: string;
+  productName: string;
+  propertyName: string;
+  plotName: string;
+  unit: string;
+  plantingStatus: string;
+  producerId: string;
+  producerName: string;
+  producerPhone: string;
+};
+
 export type AgroHarvest = {
   id: string;
   plantingId: string;
   harvestedOn: string;
   quantity: number;
+  areaHarvested: number | null;
   notes: string;
   productName: string;
   unit: string;
@@ -194,12 +218,64 @@ export async function getPlanting(companyId: string, id: string): Promise<AgroPl
   return row ? mapPlanting(row) : undefined;
 }
 
+export async function listPlantingEstimates(companyId: string): Promise<AgroPlantingEstimate[]> {
+  const rows = await many<{
+    id: string;
+    planting_id: string;
+    harvest_index: number;
+    forecast_on: string;
+    estimated_qty: number;
+    product_id: string;
+    product_name: string;
+    property_name: string;
+    plot_name: string;
+    unit: string;
+    planting_status: string;
+    producer_id: string;
+    producer_name: string;
+    producer_phone: string;
+  }>(
+    `SELECT e.id, e.planting_id, e.harvest_index,
+       to_char(e.forecast_on, 'YYYY-MM-DD') AS forecast_on, e.estimated_qty,
+       p.product_id, p.product_name, pr.name AS property_name,
+       ${PLOT_LABEL_SQL} AS plot_name, p.unit, p.status AS planting_status,
+       COALESCE(prod.id, '') AS producer_id,
+       COALESCE(NULLIF(prod.name, ''), NULLIF(pr.producer_name, ''), '') AS producer_name,
+       COALESCE(prod.phone, '') AS producer_phone
+     FROM agro_planting_estimates e
+     JOIN agro_plantings p ON p.id = e.planting_id
+     JOIN agro_properties pr ON pr.id = p.property_id
+     LEFT JOIN agro_plots pl ON pl.id = p.plot_id
+     LEFT JOIN agro_producers prod ON prod.id = pr.producer_id AND prod.active = 1
+     WHERE p.company_odoo_id = $1
+     ORDER BY e.forecast_on ASC, e.harvest_index ASC`,
+    [companyId],
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    plantingId: row.planting_id,
+    harvestIndex: Math.trunc(num(row.harvest_index)),
+    forecastOn: row.forecast_on,
+    estimatedQty: num(row.estimated_qty),
+    productId: row.product_id || '',
+    productName: row.product_name,
+    propertyName: row.property_name,
+    plotName: row.plot_name || '',
+    unit: row.unit || '',
+    plantingStatus: row.planting_status,
+    producerId: row.producer_id || '',
+    producerName: row.producer_name || '',
+    producerPhone: row.producer_phone || '',
+  }));
+}
+
 export async function listHarvests(companyId: string): Promise<AgroHarvest[]> {
   const rows = await many<{
     id: string;
     planting_id: string;
     harvested_on: string;
     quantity: number;
+    area_harvested: number | null;
     notes: string;
     product_name: string;
     unit: string;
@@ -208,7 +284,7 @@ export async function listHarvests(companyId: string): Promise<AgroHarvest[]> {
     planting_status: string;
   }>(
     `SELECT h.id, h.planting_id, to_char(h.harvested_on, 'YYYY-MM-DD') AS harvested_on,
-       h.quantity, h.notes, p.product_name, p.unit, pr.name AS property_name,
+       h.quantity, h.area_harvested, h.notes, p.product_name, p.unit, pr.name AS property_name,
        ${PLOT_LABEL_SQL} AS plot_name, p.status AS planting_status
      FROM agro_harvests h
      JOIN agro_plantings p ON p.id = h.planting_id
@@ -223,6 +299,7 @@ export async function listHarvests(companyId: string): Promise<AgroHarvest[]> {
     plantingId: row.planting_id,
     harvestedOn: row.harvested_on,
     quantity: num(row.quantity),
+    areaHarvested: nullable(row.area_harvested),
     notes: row.notes || '',
     productName: row.product_name,
     unit: row.unit || '',

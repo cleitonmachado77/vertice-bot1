@@ -11,8 +11,9 @@ import {
 } from './agro-bot-fields.js';
 import { saveDelivery, saveHarvest, savePlanting } from './agro.js';
 import { saveCost } from './agro-costs.js';
-import { listPlantings, type AgroPlanting, type AgroProduct } from './agro-model.js';
+import { listPlantingEstimates, listPlantings, type AgroPlanting, type AgroProduct } from './agro-model.js';
 import { deleteAgroPreset, getAgroPresetById, type AgroPreset } from './agro-presets.js';
+import { isoDateWithinWindow } from './agro-rules.js';
 import { enqueueOutbound } from './outbound-outbox.js';
 import { normalizeWhatsappPhone } from './phone.js';
 import { CONFIRM_QUESTION_BODY } from './forms-bot-fields.js';
@@ -215,8 +216,9 @@ function plotMatches(planting: AgroPlanting, plotRaw: string): boolean {
 
 function pickPlanting(
   plantings: AgroPlanting[],
-  values: { productName?: string; plotName?: string; planting?: string },
+  values: { productName?: string; plotName?: string; planting?: string; harvestedOn?: string },
   products: AgroProduct[],
+  estimateDatesByPlanting: Map<string, string[]> = new Map(),
 ): AgroPlanting {
   const pool = plantings.filter((item) => item.status !== 'colhido');
   const source = pool.length ? pool : plantings;
@@ -224,6 +226,7 @@ function pickPlanting(
   const productNeedle = fold(values.productName || '');
   const plotNeedle = fold(values.plotName || '');
   const legacy = fold(values.planting || '');
+  const harvestedOn = String(values.harvestedOn || '').slice(0, 10);
 
   let hits = source;
   if (product || productNeedle) {
@@ -245,6 +248,15 @@ function pickPlanting(
       const hay = fold(`${item.propertyName} ${item.plotName} ${item.productName}`);
       return hay.includes(legacy) || legacy.includes(fold(item.productName));
     });
+  }
+  if (harvestedOn && hits.length > 1) {
+    const inWindow = hits.filter((item) => {
+      const dates = estimateDatesByPlanting.get(item.id) || [];
+      if (dates.length) return dates.some((date) => isoDateWithinWindow(date, harvestedOn, 30));
+      if (item.forecastOn) return isoDateWithinWindow(item.forecastOn, harvestedOn, 30);
+      return true;
+    });
+    if (inWindow.length) hits = inWindow;
   }
   if (!hits.length) {
     if (!productNeedle && !plotNeedle && !legacy && source.length === 1) return source[0];
@@ -291,9 +303,23 @@ async function resolvePlantingForHarvest(
   products: AgroProduct[],
   today: string,
 ): Promise<AgroPlanting> {
-  const plantings = await listPlantings(companyId);
+  const [plantings, estimates] = await Promise.all([
+    listPlantings(companyId),
+    listPlantingEstimates(companyId),
+  ]);
+  const estimateDatesByPlanting = new Map<string, string[]>();
+  for (const line of estimates) {
+    const list = estimateDatesByPlanting.get(line.plantingId) || [];
+    list.push(line.forecastOn);
+    estimateDatesByPlanting.set(line.plantingId, list);
+  }
   try {
-    return pickPlanting(plantings, values, products);
+    return pickPlanting(
+      plantings,
+      { ...values, harvestedOn: agroAnswerDate(values.harvestedOn || '', today) },
+      products,
+      estimateDatesByPlanting,
+    );
   } catch (error) {
     const product = findCatalogProduct(products, values.productName || '');
     if (!product) {
@@ -319,7 +345,8 @@ async function resolvePlantingForHarvest(
       productName: product.name,
       unit: product.uom || '',
       plantedOn,
-      plantedQty: values.quantity || '',
+plantedQty: values.quantity || '',
+      areaPlanned: '',
       notes: 'Criado automaticamente a partir da colheita via Bot',
       status: 'em_colheita',
     });
@@ -351,12 +378,25 @@ async function savePlantingFromBot(
       productName: product?.name || named,
       unit: values.unit || product?.uom || '',
       plantedOn: agroAnswerDate(values.plantedOn || '', today),
-      plantedQty: values.plantedQty || '',
+plantedQty: values.plantedQty || '',
+      areaPlanned: values.areaPlanned || '',
       notes: values.notes || '',
     },
     existing?.id || '',
   );
   await run(`UPDATE agro_plantings SET source_cycle_id = $2 WHERE id = $1`, [saved.id, cycleId]);
+}
+
+function agroAnswerClose(value: string): boolean {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+  if (!raw) return false;
+  if (raw === 'fechada' || raw === 'fechar' || raw === 'encerrar' || raw === 'colhido') return true;
+  if (raw === 'aberta' || raw === 'abrir' || raw === 'em colheita' || raw === 'em_colheita') return false;
+  return agroAnswerYes(value);
 }
 
 async function saveHarvestFromBot(
@@ -374,7 +414,8 @@ async function saveHarvestFromBot(
       plantingId: planting.id,
       harvestedOn: agroAnswerDate(values.harvestedOn || '', today),
       quantity: values.quantity || '',
-      close: agroAnswerYes(values.close || ''),
+      areaHarvested: values.areaHarvested || '',
+      close: agroAnswerClose(values.close || ''),
       notes: values.notes || '',
     },
     existing?.id || '',

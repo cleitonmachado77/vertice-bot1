@@ -14,6 +14,67 @@
   font-size: 0.75rem;
 }
 
+.agro-forecast-col {
+  min-width: 9.5rem;
+}
+
+.agro-forecast-date {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #1f7a5c 14%, transparent);
+  color: #145c44;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.agro-forecast-missing {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.agro-harvest-schedule {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, #1f7a5c 28%, var(--line, #ddd));
+  border-radius: 12px;
+  background: color-mix(in srgb, #1f7a5c 6%, var(--sheet, #fff));
+}
+
+.agro-harvest-schedule strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.agro-harvest-schedule ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.agro-harvest-schedule li {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.agro-harvest-schedule--empty {
+  opacity: 0.9;
+}
+
+.agro-dash-forecast-caption {
+  margin: 0;
+  padding: 10px 12px 6px;
+  font-size: 0.86rem;
+}
+
 .agro-actions {
   display: flex;
   flex-wrap: wrap;
@@ -262,6 +323,26 @@ body.agro-modal-open .sidebar {
   padding: 14px 16px 12px;
 }
 
+.agro-dash-card--featured {
+  grid-column: 1 / -1;
+  padding: 18px 20px 16px;
+  border: 1px solid color-mix(in srgb, #1f7a5c 28%, var(--line, #ddd));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #1f7a5c 8%, transparent), transparent 42%),
+    var(--sheet, #fff);
+  box-shadow: 0 10px 28px rgba(31, 122, 92, 0.08);
+}
+
+.agro-dash-card--featured .agro-dash-card-head h3 {
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+}
+
+.agro-dash-card--featured .agro-dash-card-head .muted {
+  font-size: 0.86rem;
+  max-width: 52rem;
+}
+
 .agro-dash-card-head h3 {
   margin: 0 0 2px;
   font-size: 0.95rem;
@@ -276,6 +357,124 @@ body.agro-modal-open .sidebar {
   position: relative;
   height: 240px;
   min-height: 240px;
+}
+
+.agro-dash-chart-wrap--featured {
+  height: 320px;
+  min-height: 320px;
+}
+
+.agro-dash-forecast-panel {
+  margin-top: 14px;
+}
+
+.agro-dash-forecast-table-wrap {
+  max-height: 280px;
+  overflow-x: auto;
+  overflow-y: auto;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sheet, #fff) 92%, #1f7a5c 4%);
+  scrollbar-gutter: stable;
+}
+
+.agro-dash-forecast-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.agro-dash-forecast-table th,
+.agro-dash-forecast-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line, #eee);
+  white-space: nowrap;
+}
+
+.agro-dash-forecast-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted, #6b6b70);
+  background: color-mix(in srgb, #e8f3ee 70%, #fff);
+  box-shadow: 0 1px 0 var(--line, #eee);
+}
+
+.agro-dash-forecast-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.agro-dash-forecast-panel .muted {
+  margin: 8px 12px 10px;
+}
+
+.agro-dash-contacts {
+  margin-top: 16px;
+  padding-top: 4px;
+}
+
+.agro-dash-contacts-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.agro-dash-contacts-head h4 {
+  margin: 0 0 2px;
+  font-size: 0.98rem;
+}
+
+.agro-dash-contacts-head .muted {
+  margin: 0;
+}
+
+.agro-dash-contacts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.agro-dash-contact-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line, #e5e5e5);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sheet, #fff) 94%, #1f7a5c 4%);
+}
+
+.agro-dash-contact-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.agro-dash-contact-main strong {
+  font-size: 0.95rem;
+}
+
+.agro-dash-contact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.agro-dash-contact-phone {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-right: 4px;
 }
 
 .agro-dash-empty {

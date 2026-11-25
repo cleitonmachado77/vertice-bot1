@@ -192,13 +192,54 @@ export const PRODUCT_FIELDS: FormField[] = [
   },
   {
     key: 'cycle_days',
-    label: 'Dias até a colheita',
-    placeholder: 'ex.: 90 (Vertice Agro)',
+    label: 'Dias até a 1ª colheita',
+    placeholder: 'ex.: 45 (Vertice Agro)',
   },
   {
     key: 'yield_per_ha',
     label: 'Produtividade estimada / ha',
     placeholder: 'ex.: 12000 (mesma unidade do produto)',
+  },
+  {
+    key: 'harvest_count',
+    label: 'Número de colheitas',
+    placeholder: 'mínimo 1',
+  },
+  {
+    key: 'harvest_interval_days',
+    label: 'Intervalo entre colheitas (dias)',
+    placeholder: '0 se colheita única',
+  },
+  {
+    key: 'harvest_curve',
+    label: 'Curva de colheita',
+    options: [
+      { value: 'Uniforme', label: 'Uniforme' },
+      { value: 'Decrescente', label: 'Decrescente' },
+      { value: 'Crescente', label: 'Crescente' },
+      { value: 'Pico no meio', label: 'Pico no meio' },
+    ],
+  },
+  {
+    key: 'curve_intensity',
+    label: 'Intensidade da curva',
+    options: [
+      { value: '0', label: '0' },
+      { value: '0.5', label: '0,5' },
+      { value: '1', label: '1' },
+      { value: '1.5', label: '1,5' },
+      { value: '2', label: '2' },
+    ],
+  },
+  {
+    key: 'cycles_per_year',
+    label: 'Ciclos por ano',
+    placeholder: 'ex.: 2',
+  },
+  {
+    key: 'plants_per_area',
+    label: 'Plantas por área (referência)',
+    placeholder: 'opcional',
   },
 ];
 

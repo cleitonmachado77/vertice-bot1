@@ -28,7 +28,7 @@ const PRESETS: AgroPresetInput[] = [
       propertyName: 'Fazenda Wagner',
       producerName: 'Wagner',
     },
-    visible: ['propertyName', 'producerName', 'plantedOn', 'productName', 'plantedQty', 'plotName'],
+    visible: ['propertyName', 'producerName', 'plantedOn', 'productName', 'plantedQty', 'areaPlanned', 'plotName'],
   },
   {
     kind: 'agro_colheita',
@@ -39,7 +39,7 @@ const PRESETS: AgroPresetInput[] = [
     bot_send_time: SEND_TIME,
     bot_rules: { confirm_before_close: false },
     header: {},
-    visible: ['harvestedOn', 'productName', 'quantity', 'plotName'],
+    visible: ['harvestedOn', 'productName', 'quantity', 'areaHarvested', 'plotName', 'close'],
   },
   {
     kind: 'agro_entrega',

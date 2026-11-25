@@ -41,10 +41,16 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
     },
     { key: 'unit', label: 'Unidade', odoo: true, body: 'Qual a unidade do produto? (ex.: KG)' },
     {
-      key: 'plantedQty',
+key: 'plantedQty',
       label: 'Quantidade plantada',
       required: true,
       body: 'Qual a quantidade plantada? (número, ex.: 5000)',
+    },
+    {
+      key: 'areaPlanned',
+      label: 'Área plantada (ha)',
+      required: true,
+      body: 'Qual a área plantada em hectares?',
     },
     {
       key: 'plotName',
@@ -77,12 +83,21 @@ export const AGRO_BOT_FIELDS: Record<AgroBotKind, AgroBotField[]> = {
       body: 'Qual a quantidade colhida? (número, ex.: 200)',
     },
     {
+      key: 'areaHarvested',
+      label: 'Área colhida (ha)',
+      body: 'Qual a área colhida em hectares?',
+    },
+    {
       key: 'plotName',
       label: 'Área (talhão)',
       required: true,
       body: 'Qual a área? (código, ex.: 1 ou A1)',
     },
-    { key: 'close', label: 'Encerrar', body: 'Encerrar a colheita deste plantio? (sim ou não)' },
+    {
+      key: 'close',
+      label: 'Status (Aberta/Fechada)',
+      body: 'A colheita fica Aberta ou Fechada? (aberta/fechada ou sim=fechar)',
+    },
     { key: 'notes', label: 'Observações', body: 'Alguma observação?' },
   ],
   agro_entrega: [

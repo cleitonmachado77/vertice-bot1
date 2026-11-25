@@ -215,7 +215,70 @@ async function createAgroTables(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_agro_delivery_points_company
      ON agro_delivery_points(company_odoo_id, sort_order, name)`,
   );
+  await run(`ALTER TABLE agro_plantings ADD COLUMN IF NOT EXISTS plants_count DOUBLE PRECISION`);
+  await run(
+    `ALTER TABLE agro_plantings DROP CONSTRAINT IF EXISTS agro_plantings_plants_count_check`,
+  );
+  await run(
+    `ALTER TABLE agro_plantings
+     ADD CONSTRAINT agro_plantings_plants_count_check
+     CHECK (plants_count IS NULL OR plants_count >= 0)`,
+  );
+  await run(`ALTER TABLE agro_harvests ADD COLUMN IF NOT EXISTS area_harvested DOUBLE PRECISION`);
+  await run(
+    `ALTER TABLE agro_harvests DROP CONSTRAINT IF EXISTS agro_harvests_area_harvested_check`,
+  );
+  await run(
+    `ALTER TABLE agro_harvests
+     ADD CONSTRAINT agro_harvests_area_harvested_check
+     CHECK (area_harvested IS NULL OR area_harvested >= 0)`,
+  );
+  await run(`
+    CREATE TABLE IF NOT EXISTS agro_planting_estimates (
+      id TEXT PRIMARY KEY,
+      planting_id TEXT NOT NULL REFERENCES agro_plantings(id) ON UPDATE CASCADE ON DELETE CASCADE,
+      harvest_index INTEGER NOT NULL,
+      forecast_on DATE NOT NULL,
+      estimated_qty DOUBLE PRECISION NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (harvest_index >= 1),
+      CHECK (estimated_qty >= 0),
+      UNIQUE (planting_id, harvest_index)
+    )
+  `);
+  await run(
+    `CREATE INDEX IF NOT EXISTS idx_agro_planting_estimates_planting
+     ON agro_planting_estimates(planting_id, harvest_index)`,
+  );
+  await run(
+    `CREATE INDEX IF NOT EXISTS idx_agro_planting_estimates_date
+     ON agro_planting_estimates(forecast_on)`,
+  );
   await migrateProducersFromProperties();
+  await migrateLegacyPlantingEstimates();
+}
+
+/** Plantios antigos com forecast_* viram 1 linha de estimativa. */
+async function migrateLegacyPlantingEstimates(): Promise<void> {
+  await run(`
+    INSERT INTO agro_planting_estimates(
+      id, planting_id, harvest_index, forecast_on, estimated_qty, created_at, updated_at
+    )
+    SELECT
+      p.id || '-est-1',
+      p.id,
+      1,
+      p.forecast_on,
+      COALESCE(p.forecast_qty, 0),
+      NOW(),
+      NOW()
+    FROM agro_plantings p
+    WHERE p.forecast_on IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM agro_planting_estimates e WHERE e.planting_id = p.id
+      )
+  `);
 }
 
 /** Liga propriedades antigas a um cadastro de produtor (nome/fornecedor já gravados). */

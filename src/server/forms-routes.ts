@@ -347,6 +347,12 @@ export function registerFormsRoutes(): void {
         track_inventory: text(input.track_inventory) || 'True',
         cycle_days: text(input.cycle_days),
         yield_per_ha: text(input.yield_per_ha),
+        harvest_count: text(input.harvest_count),
+        harvest_interval_days: text(input.harvest_interval_days),
+        harvest_curve: text(input.harvest_curve),
+        curve_intensity: text(input.curve_intensity),
+        cycles_per_year: text(input.cycles_per_year),
+        plants_per_area: text(input.plants_per_area),
       });
       await markDocSyncPending(item.id).catch(() => undefined);
       json(ctx.res, 200, { item, sync_status: 'syncing' });
@@ -374,6 +380,12 @@ export function registerFormsRoutes(): void {
         track_inventory: text(input.track_inventory) || 'True',
         cycle_days: text(input.cycle_days),
         yield_per_ha: text(input.yield_per_ha),
+        harvest_count: text(input.harvest_count),
+        harvest_interval_days: text(input.harvest_interval_days),
+        harvest_curve: text(input.harvest_curve),
+        curve_intensity: text(input.curve_intensity),
+        cycles_per_year: text(input.cycles_per_year),
+        plants_per_area: text(input.plants_per_area),
       });
       await markDocSyncPending(item.id).catch(() => undefined);
       json(ctx.res, 200, { item, sync_status: 'syncing' });

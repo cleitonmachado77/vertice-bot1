@@ -399,6 +399,12 @@ async function openProductEditor(root, reload, item, token) {
     track_inventory: 'True',
     cycle_days: '',
     yield_per_ha: '',
+    harvest_count: '1',
+    harvest_interval_days: '0',
+    harvest_curve: 'Uniforme',
+    curve_intensity: '0',
+    cycles_per_year: '',
+    plants_per_area: '',
     odoo_id: '',
   };
   const catalog = await api('/api/forms/catalog').catch(() => ({ refs: {} }));
@@ -445,14 +451,46 @@ async function openProductEditor(root, reload, item, token) {
             <option value="False"${String(value.track_inventory) === 'False' ? ' selected' : ''}>Não</option>
           </select>
         </label>
-        <label>Dias até a colheita
-          <input name="cycle_days" inputmode="numeric" placeholder="ex.: 90 (Vertice Agro)" value="${escapeHtml(value.cycle_days || '')}" />
+        <label>Dias até a 1ª colheita
+          <input name="cycle_days" inputmode="numeric" placeholder="ex.: 45 (Vertice Agro)" value="${escapeHtml(value.cycle_days || '')}" />
         </label>
         <label>Produtividade estimada / ha
           <input name="yield_per_ha" inputmode="decimal" placeholder="ex.: 12000 (mesma unidade do produto)" value="${escapeHtml(value.yield_per_ha || '')}" />
         </label>
+        <label>Número de colheitas
+          <input name="harvest_count" inputmode="numeric" placeholder="mínimo 1" value="${escapeHtml(value.harvest_count || '1')}" />
+        </label>
+        <label>Intervalo entre colheitas (dias)
+          <input name="harvest_interval_days" inputmode="numeric" placeholder="0 se colheita única" value="${escapeHtml(value.harvest_interval_days || '0')}" />
+        </label>
+        <label>Curva de colheita
+          <select name="harvest_curve">
+            ${['Uniforme', 'Decrescente', 'Crescente', 'Pico no meio']
+              .map(
+                (curve) =>
+                  `<option value="${curve}"${(value.harvest_curve || 'Uniforme') === curve ? ' selected' : ''}>${curve}</option>`,
+              )
+              .join('')}
+          </select>
+        </label>
+        <label>Intensidade da curva
+          <select name="curve_intensity">
+            ${['0', '0.5', '1', '1.5', '2']
+              .map(
+                (level) =>
+                  `<option value="${level}"${String(value.curve_intensity || '0') === level ? ' selected' : ''}>${level.replace('.', ',')}</option>`,
+              )
+              .join('')}
+          </select>
+        </label>
+        <label>Ciclos por ano
+          <input name="cycles_per_year" inputmode="decimal" placeholder="ex.: 2" value="${escapeHtml(value.cycles_per_year || '')}" />
+        </label>
+        <label>Plantas por área (referência)
+          <input name="plants_per_area" inputmode="decimal" placeholder="opcional" value="${escapeHtml(value.plants_per_area || '')}" />
+        </label>
       </div>
-      <p class="muted">Dias e produtividade / ha alimentam a previsão e a estimativa do plantio no Vertice Agro e no Bot.</p>
+      <p class="muted">Esses parâmetros geram as colheitas previstas ao registrar o plantio no Vertice Agro (curva da planilha de estimativa).</p>
     </form>`;
 
   openEditorModal(root);

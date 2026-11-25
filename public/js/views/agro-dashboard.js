@@ -137,18 +137,194 @@ function productFilter(products, selected) {
     </label>`;
 }
 
-function sectionCard(id, title, hint = '', emptyText = 'Sem dados neste período') {
+function sectionCard(id, title, hint = '', featuredOrEmpty = false, emptyFallback = 'Sem dados neste período') {
+  const featured = featuredOrEmpty === true;
+  const emptyText = typeof featuredOrEmpty === 'string' ? featuredOrEmpty : emptyFallback;
   return `
-    <section class="card agro-dash-card" data-chart="${escapeHtml(id)}">
+    <section class="card agro-dash-card${featured ? ' agro-dash-card--featured' : ''}" data-chart="${escapeHtml(id)}">
       <header class="agro-dash-card-head">
         <h3>${escapeHtml(title)}</h3>
-        ${hint ? `<p class="muted">${escapeHtml(hint)}</p>` : ''}
+        ${hint ? `<p class="muted" data-chart-hint="${escapeHtml(id)}">${escapeHtml(hint)}</p>` : ''}
       </header>
-      <div class="agro-dash-chart-wrap">
-        <canvas id="agro-chart-${escapeHtml(id)}" height="220" aria-label="${escapeHtml(title)}"></canvas>
+<div class="agro-dash-chart-wrap${featured ? ' agro-dash-chart-wrap--featured' : ''}">
+        <canvas id="agro-chart-${escapeHtml(id)}" height="${featured ? 320 : 220}" aria-label="${escapeHtml(title)}"></canvas>
         <p class="agro-dash-empty muted" id="agro-chart-empty-${escapeHtml(id)}" hidden>${escapeHtml(emptyText)}</p>
       </div>
+      ${featured ? '<div class="agro-dash-forecast-panel" id="agro-forecast-panel" hidden></div>' : ''}
     </section>`;
+}
+
+function formatDay(iso) {
+  const raw = String(iso || '').slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) return raw || '—';
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+function formatDayShort(iso) {
+  const raw = String(iso || '').slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) return raw || '—';
+  return `${match[3]}/${match[2]}`;
+}
+
+function digitsPhone(phone) {
+  return String(phone || '').replace(/\D/g, '');
+}
+
+function whatsappHref(phone) {
+  const digits = digitsPhone(phone);
+  if (!digits) return '';
+  const withCountry = digits.length >= 12 ? digits : digits.length >= 10 ? `55${digits}` : '';
+  return withCountry ? `https://wa.me/${withCountry}` : '';
+}
+
+function telHref(phone) {
+  const digits = digitsPhone(phone);
+  return digits ? `tel:+${digits.length >= 12 ? digits : digits.length >= 10 ? `55${digits}` : digits}` : '';
+}
+
+function printForecastContacts(contacts, period) {
+  const monthLabel = MONTHS[(period?.month || 1) - 1] || '';
+  const year = period?.year || '';
+  const rows = (contacts || [])
+    .map(
+      (item) => `
+      <tr>
+        <td>${escapeHtml(item.name || '—')}</td>
+        <td>${escapeHtml(item.phone || '—')}</td>
+        <td>${escapeHtml((item.products || []).join(', ') || '—')}</td>
+        <td>${escapeHtml(formatDay(item.nextDate))}</td>
+        <td>${escapeHtml((item.properties || []).join(', ') || '—')}</td>
+        <td>${escapeHtml(formatQty(item.qty))}</td>
+      </tr>`,
+    )
+    .join('');
+  const html = `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<title>Produtores a contatar — ${escapeHtml(monthLabel)}/${escapeHtml(String(year))}</title>
+<style>
+  body { font-family: Georgia, "Times New Roman", serif; color: #1a1a1a; margin: 24px; }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; }
+  p { color: #555; margin: 0 0 16px; font-size: 0.9rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { border: 1px solid #ccc; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f3f3f3; }
+</style></head><body>
+  <h1>Produtores a contatar</h1>
+  <p>Estimativa de produção · plantios em aberto · ${escapeHtml(monthLabel)}/${escapeHtml(String(year))}</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Produtor</th><th>Telefone</th><th>Culturas</th>
+        <th>Próxima colheita</th><th>Propriedades</th><th>Estimativa</th>
+      </tr>
+    </thead>
+    <tbody>${rows || '<tr><td colspan="6">Nenhum produtor no período</td></tr>'}</tbody>
+  </table>
+  <script>window.onload = () => { window.print(); };<\/script>
+</body></html>`;
+  const popup = window.open('', '_blank', 'noopener,noreferrer,width=960,height=720');
+  if (!popup) return;
+  popup.document.open();
+  popup.document.write(html);
+  popup.document.close();
+}
+
+function renderForecastPanel(forecast, period) {
+  const panel = document.getElementById('agro-forecast-panel');
+  if (!panel) return;
+  const rows = forecast?.timeline || [];
+  const contacts = forecast?.contacts || [];
+  if (!rows.length && !contacts.length) {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div class="agro-dash-forecast-table-wrap">
+      <p class="agro-dash-forecast-caption"><strong>Quando colher</strong> — data prevista (plantios em aberto)</p>
+      <table class="agro-dash-forecast-table">
+        <thead>
+          <tr>
+            <th>Data prevista</th>
+            <th>Cultura</th>
+            <th>Colheita</th>
+            <th>Área</th>
+            <th>Produtor</th>
+            <th>Estimativa</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (row) => `
+            <tr>
+              <td><span class="agro-forecast-date">${escapeHtml(formatDay(row.date))}</span></td>
+              <td>${escapeHtml(row.product || '—')}</td>
+              <td>#${escapeHtml(String(row.harvestIndex || 1))}</td>
+              <td>${escapeHtml(row.plotName || row.propertyName || '—')}</td>
+              <td>${escapeHtml(row.producerName || '—')}${
+                row.producerPhone
+                  ? `<span class="agro-sub">${escapeHtml(row.producerPhone)}</span>`
+                  : ''
+              }</td>
+              <td>${escapeHtml(formatQty(row.qty))}${row.unit ? ` ${escapeHtml(row.unit)}` : ''}</td>
+            </tr>`,
+            )
+            .join('') || '<tr><td colspan="6" class="muted">Sem colheitas previstas neste período</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <div class="agro-dash-contacts" id="agro-forecast-contacts">
+      <header class="agro-dash-contacts-head">
+        <div>
+          <h4>Produtores a contatar</h4>
+          <p class="muted">Quem tem colheita prevista no período — telefone para contato</p>
+        </div>
+        <button type="button" class="btn-ghost" data-print-forecast-contacts ${
+          contacts.length ? '' : 'disabled'
+        }>Exportar / imprimir</button>
+      </header>
+      ${
+        contacts.length
+          ? `<ul class="agro-dash-contacts-list">
+        ${contacts
+          .map((item) => {
+            const tel = telHref(item.phone);
+            const wa = whatsappHref(item.phone);
+            return `<li class="agro-dash-contact-card">
+              <div class="agro-dash-contact-main">
+                <strong>${escapeHtml(item.name || '—')}</strong>
+                <span class="agro-forecast-date">${escapeHtml(formatDay(item.nextDate))}</span>
+              </div>
+              <p class="agro-sub">${escapeHtml((item.products || []).join(' · ') || '—')}</p>
+              <p class="agro-sub">${escapeHtml((item.properties || []).join(' · ') || '')}</p>
+              <div class="agro-dash-contact-actions">
+                ${
+                  item.phone
+                    ? `<span class="agro-dash-contact-phone">${escapeHtml(item.phone)}</span>`
+                    : '<span class="muted">Sem telefone</span>'
+                }
+                ${tel ? `<a class="btn-ghost agro-mini" href="${escapeHtml(tel)}">Ligar</a>` : ''}
+                ${
+                  wa
+                    ? `<a class="btn-ghost agro-mini" href="${escapeHtml(wa)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>`
+                    : ''
+                }
+              </div>
+            </li>`;
+          })
+          .join('')}
+      </ul>`
+          : '<p class="muted">Nenhum produtor com colheita prevista neste filtro.</p>'
+      }
+    </div>`;
+
+  panel.querySelector('[data-print-forecast-contacts]')?.addEventListener('click', () => {
+    printForecastContacts(contacts, period);
+  });
 }
 
 function formatHa(value) {
@@ -250,6 +426,111 @@ function setChartEmpty(canvas, empty) {
   if (emptyEl) emptyEl.hidden = !empty;
 }
 
+/** Paleta por cultura/produção (barras distintas no gráfico de estimativa). */
+const PRODUCT_BAR_COLORS = [
+  '#1f7a5c',
+  '#2b5aa8',
+  '#d4a017',
+  '#c45c26',
+  '#6b4c9a',
+  '#0e7490',
+  '#b45309',
+  '#be185d',
+  '#15803d',
+  '#4338ca',
+  '#a16207',
+  '#dc2626',
+];
+
+function colorsForLabels(labels, fallback = '#2e8b57') {
+  if (!labels?.length) return fallback;
+  return labels.map((_, index) => PRODUCT_BAR_COLORS[index % PRODUCT_BAR_COLORS.length]);
+}
+
+function colorForProduct(product, index = 0) {
+  return PRODUCT_BAR_COLORS[index % PRODUCT_BAR_COLORS.length];
+}
+
+/** Gráfico featured: eixo X = data, barras empilhadas por produto. */
+function makeForecastByDate(Chart, canvas, byDate) {
+  const dates = byDate?.dates || [];
+  const series = byDate?.series || [];
+  const hasData = series.some((item) => (item.values || []).some((value) => Number(value) > 0));
+  setChartEmpty(canvas, !hasData || !dates.length);
+  if (!hasData || !dates.length) return;
+
+  const existing = typeof Chart.getChart === 'function' ? Chart.getChart(canvas) : null;
+  if (existing) {
+    try {
+      existing.destroy();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const chart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: dates.map((date) => formatDayShort(date)),
+      datasets: series.map((item, index) => ({
+        label: item.product,
+        data: item.values || [],
+        backgroundColor: colorForProduct(item.product, index),
+        borderRadius: 6,
+        maxBarThickness: 42,
+        stack: 'forecast',
+      })),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      layout: { padding: { top: 22, right: 8 } },
+      plugins: {
+        legend: {
+          display: series.length > 1,
+          position: 'bottom',
+          labels: { boxWidth: 12, boxHeight: 12, padding: 12 },
+        },
+        barValueLabels: { format: formatQty },
+        tooltip: {
+          callbacks: {
+            title(items) {
+              const idx = items?.[0]?.dataIndex ?? 0;
+              return formatDay(dates[idx] || '');
+            },
+            label(ctx) {
+              const value = Number(ctx.parsed.y || 0);
+              if (!value) return null;
+              return `${ctx.dataset.label}: ${formatQty(value)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { display: false },
+          ticks: { autoSkip: true, maxRotation: 0, minRotation: 0 },
+        },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          ticks: {
+            precision: 0,
+            callback(value) {
+              return formatQty(value);
+            },
+          },
+        },
+      },
+    },
+    plugins: [barValueLabels],
+  });
+  chartInstances.set(canvas.id, chart);
+  setChartEmpty(canvas, false);
+}
+
 function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format = formatQty) {
   const hasData = values.some((value) => Number(value) > 0);
   setChartEmpty(canvas, !hasData);
@@ -264,6 +545,8 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
     }
   }
 
+  const backgroundColor = Array.isArray(color) ? color : color;
+
   const chart = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -272,7 +555,7 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
         {
           label,
           data: values,
-          backgroundColor: color,
+          backgroundColor,
           borderRadius: 8,
           maxBarThickness: 48,
         },
@@ -289,7 +572,8 @@ function makeBar(Chart, canvas, labels, values, label, color = '#2e8b57', format
         tooltip: {
           callbacks: {
             label(ctx) {
-              return `${ctx.dataset.label}: ${format(ctx.parsed.y)}`;
+              const name = labels[ctx.dataIndex] || ctx.dataset.label;
+              return `${name}: ${format(ctx.parsed.y)}`;
             },
           },
         },
@@ -392,8 +676,32 @@ function paintChartsSync(Chart, data) {
   Chart.defaults.font.family = 'Outfit, "Segoe UI", sans-serif';
   destroyCharts();
 
+  const forecastCanvas = document.getElementById('agro-chart-forecast');
+  const forecastHint = document.querySelector('[data-chart-hint="forecast"]');
+  if (forecastHint) {
+    if (data.forecast?.showingUpcoming) {
+      forecastHint.textContent =
+        'Nenhuma colheita no mês filtrado — próximas datas dos plantios em aberto (eixo por data).';
+    } else if (data.scope === 'all') {
+      forecastHint.textContent =
+        'Por data prevista · plantios em aberto · todas as empresas (filtre por cultura)';
+    } else {
+      forecastHint.textContent =
+        'Por data prevista · plantios em aberto (filtre por cultura no seletor)';
+    }
+  }
+  if (forecastCanvas?.isConnected) {
+    try {
+      makeForecastByDate(Chart, forecastCanvas, data.forecast?.byDate || { dates: [], series: [] });
+    } catch (error) {
+      console.warn('[agro-dash] falha no gráfico forecast', error);
+      if (!chartInstances.has(forecastCanvas.id)) setChartEmpty(forecastCanvas, true);
+      else setChartEmpty(forecastCanvas, false);
+    }
+  }
+  renderForecastPanel(data.forecast || {}, data.period);
+
   const pairs = [
-    ['forecast', data.forecast?.byProduct || [], 'Estimativa', '#2e8b57', formatQty],
     ['planting', data.plantingByProduct || [], 'Plantado', '#3d8b6e', formatQty],
     ['harvest', data.harvestByProduct || [], 'Colheita', '#d4a017', formatQty],
     ['delivery', data.deliveryByProduct || [], 'Entrega', '#c45c26', formatQty],
@@ -478,7 +786,12 @@ async function paint(root, data, productFilterValue = '', epoch = agroDashEpoch)
   body.innerHTML = `
     <div class="stat-row agro-dash-stats" aria-label="Resumo agro">${summaryCards(data.summary)}</div>
     <div class="agro-dash-grid">
-      ${sectionCard('forecast', 'Estimativa de produção', 'Produção estimada dos plantios ativos')}
+${sectionCard(
+        'forecast',
+        'Estimativa de produção',
+        'Por data prevista · plantios em aberto (filtre por cultura no seletor)',
+        true,
+      )}
       ${sectionCard('planting', 'Plantio', 'Quantidade plantada por produto no período')}
       ${sectionCard('harvest', 'Colheita', 'Unidade por produto')}
       ${sectionCard('delivery', 'Entrega', 'Unidade por produto')}

@@ -85,6 +85,12 @@ export async function listAgroCatalog(companyId: string): Promise<{
       salesPrice: header.sales_price || '',
       cycleDays: nullable(header.cycle_days),
       yieldPerHa: nullable(header.yield_per_ha),
+      harvestCount: nullable(header.harvest_count),
+      harvestIntervalDays: nullable(header.harvest_interval_days),
+      harvestCurve: String(header.harvest_curve || 'Uniforme'),
+      curveIntensity: nullable(header.curve_intensity),
+      cyclesPerYear: nullable(header.cycles_per_year),
+      plantsPerArea: nullable(header.plants_per_area),
     });
   }
   products.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));

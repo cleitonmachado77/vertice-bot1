@@ -9,6 +9,7 @@ import {
   readAgroForm,
   syncDeliveryForm,
   syncDeliveryTotal,
+  syncHarvestForm,
   syncPlantingForm,
   syncQtyPriceTotal,
 } from './agro-editor.js';
@@ -67,11 +68,15 @@ function ensureModal() {
     const form = event.target.closest('#agro-form');
     if (!form || !snapshot) return;
     if (form.dataset.kind === 'plantio') syncPlantingForm(form, snapshot.catalog);
+    if (form.dataset.kind === 'colheita') {
+      syncHarvestForm(form, snapshot.catalog, snapshot.plantings, snapshot.estimates);
+    }
     if (form.dataset.kind === 'entrega') syncDeliveryForm(form, snapshot.catalog, snapshot.plantings);
   });
   modal.addEventListener('input', (event) => {
     const form = event.target.closest('#agro-form');
     if (event.target?.name === 'unitPrice') event.target.dataset.touched = '1';
+    if (event.target?.name === 'areaPlanned') event.target.dataset.touched = '1';
     if (form?.dataset.kind === 'entrega' || form?.dataset.kind === 'custos') syncQtyPriceTotal(form);
   });
   modal.addEventListener('submit', onSubmit);
@@ -82,18 +87,20 @@ function openEditor(kind, record) {
   if (!snapshot) return;
   const modal = ensureModal();
   const plantings = snapshot.plantings || [];
+  const estimates = snapshot.estimates || [];
   const html =
     kind === 'colheita'
-      ? harvestFormHtml(record, snapshot.catalog, plantings)
+      ? harvestFormHtml(record, snapshot.catalog, plantings, estimates)
       : kind === 'entrega'
         ? deliveryFormHtml(record, snapshot.catalog, plantings)
         : kind === 'custos'
           ? costFormHtml(record, snapshot.catalog)
-          : plantingFormHtml(record, snapshot.catalog);
+          : plantingFormHtml(record, snapshot.catalog, estimates);
   modal.querySelector('#agro-editor').innerHTML = html;
   editor = { kind, id: record?.id || '', collection: COLLECTIONS[kind] };
   const form = modal.querySelector('#agro-form');
   if (form?.dataset.kind === 'plantio') syncPlantingForm(form, snapshot.catalog);
+  if (form?.dataset.kind === 'colheita') syncHarvestForm(form, snapshot.catalog, plantings, estimates);
   if (form?.dataset.kind === 'entrega') syncDeliveryForm(form, snapshot.catalog, snapshot.plantings);
   if (form?.dataset.kind === 'custos') syncQtyPriceTotal(form);
   modal.hidden = false;

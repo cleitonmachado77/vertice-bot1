@@ -8,6 +8,7 @@ import {
   getPlanting,
   listDeliveries,
   listHarvests,
+  listPlantingEstimates,
   listPlantings,
   type AgroDelivery,
   type AgroHarvest,
@@ -32,6 +33,10 @@ import {
   deliveryTotal,
   derivePlantingForecast,
   isPlantingStatus,
+  normalizeCurveIntensity,
+  normalizeHarvestCount,
+  normalizeHarvestCurve,
+  normalizeHarvestInterval,
   parseIsoDate,
   parseMoney,
   parseOptionalDate,
@@ -46,14 +51,15 @@ const nowIso = () => new Date().toISOString();
 export async function agroOverview(companyId: string) {
   await ensureAgroSchema();
   await refreshAgroMirror(companyId);
-  const [plantings, harvests, deliveries, costs, catalog] = await Promise.all([
+  const [plantings, harvests, deliveries, costs, estimates, catalog] = await Promise.all([
     listPlantings(companyId),
     listHarvests(companyId),
     listDeliveries(companyId),
     listCosts(companyId),
+    listPlantingEstimates(companyId),
     listAgroCatalog(companyId),
   ]);
-  return { plantings, harvests, deliveries, costs, catalog };
+  return { plantings, harvests, deliveries, costs, estimates, catalog };
 }
 
 export { deleteCost, saveCost };
@@ -74,25 +80,61 @@ function softQuantity(value: unknown): number | null {
   }
 }
 
-async function productAgroParams(
-  companyId: string,
-  productId: string,
-): Promise<{ cycleDays: number | null; yieldPerHa: number | null }> {
-  if (!productId) return { cycleDays: null, yieldPerHa: null };
+async function productAgroParams(companyId: string, productId: string) {
+  const empty = {
+    cycleDays: null as number | null,
+    yieldPerHa: null as number | null,
+    harvestCount: 1,
+    harvestIntervalDays: 0,
+    harvestCurve: 'Uniforme' as const,
+    curveIntensity: 0,
+    cyclesPerYear: null as number | null,
+  };
+  if (!productId) return empty;
   const row = await one<{ header_json: string }>(
     `SELECT header_json FROM forms_documents
      WHERE id = $1 AND kind = 'product' AND COALESCE(NULLIF(company_odoo_id, ''), '1') = $2`,
     [productId, companyId],
   );
-  if (!row) return { cycleDays: null, yieldPerHa: null };
+  if (!row) return empty;
   try {
     const header = JSON.parse(row.header_json || '{}') as Record<string, unknown>;
+    const harvestCount = normalizeHarvestCount(header.harvest_count ?? 1);
+    const harvestCurve = normalizeHarvestCurve(header.harvest_curve);
     return {
       cycleDays: softQuantity(header.cycle_days),
       yieldPerHa: softQuantity(header.yield_per_ha),
+      harvestCount,
+      harvestIntervalDays: normalizeHarvestInterval(harvestCount, header.harvest_interval_days),
+      harvestCurve,
+      curveIntensity: normalizeCurveIntensity(harvestCurve, header.curve_intensity),
+      cyclesPerYear: softQuantity(header.cycles_per_year),
     };
   } catch {
-    return { cycleDays: null, yieldPerHa: null };
+    return empty;
+  }
+}
+
+async function replacePlantingEstimates(
+  plantingId: string,
+  estimates: Array<{ index: number; forecastOn: string; estimatedQty: number }>,
+  stamp: string,
+): Promise<void> {
+  await run(`DELETE FROM agro_planting_estimates WHERE planting_id = $1`, [plantingId]);
+  for (const line of estimates) {
+    await run(
+      `INSERT INTO agro_planting_estimates(
+         id, planting_id, harvest_index, forecast_on, estimated_qty, created_at, updated_at
+       ) VALUES($1, $2, $3, $4, $5, $6, $6)`,
+      [
+        randomUUID(),
+        plantingId,
+        line.index,
+        line.forecastOn,
+        line.estimatedQty,
+        stamp,
+      ],
+    );
   }
 }
 
@@ -114,7 +156,6 @@ export async function savePlanting(
   const plantingId = current?.id || randomUUID();
   const stamp = nowIso();
   const params = await productAgroParams(companyId, product.id);
-
   let areaPlanned = 0;
   let plantedQty: number | null = null;
   let forecastOn: string | null = null;
@@ -129,11 +170,11 @@ export async function savePlanting(
       [plotId],
     );
     if (String(input.areaPlanned ?? '').trim() !== '') {
-      areaPlanned = parseQuantity(input.areaPlanned, 'Área planejada');
+      areaPlanned = parseQuantity(input.areaPlanned, 'Área plantada');
     } else if (plot?.area != null && Number(plot.area) > 0) {
       areaPlanned = Math.round(Number(plot.area) * 1000) / 1000;
     } else {
-      throw new Error('Cadastre a área do talhão em Configurações antes do plantio');
+      throw new Error('Informe a área plantada (ha) ou cadastre a área do talhão');
     }
 
     plantedQty = parseOptionalQuantity(input.plantedQty, 'Quantidade plantada');
@@ -143,31 +184,46 @@ export async function savePlanting(
       areaHa: areaPlanned,
       cycleDays: params.cycleDays,
       yieldPerHa: params.yieldPerHa,
+      harvestCount: params.harvestCount,
+      harvestIntervalDays: params.harvestIntervalDays,
+      harvestCurve: params.harvestCurve,
+      curveIntensity: params.curveIntensity,
     });
-    // Previsão e estimativa são calculadas pelo produto; não aceitam edição manual.
+// Previsão e estimativa são calculadas pelo produto; não aceitam edição manual.
     forecastOn = derived.forecastOn;
     forecastQty = derived.forecastQty;
     if (forecastOn && forecastOn < plantedOn) {
       throw new Error('A previsão de colheita não pode ser anterior ao plantio');
     }
 
+    const canRegenerateEstimates = !current || current.harvestedQty <= 0;
+    const estimateLines =
+      canRegenerateEstimates
+        ? derived.estimates.length
+          ? derived.estimates
+          : forecastOn && forecastQty != null
+            ? [{ index: 1, forecastOn, estimatedQty: forecastQty, weight: 1 }]
+            : []
+        : null;
+
     if (!current) {
       await run(
         `INSERT INTO agro_plantings(
            id, company_odoo_id, property_id, plot_id, product_id, product_name, unit,
-           area_planned, planted_qty, planted_on, forecast_on, forecast_qty, notes, status, created_at, updated_at
+area_planned, planted_qty, planted_on, forecast_on, forecast_qty, notes, status, created_at, updated_at
          ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)`,
         [
           plantingId, companyId, propertyId, plotId, product.id, product.name, product.unit,
           areaPlanned, plantedQty, plantedOn, forecastOn, forecastQty, notes, status, stamp,
         ],
       );
+      if (estimateLines) await replacePlantingEstimates(plantingId, estimateLines, stamp);
       return;
     }
     await run(
       `UPDATE agro_plantings SET
          property_id = $1, plot_id = $2, product_id = $3, product_name = $4, unit = $5,
-         area_planned = $6, planted_qty = $7, planted_on = $8, forecast_on = $9, forecast_qty = $10,
+area_planned = $6, planted_qty = $7, planted_on = $8, forecast_on = $9, forecast_qty = $10,
          notes = $11, status = $12, updated_at = $13
        WHERE id = $14 AND company_odoo_id = $15`,
       [
@@ -175,6 +231,7 @@ export async function savePlanting(
         forecastOn, forecastQty, notes, status, stamp, plantingId, companyId,
       ],
     );
+    if (estimateLines) await replacePlantingEstimates(plantingId, estimateLines, stamp);
   });
 
   const saved = await getPlanting(companyId, plantingId);
@@ -227,11 +284,17 @@ export async function saveHarvest(
     throw new Error('Este plantio já está com a colheita encerrada');
   }
   const quantity = parseQuantity(input.quantity, 'Quantidade colhida');
+  const areaHarvested = parseOptionalQuantity(input.areaHarvested, 'Área colhida');
   const harvestedOn = parseIsoDate(input.harvestedOn);
   if (harvestedOn < planting.plantedOn) throw new Error('A colheita não pode ser anterior ao plantio');
   const harvestedWithout = planting.harvestedQty - (current?.quantity || 0);
   assertHarvestCoversDeliveries(harvestedWithout + quantity, planting.deliveredQty);
-  const close = input.close === true || input.close === '1' || input.close === 'true';
+  const close =
+    input.close === true ||
+    input.close === '1' ||
+    input.close === 'true' ||
+    String(input.status || '').toLowerCase() === 'fechada' ||
+    String(input.status || '').toLowerCase() === 'colhido';
   const nextStatus: PlantingStatus =
     planting.status === 'colhido' || close ? 'colhido' : statusAfterHarvest(false);
   const harvestId = current?.id || randomUUID();
@@ -241,14 +304,17 @@ export async function saveHarvest(
   await withTransaction(async () => {
     if (!current) {
       await run(
-        `INSERT INTO agro_harvests(id, planting_id, harvested_on, quantity, notes, created_at, updated_at)
-         VALUES($1, $2, $3, $4, $5, $6, $6)`,
-        [harvestId, planting.id, harvestedOn, quantity, notes, stamp],
+        `INSERT INTO agro_harvests(
+           id, planting_id, harvested_on, quantity, area_harvested, notes, created_at, updated_at
+         ) VALUES($1, $2, $3, $4, $5, $6, $7, $7)`,
+        [harvestId, planting.id, harvestedOn, quantity, areaHarvested, notes, stamp],
       );
     } else {
       await run(
-        `UPDATE agro_harvests SET harvested_on = $1, quantity = $2, notes = $3, updated_at = $4 WHERE id = $5`,
-        [harvestedOn, quantity, notes, stamp, harvestId],
+        `UPDATE agro_harvests
+         SET harvested_on = $1, quantity = $2, area_harvested = $3, notes = $4, updated_at = $5
+         WHERE id = $6`,
+        [harvestedOn, quantity, areaHarvested, notes, stamp, harvestId],
       );
     }
     await run(`UPDATE agro_plantings SET status = $1, updated_at = $2 WHERE id = $3`, [

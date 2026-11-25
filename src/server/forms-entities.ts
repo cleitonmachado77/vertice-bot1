@@ -273,11 +273,43 @@ export async function listEntityProducts(): Promise<EntityProduct[]> {
       track_inventory: header.track_inventory || 'True',
       cycle_days: header.cycle_days || '',
       yield_per_ha: header.yield_per_ha || '',
+      harvest_count: header.harvest_count || '',
+      harvest_interval_days: header.harvest_interval_days || '',
+      harvest_curve: header.harvest_curve || 'Uniforme',
+      curve_intensity: header.curve_intensity || '',
+      cycles_per_year: header.cycles_per_year || '',
+      plants_per_area: header.plants_per_area || '',
       odoo_id: header.odoo_id || '',
       odoo_sync_error: header.odoo_sync_error || '',
       updated_at: row.updated_at,
     };
   });
+}
+
+function normalizeProductEstimateFields(input: {
+  harvest_count?: string;
+  harvest_interval_days?: string;
+  harvest_curve?: string;
+  curve_intensity?: string;
+}) {
+  const curve = String(input.harvest_curve || 'Uniforme').trim() || 'Uniforme';
+  const countRaw = String(input.harvest_count || '').trim();
+  const harvestCount = countRaw ? Math.max(1, Math.trunc(Number(countRaw) || 1)) : '';
+  const intervalRaw = String(input.harvest_interval_days || '').trim();
+  const harvestInterval =
+    harvestCount === 1 || harvestCount === ''
+      ? harvestCount === 1
+        ? '0'
+        : intervalRaw
+      : intervalRaw;
+  const intensity =
+    curve === 'Uniforme' ? '0' : String(input.curve_intensity || '').trim() || '1';
+  return {
+    harvest_count: harvestCount === '' ? '' : String(harvestCount),
+    harvest_interval_days: harvestInterval,
+    harvest_curve: curve,
+    curve_intensity: intensity,
+  };
 }
 
 export async function saveEntityProduct(input: {
@@ -294,9 +326,16 @@ export async function saveEntityProduct(input: {
   track_inventory?: string;
   cycle_days?: string;
   yield_per_ha?: string;
+  harvest_count?: string;
+  harvest_interval_days?: string;
+  harvest_curve?: string;
+  curve_intensity?: string;
+  cycles_per_year?: string;
+  plants_per_area?: string;
 }): Promise<EntityProduct> {
   const clean = input.name.trim();
   if (!clean) throw new Error('Nome do produto obrigatório');
+  const estimate = normalizeProductEstimateFields(input);
   const header = emptyHeader('product');
   header.name = clean;
   header.sigla = input.sigla || '';
@@ -310,6 +349,12 @@ export async function saveEntityProduct(input: {
   header.track_inventory = input.track_inventory || 'True';
   header.cycle_days = input.cycle_days || '';
   header.yield_per_ha = input.yield_per_ha || '';
+  header.harvest_count = estimate.harvest_count;
+  header.harvest_interval_days = estimate.harvest_interval_days;
+  header.harvest_curve = estimate.harvest_curve;
+  header.curve_intensity = estimate.curve_intensity;
+  header.cycles_per_year = input.cycles_per_year || '';
+  header.plants_per_area = input.plants_per_area || '';
 
   const companyId = getActiveCompanyId();
   header.company_odoo_id = companyId;
@@ -341,6 +386,12 @@ export async function saveEntityProduct(input: {
       track_inventory: merged.track_inventory || 'True',
       cycle_days: merged.cycle_days || '',
       yield_per_ha: merged.yield_per_ha || '',
+      harvest_count: merged.harvest_count || '',
+      harvest_interval_days: merged.harvest_interval_days || '',
+      harvest_curve: merged.harvest_curve || 'Uniforme',
+      curve_intensity: merged.curve_intensity || '',
+      cycles_per_year: merged.cycles_per_year || '',
+      plants_per_area: merged.plants_per_area || '',
       odoo_id: merged.odoo_id || '',
     };
   }
@@ -365,6 +416,12 @@ export async function saveEntityProduct(input: {
     track_inventory: header.track_inventory || 'True',
     cycle_days: header.cycle_days || '',
     yield_per_ha: header.yield_per_ha || '',
+    harvest_count: header.harvest_count || '',
+    harvest_interval_days: header.harvest_interval_days || '',
+    harvest_curve: header.harvest_curve || 'Uniforme',
+    curve_intensity: header.curve_intensity || '',
+    cycles_per_year: header.cycles_per_year || '',
+    plants_per_area: header.plants_per_area || '',
     odoo_id: '',
   };
 }

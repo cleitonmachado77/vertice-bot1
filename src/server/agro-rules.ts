@@ -113,13 +113,88 @@ export function addDaysIso(isoDate: string, days: number): string {
   ].join('-');
 }
 
-/** Previsão e estimativa a partir dos parâmetros do produto (dias e produtividade/ha). */
-export function derivePlantingForecast(input: {
+export const HARVEST_CURVES = ['Uniforme', 'Decrescente', 'Crescente', 'Pico no meio'] as const;
+export type HarvestCurve = (typeof HARVEST_CURVES)[number];
+export const CURVE_INTENSITIES = [0, 0.5, 1, 1.5, 2] as const;
+
+export type HarvestEstimateLine = {
+  index: number;
+  forecastOn: string;
+  estimatedQty: number;
+  weight: number;
+};
+
+export type ProductEstimateParams = {
+  cycleDays: number | null;
+  yieldPerHa: number | null;
+  harvestCount: number | null;
+  harvestIntervalDays: number | null;
+  harvestCurve: HarvestCurve | null;
+  curveIntensity: number | null;
+  cyclesPerYear: number | null;
+};
+
+export function isHarvestCurve(value: unknown): value is HarvestCurve {
+  return typeof value === 'string' && (HARVEST_CURVES as readonly string[]).includes(value);
+}
+
+export function normalizeHarvestCurve(value: unknown): HarvestCurve {
+  return isHarvestCurve(value) ? value : 'Uniforme';
+}
+
+export function normalizeCurveIntensity(curve: HarvestCurve, value: unknown): number {
+  if (curve === 'Uniforme') return 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  const allowed = CURVE_INTENSITIES as readonly number[];
+  if (allowed.includes(parsed)) return parsed;
+  return Math.min(2, Math.max(0, Math.round(parsed * 2) / 2));
+}
+
+export function normalizeHarvestCount(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
+  return Math.min(30, Math.trunc(parsed));
+}
+
+export function normalizeHarvestInterval(harvestCount: number, value: unknown): number {
+  if (harvestCount <= 1) return 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.trunc(parsed);
+}
+
+/** Peso da colheita i (1…N), espelhando a aba Colheitas da planilha. */
+export function harvestCurveWeight(
+  index: number,
+  harvestCount: number,
+  curve: HarvestCurve,
+  intensity: number,
+): number {
+  if (index < 1 || index > harvestCount) return 0;
+  let base = 1;
+  if (curve === 'Decrescente') base = 2 * harvestCount + 1 - index;
+  else if (curve === 'Crescente') base = index;
+  else if (curve === 'Pico no meio') base = Math.min(index, harvestCount + 1 - index);
+  const power = curve === 'Uniforme' ? 0 : intensity;
+  return base ** power;
+}
+
+/**
+ * Gera as N colheitas previstas de um plantio.
+ * Produção do ciclo = área_ha × yield_per_ha; qty_i = total × peso_i / Σ pesos.
+ * Dia_i = planted_on + cycle_days + (i−1) × intervalo.
+ */
+export function deriveHarvestEstimates(input: {
   plantedOn: string;
   areaHa: number;
   cycleDays: number | null;
   yieldPerHa: number | null;
-}): { forecastOn: string | null; forecastQty: number | null } {
+  harvestCount?: number | null;
+  harvestIntervalDays?: number | null;
+  harvestCurve?: HarvestCurve | string | null;
+  curveIntensity?: number | null;
+}): HarvestEstimateLine[] {
   const cycleDays =
     input.cycleDays != null && Number.isFinite(input.cycleDays) && input.cycleDays > 0
       ? Math.trunc(input.cycleDays)
@@ -128,11 +203,81 @@ export function derivePlantingForecast(input: {
     input.yieldPerHa != null && Number.isFinite(input.yieldPerHa) && input.yieldPerHa > 0
       ? input.yieldPerHa
       : null;
+  if (cycleDays == null || yieldPerHa == null || !(input.areaHa > 0)) return [];
+
+  const harvestCount = normalizeHarvestCount(input.harvestCount);
+  const intervalDays = normalizeHarvestInterval(harvestCount, input.harvestIntervalDays);
+  const curve = normalizeHarvestCurve(input.harvestCurve);
+  const intensity = normalizeCurveIntensity(curve, input.curveIntensity);
+  const productionPerCycle = Math.round(input.areaHa * yieldPerHa * 1000) / 1000;
+
+  const weights = Array.from({ length: harvestCount }, (_, i) =>
+    harvestCurveWeight(i + 1, harvestCount, curve, intensity),
+  );
+  const weightSum = weights.reduce((sum, value) => sum + value, 0);
+  if (!(weightSum > 0)) return [];
+
+  return weights.map((weight, i) => {
+    const index = i + 1;
+    return {
+      index,
+      forecastOn: addDaysIso(input.plantedOn, cycleDays + (index - 1) * intervalDays),
+      estimatedQty: Math.round(((productionPerCycle * weight) / weightSum) * 1000) / 1000,
+      weight,
+    };
+  });
+}
+
+/** Previsão e estimativa a partir dos parâmetros do produto (dias e produtividade/ha). */
+export function derivePlantingForecast(input: {
+  plantedOn: string;
+  areaHa: number;
+  cycleDays: number | null;
+  yieldPerHa: number | null;
+  harvestCount?: number | null;
+  harvestIntervalDays?: number | null;
+  harvestCurve?: HarvestCurve | string | null;
+  curveIntensity?: number | null;
+}): { forecastOn: string | null; forecastQty: number | null; estimates: HarvestEstimateLine[] } {
+  const estimates = deriveHarvestEstimates(input);
+  if (!estimates.length) {
+    const cycleDays =
+      input.cycleDays != null && Number.isFinite(input.cycleDays) && input.cycleDays > 0
+        ? Math.trunc(input.cycleDays)
+        : null;
+    const yieldPerHa =
+      input.yieldPerHa != null && Number.isFinite(input.yieldPerHa) && input.yieldPerHa > 0
+        ? input.yieldPerHa
+        : null;
+    return {
+      forecastOn: cycleDays == null ? null : addDaysIso(input.plantedOn, cycleDays),
+      forecastQty:
+        yieldPerHa == null || !(input.areaHa > 0)
+          ? null
+          : Math.round(input.areaHa * yieldPerHa * 1000) / 1000,
+      estimates: [],
+    };
+  }
+  const forecastQty = Math.round(estimates.reduce((sum, line) => sum + line.estimatedQty, 0) * 1000) / 1000;
   return {
-    forecastOn: cycleDays == null ? null : addDaysIso(input.plantedOn, cycleDays),
-    forecastQty:
-      yieldPerHa == null || !(input.areaHa > 0)
-        ? null
-        : Math.round(input.areaHa * yieldPerHa * 1000) / 1000,
+    forecastOn: estimates[0]?.forecastOn || null,
+    forecastQty,
+    estimates,
   };
+}
+
+/** Janela ±dias (civil UTC) em torno de uma data ISO. */
+export function isoDateWithinWindow(targetIso: string, centerIso: string, days = 30): boolean {
+  try {
+    const target = parseIsoDate(targetIso);
+    const center = parseIsoDate(centerIso);
+    const [ty, tm, td] = target.split('-').map(Number);
+    const [cy, cm, cd] = center.split('-').map(Number);
+    const t = Date.UTC(ty, tm - 1, td);
+    const c = Date.UTC(cy, cm - 1, cd);
+    const diff = Math.abs(t - c) / 86_400_000;
+    return diff <= days;
+  } catch {
+    return false;
+  }
 }

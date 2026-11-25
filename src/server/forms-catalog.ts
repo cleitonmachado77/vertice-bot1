@@ -38,10 +38,16 @@ export type CatalogProduct = {
   qty_on_hand: string;
   /** Peso médio de 1 unidade em kg (ex.: Bag). */
   weight?: string;
-  /** Dias do plantio até a colheita (Vertice Agro). */
+  /** Dias do plantio até a 1ª colheita (Vertice Agro). */
   cycle_days?: string;
   /** Produtividade estimada por hectare (Vertice Agro). */
   yield_per_ha?: string;
+  harvest_count?: string;
+  harvest_interval_days?: string;
+  harvest_curve?: string;
+  curve_intensity?: string;
+  cycles_per_year?: string;
+  plants_per_area?: string;
 };
 
 export type CatalogPartner = {
