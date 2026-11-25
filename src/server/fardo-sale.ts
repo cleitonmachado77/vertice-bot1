@@ -1,4 +1,12 @@
-import { BAG_MATERIALS, ensureBagMaterials, fardoVariantRef, findBagMaterial, lookupBagType, type BagMaterial } from './bag-materials.js';
+import {
+  BAG_MATERIALS,
+  ensureBagMaterials,
+  fardoVariantRef,
+  findBagMaterial,
+  lookupBagType,
+  materialsForCompany,
+  type BagMaterial,
+} from './bag-materials.js';
 import { FARDO_SALE_FIELD, isMarkedNewValue, markNewValue, unmarkNewValue } from './forms-bot-fields.js';
 import { odooExecuteKw } from './odoo-client.js';
 import { missingQuestions, type CycleAnswer } from './questionnaire-cycles.js';
@@ -28,7 +36,7 @@ export function isFardoDeliveryPreset(preset: { id?: string; kind?: string; name
 }
 
 /** “pts 87 kg” ou “1 plástico seco 87 kg”. O peso é o que foi pesado naquele fardo. */
-export function interpretFardoSales(text: string): FardoSaleReading {
+export function interpretFardoSales(text: string, materials: BagMaterial[] = BAG_MATERIALS): FardoSaleReading {
   const pieces = String(text || '')
     .split(/\s*(?:,(?!\d)|;|\n|\s+\be\b\s+)\s*/i)
     .map((part) => part.trim())
@@ -36,7 +44,7 @@ export function interpretFardoSales(text: string): FardoSaleReading {
   const understood: FardoSale[] = [];
   const unknown: string[] = [];
   for (const piece of pieces) {
-    const outcome = readSalePiece(piece);
+    const outcome = readSalePiece(piece, materials);
     if (outcome.sale) understood.push(outcome.sale);
     else unknown.push(outcome.note || piece);
   }
@@ -75,7 +83,7 @@ export function fardoSaleClarification(understood: FardoSale[], unknown: string[
   return lines.join('\n');
 }
 
-export function salesFromAnswer(text: string): FardoSale[] | null {
+export function salesFromAnswer(text: string, companyId?: number): FardoSale[] | null {
   const raw = String(text || '').trim();
   if (!raw || raw.startsWith('[novo?]')) return null;
   try {
@@ -84,7 +92,7 @@ export function salesFromAnswer(text: string): FardoSale[] | null {
     const items: FardoSale[] = [];
     for (const row of parsed) {
       const source = row && typeof row === 'object' ? (row as { code?: string; fardos?: string; weight?: string }) : {};
-      const material = findBagMaterial(String(source.code || ''));
+      const material = findBagMaterial(String(source.code || ''), companyId);
       const fardos = Number(String(source.fardos || '').replace(',', '.'));
       const weight = Number(String(source.weight || '').replace(',', '.'));
       if (!material || !Number.isFinite(fardos) || fardos <= 0 || !Number.isFinite(weight) || weight <= 0) return null;
@@ -120,10 +128,11 @@ export async function answerFardoSale(input: {
   if (!answering) return null;
 
   const saved = String(input.alreadySaved.find((row) => row.question_id === question.id)?.answer_text || '');
-  const reading = interpretFardoSales(input.inbound);
+  const materials = materialsForCompany(Number(input.questionnaire.companyOdooId || 0));
+  const reading = interpretFardoSales(input.inbound, materials);
   const understood = mergeSaleCorrection(readPartial(saved), reading.understood);
   if (!reading.understood.length && !reading.unknown.length) {
-    return { kind: 'reask', text: fardoSaleClarification([], ['informe o fardo e o peso. Ex.: pts 87 kg']), pendingQuestionId: question.id };
+    return { kind: 'reask', text: fardoSaleClarification([], ['informe o fardo e o peso. Ex.: pap 87 kg']), pendingQuestionId: question.id };
   }
   let missingStock: string[] = [];
   if (understood.length) {
@@ -167,9 +176,12 @@ export async function answerFardoSale(input: {
 
 export async function fardoStock(companyId: number): Promise<Map<string, number>> {
   if (!companyId) throw new Error('Empresa do Odoo obrigatória para ver o estoque de fardos');
-  if (!fardoVariantRef(companyId, 'PTS')) await ensureBagMaterials(companyId);
+  const materials = materialsForCompany(companyId);
+  if (!materials.some((material) => fardoVariantRef(companyId, material.code))) {
+    await ensureBagMaterials(companyId);
+  }
   const codeByVariant = new Map<number, string>();
-  for (const material of BAG_MATERIALS) {
+  for (const material of materials) {
     const ref = fardoVariantRef(companyId, material.code);
     if (!ref) continue;
     codeByVariant.set(ref.variantId, material.code);
@@ -190,7 +202,7 @@ export async function fardoStock(companyId: number): Promise<Map<string, number>
   return stock;
 }
 
-function readSalePiece(piece: string): { sale?: FardoSale; note?: string } {
+function readSalePiece(piece: string, materials: BagMaterial[] = BAG_MATERIALS): { sale?: FardoSale; note?: string } {
   const kg = /(\d+(?:[.,]\d+)?)\s*(?:kgs?|quilos?|kilos?)\b/iu.exec(piece);
   if (!kg) return { note: piece };
   const weight = Number(kg[1].replace(',', '.'));
@@ -200,7 +212,7 @@ function readSalePiece(piece: string): { sale?: FardoSale; note?: string } {
   const count = countMatch ? Number(countMatch[1].replace(',', '.')) : 1;
   const phrase = typeWords(countMatch ? countMatch[2] : rest);
   if (!Number.isFinite(count) || count <= 0 || !phrase) return { note: piece };
-  const found = lookupBagType(phrase);
+  const found = lookupBagType(phrase, materials);
   if (found.ambiguous?.length) {
     return { note: `${piece} (pode ser ${found.ambiguous.map((item) => `${item.code} ${item.name}`).join(', ')})` };
   }

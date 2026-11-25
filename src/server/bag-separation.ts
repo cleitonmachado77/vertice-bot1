@@ -19,7 +19,7 @@ export async function materializeBagSeparation(input: {
   sourcePresetId: string;
   answer: string;
 }): Promise<FormDocument | null> {
-  const items = countsFromAnswer(input.answer);
+  const items = countsFromAnswer(input.answer, Number(input.companyOdooId || 0) || undefined);
   if (!items?.length) {
     console.warn(`forms-bot: ciclo ${input.cycleId} sem quantidade e sigla válidas`);
     return null;

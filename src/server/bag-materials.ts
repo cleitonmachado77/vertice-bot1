@@ -1,3 +1,5 @@
+import { getSetting } from './db.js';
+
 /** Padrão Separação de Bags da Reciclabrasil. */
 export const BAG_SEPARATION_PRESET_ID = '34673f79-a413-4832-940e-7f6427c9e070';
 
@@ -40,7 +42,47 @@ export const BAG_MATERIALS: BagMaterial[] = [
   { name: 'SUCATA DE FERRO', code: 'FER', category: 'Metal Ferroso' },
 ];
 
-const BY_CODE = new Map(BAG_MATERIALS.map((item) => [item.code, item]));
+/**
+ * Tipos da Associação de Florestopolis (Bag/Fardo).
+ * Serviços da planilha (Emissão fiscal, Travel Fees) ficam de fora — não são material.
+ */
+export const BAG_MATERIALS_FLORESTOPOLIS: BagMaterial[] = [
+  { name: 'COPINHO', code: 'COP', category: 'Plástico' },
+  { name: 'CRISTAL', code: 'CRI', category: 'Plástico' },
+  { name: 'PET', code: 'PET', category: 'Plástico' },
+  { name: 'PP BRANCO', code: 'PPB', category: 'Plástico' },
+  { name: 'PP COLORIDO', code: 'PPC', category: 'Plástico' },
+  { name: 'PVC', code: 'PVC', category: 'Plástico' },
+  { name: 'PAPELAO', code: 'PAP', category: 'Papel' },
+  { name: 'PEAD BRANCO', code: 'PEB', category: 'Plástico' },
+  { name: 'PEAD COLORIDO', code: 'PEC', category: 'Plástico' },
+  { name: 'PLASTICO PRETO', code: 'PLP', category: 'Plástico' },
+  { name: 'RAFIA', code: 'RAF', category: 'Plástico' },
+  { name: 'SACOLINHA COLORIDA', code: 'SAC', category: 'Plástico' },
+  { name: 'TETRA PARK', code: 'TEP', category: 'Papel' },
+];
+
+/** Setting gravado ao promover o parceiro Florestopolis a res.company. */
+export const FLORESTOPOLIS_COMPANY_SETTING = 'odoo_company_florestopolis_id';
+
+/** Siglas da Recicla + exclusivas da Florestopolis (códigos compartilhados mantêm o nome da Recicla). */
+const BY_CODE = new Map<string, BagMaterial>([
+  ...BAG_MATERIALS_FLORESTOPOLIS.map((item) => [item.code, item] as const),
+  ...BAG_MATERIALS.map((item) => [item.code, item] as const),
+]);
+
+/** Materiais cadastrados no Bag/Fardo da empresa (Recicla Brasil = padrão). */
+export function materialsForCompany(companyId: number): BagMaterial[] {
+  const florestId = Number(getFlorestopolisCompanyId() || 0);
+  if (companyId > 0 && florestId > 0 && companyId === florestId) {
+    return BAG_MATERIALS_FLORESTOPOLIS;
+  }
+  return BAG_MATERIALS;
+}
+
+export function getFlorestopolisCompanyId(): string {
+  return String(getSetting(FLORESTOPOLIS_COMPANY_SETTING) || '').trim();
+}
 
 export type BagCount = {
   code: string;
@@ -60,19 +102,27 @@ export function isBagSeparationPreset(preset: { id?: string; kind?: string; name
   return name.includes('separacao') && name.includes('bag');
 }
 
-export function findBagMaterial(code: string): BagMaterial | undefined {
-  return BY_CODE.get(String(code || '').trim().toUpperCase());
+export function findBagMaterial(code: string, companyId?: number): BagMaterial | undefined {
+  const key = String(code || '').trim().toUpperCase();
+  if (!key) return undefined;
+  if (companyId && companyId > 0) {
+    return materialsForCompany(companyId).find((item) => item.code === key);
+  }
+  return BY_CODE.get(key);
 }
 
 /** Sigla ou nome cadastrado. Vários tipos com a mesma nota voltam em ambiguous. */
-export function lookupBagType(phrase: string): { material?: BagMaterial; ambiguous?: BagMaterial[] } {
-  return matchBagType(phrase);
+export function lookupBagType(
+  phrase: string,
+  materials: BagMaterial[] = BAG_MATERIALS,
+): { material?: BagMaterial; ambiguous?: BagMaterial[] } {
+  return matchBagType(phrase, materials);
 }
 
 export type BagReading = { understood: BagCount[]; unknown: string[] };
 
 /** “50 pts, 20 latinha” ou “50 plástico seco”. O que não bater com a lista volta em unknown. */
-export function interpretBagCounts(text: string): BagReading {
+export function interpretBagCounts(text: string, materials: BagMaterial[] = BAG_MATERIALS): BagReading {
   const pieces = splitBagPieces(text);
   if (!pieces.length) return { understood: [], unknown: [] };
   const understood: BagCount[] = [];
@@ -89,7 +139,7 @@ export function interpretBagCounts(text: string): BagReading {
       unknown.push(piece);
       continue;
     }
-    const found = matchBagType(phrase);
+    const found = matchBagType(phrase, materials);
     if (found.material) {
       understood.push({
         code: found.material.code,
@@ -105,8 +155,8 @@ export function interpretBagCounts(text: string): BagReading {
 }
 
 /** Só fecha quando todos os itens foram reconhecidos. */
-export function parseBagCounts(text: string): BagParse {
-  const reading = interpretBagCounts(text);
+export function parseBagCounts(text: string, materials: BagMaterial[] = BAG_MATERIALS): BagParse {
+  const reading = interpretBagCounts(text, materials);
   if (!reading.understood.length || reading.unknown.length) {
     return { ok: false, message: bagClarification(reading.understood, reading.unknown.length ? reading.unknown : [String(text || '').trim() || 'mensagem vazia']) };
   }
@@ -128,16 +178,17 @@ export function bagClarification(understood: BagCount[], unknown: string[]): str
 }
 
 /** Resposta gravada (JSON) ou texto livre da conversa. */
-export function countsFromAnswer(text: string): BagCount[] | null {
+export function countsFromAnswer(text: string, companyId?: number): BagCount[] | null {
   const raw = String(text || '').trim();
   if (!raw) return null;
+  const materials = companyId && companyId > 0 ? materialsForCompany(companyId) : BAG_MATERIALS;
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (Array.isArray(parsed)) {
       const items: BagCount[] = [];
       for (const row of parsed) {
         const source = row && typeof row === 'object' ? (row as { code?: string; quantity?: string }) : {};
-        const material = findBagMaterial(String(source.code || ''));
+        const material = findBagMaterial(String(source.code || ''), companyId);
         const quantity = Number(String(source.quantity || '').replace(',', '.'));
         if (!material || !Number.isFinite(quantity) || quantity <= 0) return null;
         items.push({
@@ -152,7 +203,7 @@ export function countsFromAnswer(text: string): BagCount[] | null {
   } catch {
     /* texto livre */
   }
-  const parsed = parseBagCounts(raw);
+  const parsed = parseBagCounts(raw, materials);
   return parsed.ok ? parsed.items : null;
 }
 
@@ -177,16 +228,19 @@ function cleanTypePhrase(value: string): string {
     .trim();
 }
 
-function matchBagType(phrase: string): { material?: BagMaterial; ambiguous?: BagMaterial[] } {
+function matchBagType(
+  phrase: string,
+  materials: BagMaterial[] = BAG_MATERIALS,
+): { material?: BagMaterial; ambiguous?: BagMaterial[] } {
   const text = cleanTypePhrase(phrase);
   if (!text) return {};
-  const byCode = BAG_MATERIALS.find((item) => fold(item.code) === text);
+  const byCode = materials.find((item) => fold(item.code) === text);
   if (byCode) return { material: byCode };
-  const byName = BAG_MATERIALS.filter((item) => fold(item.name) === text);
+  const byName = materials.filter((item) => fold(item.name) === text);
   if (byName.length === 1) return { material: byName[0] };
   if (byName.length > 1) return { ambiguous: byName };
   const words = text.split(' ').filter(Boolean);
-  const scored = BAG_MATERIALS.map((item) => ({ item, score: scoreType(words, fold(item.name)) }))
+  const scored = materials.map((item) => ({ item, score: scoreType(words, fold(item.name)) }))
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score);
   if (!scored.length) return {};

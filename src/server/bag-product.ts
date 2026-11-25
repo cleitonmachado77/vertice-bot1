@@ -1,4 +1,4 @@
-import { BAG_MATERIALS, type BagMaterial } from './bag-materials.js';
+import { materialsForCompany, type BagMaterial } from './bag-materials.js';
 import { odooCreate, odooExecuteKw, odooSearchRead, odooWrite } from './odoo-client.js';
 
 const BAG_PRODUCT_NAME = 'Bag';
@@ -34,23 +34,25 @@ function variantCode(code: string): string {
 
 async function writeBagProduct(companyId: number): Promise<void> {
   if (!companyId) throw new Error('Empresa do Odoo obrigatória para cadastrar o Bag');
+  const materials = materialsForCompany(companyId);
+  if (!materials.length) throw new Error('Nenhum tipo de bag/fardo configurado para esta empresa');
   const uomId = await findUnitId();
   if (!uomId) throw new Error('Cadastre a unidade de medida Unidade no Odoo antes dos bags');
-  await removeStandaloneTypes(companyId);
+  await removeStandaloneTypes(companyId, materials);
   const attributeId = await ensureBagAttribute();
-  const valueByCode = await ensureBagValues(attributeId);
+  const valueByCode = await ensureBagValues(attributeId, materials);
   const valueIds = [...valueByCode.values()];
   const bagId = await ensureNamedTemplate(companyId, BAG_PRODUCT_NAME, uomId, attributeId, valueIds);
   const fardoId = await ensureNamedTemplate(companyId, FARDO_PRODUCT_NAME, uomId, attributeId, valueIds);
-  await assignVariantCodes(bagId, valueByCode, variantsByCompany, companyId);
-  await assignVariantCodes(fardoId, valueByCode, fardoVariantsByCompany, companyId);
+  await assignVariantCodes(bagId, valueByCode, variantsByCompany, companyId, materials);
+  await assignVariantCodes(fardoId, valueByCode, fardoVariantsByCompany, companyId, materials);
 }
 
-async function removeStandaloneTypes(companyId: number): Promise<void> {
+async function removeStandaloneTypes(companyId: number, materials: BagMaterial[]): Promise<void> {
   const rows = await odooExecuteKw<Array<{ id: number; name: string }>>('product.template', 'search_read', [
     [
       ['company_id', '=', companyId],
-      ['default_code', 'in', BAG_MATERIALS.map((item) => item.code)],
+      ['default_code', 'in', materials.map((item) => item.code)],
       ['name', '!=', BAG_PRODUCT_NAME],
     ],
     ['name'],
@@ -93,17 +95,17 @@ async function ensureBagAttribute(): Promise<number> {
   });
 }
 
-async function ensureBagValues(attributeId: number): Promise<Map<string, number>> {
-  const labels = BAG_MATERIALS.map(typeLabel);
+async function ensureBagValues(attributeId: number, materials: BagMaterial[]): Promise<Map<string, number>> {
+  const labels = materials.map(typeLabel);
   const existing = await odooSearchRead<{ id: number; name: string }>(
     'product.attribute.value',
     [['attribute_id', '=', attributeId], ['name', 'in', labels]],
     ['name'],
-    { limit: 50 },
+    { limit: 80 },
   );
   const byName = new Map(existing.map((row) => [row.name, row.id]));
   const byCode = new Map<string, number>();
-  for (const material of BAG_MATERIALS) {
+  for (const material of materials) {
     const label = typeLabel(material);
     let id = byName.get(label) || 0;
     if (!id) id = await odooCreate('product.attribute.value', { name: label, attribute_id: attributeId });
@@ -157,12 +159,13 @@ async function assignVariantCodes(
   valueByCode: Map<string, number>,
   target: Map<number, Map<string, BagVariantRef>>,
   companyId: number,
+  materials: BagMaterial[],
 ): Promise<void> {
   const variants = await odooSearchRead<{ id: number; product_template_attribute_value_ids: number[] }>(
     'product.product',
     [['product_tmpl_id', '=', templateId]],
     ['product_template_attribute_value_ids'],
-    { limit: 50 },
+    { limit: 80 },
   );
   const ptavIds = variants.flatMap((row) => row.product_template_attribute_value_ids || []);
   const ptavs = ptavIds.length
@@ -170,7 +173,7 @@ async function assignVariantCodes(
         'product.template.attribute.value',
         [['id', 'in', ptavIds]],
         ['name', 'product_attribute_value_id'],
-        { limit: 50 },
+        { limit: 80 },
       )
     : [];
   const codeByValue = new Map<number, string>();
@@ -178,7 +181,7 @@ async function assignVariantCodes(
   const codeByPtav = new Map<number, string>();
   for (const row of ptavs) {
     const valueId = Array.isArray(row.product_attribute_value_id) ? Number(row.product_attribute_value_id[0]) : 0;
-    const code = codeByValue.get(valueId) || BAG_MATERIALS.find((item) => typeLabel(item) === row.name)?.code;
+    const code = codeByValue.get(valueId) || materials.find((item) => typeLabel(item) === row.name)?.code;
     if (code) codeByPtav.set(row.id, code);
   }
   const refs = new Map<string, BagVariantRef>();

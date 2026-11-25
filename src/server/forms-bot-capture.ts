@@ -1,4 +1,10 @@
-import { BAG_SEPARATION_PRESET_ID, bagClarification, interpretBagCounts, type BagCount } from './bag-materials.js';
+import {
+  BAG_SEPARATION_PRESET_ID,
+  bagClarification,
+  interpretBagCounts,
+  materialsForCompany,
+  type BagCount,
+} from './bag-materials.js';
 import { FARDO_PRODUCTION_PRESET_ID, fardoClarification, interpretFardoRuns, type FardoRun } from './fardo-counts.js';
 import { answerFardoSale } from './fardo-sale.js';
 import { isFormsBotQuestionnaire } from './forms-bot-agenda.js';
@@ -567,12 +573,13 @@ function captureBagCount(input: {
   if (!answering) return null;
 
   const saved = String(input.alreadySaved.find((row) => row.question_id === question.id)?.answer_text || '');
-  const reading = interpretBagCounts(input.inbound);
+  const materials = materialsForCompany(Number(input.questionnaire.companyOdooId || 0));
+  const reading = interpretBagCounts(input.inbound, materials);
   const understood = mergeBagCounts(readBagPartial(saved), reading.understood);
   if (!reading.understood.length && !reading.unknown.length) {
     return {
       kind: 'reask',
-      text: bagClarification([], ['informe a quantidade e o tipo. Ex.: 50 pts, 20 lat']),
+      text: bagClarification([], ['informe a quantidade e o tipo. Ex.: 50 pap, 20 pet']),
       pendingQuestionId: question.id,
     };
   }
@@ -622,12 +629,13 @@ function captureFardoRun(input: {
   if (!answering) return null;
 
   const saved = String(input.alreadySaved.find((row) => row.question_id === question.id)?.answer_text || '');
-  const reading = interpretFardoRuns(input.inbound);
+  const materials = materialsForCompany(Number(input.questionnaire.companyOdooId || 0));
+  const reading = interpretFardoRuns(input.inbound, materials);
   const understood = mergeFardoRuns(readFardoPartial(saved), reading.understood);
   if (!reading.understood.length && !reading.unknown.length) {
     return {
       kind: 'reask',
-      text: fardoClarification([], ['informe os bags e os fardos. Ex.: 10 pts, 1 fardo']),
+      text: fardoClarification([], ['informe os bags e os fardos. Ex.: 10 pap, 1 fardo']),
       pendingQuestionId: question.id,
     };
   }

@@ -1,4 +1,4 @@
-import { findBagMaterial, lookupBagType, type BagMaterial } from './bag-materials.js';
+import { BAG_MATERIALS, findBagMaterial, lookupBagType, type BagMaterial } from './bag-materials.js';
 
 /** Padrão Produção de Fardos da Reciclabrasil. */
 export const FARDO_PRODUCTION_PRESET_ID = 'be8a792d-97e5-4d71-a54d-c3e51e667ed5';
@@ -26,7 +26,7 @@ export function isFardoProductionPreset(preset: { id?: string; kind?: string; na
 }
 
 /** “10 bags de pts … 1 fardo de pts”. O fardo fica no mesmo tipo do bag. */
-export function interpretFardoRuns(text: string): FardoReading {
+export function interpretFardoRuns(text: string, materials: BagMaterial[] = BAG_MATERIALS): FardoReading {
   const pieces = quantityPieces(text);
   if (!pieces.length) return { understood: [], unknown: [] };
   const understood: FardoRun[] = [];
@@ -50,7 +50,7 @@ export function interpretFardoRuns(text: string): FardoReading {
       unknown.push(piece.raw);
       continue;
     }
-    const outcome = pairRun(pending, piece);
+    const outcome = pairRun(pending, piece, materials);
     if (outcome.run) understood.push(outcome.run);
     else unknown.push(outcome.note || `${pending.raw} / ${piece.raw}`);
     pending = null;
@@ -73,7 +73,7 @@ export function fardoClarification(understood: FardoRun[], unknown: string[]): s
 }
 
 /** JSON final da pergunta. Resposta parcial marcada não produz fardo. */
-export function runsFromAnswer(text: string): FardoRun[] | null {
+export function runsFromAnswer(text: string, companyId?: number): FardoRun[] | null {
   const raw = String(text || '').trim();
   if (!raw || raw.startsWith('[novo?]')) return null;
   try {
@@ -82,7 +82,7 @@ export function runsFromAnswer(text: string): FardoRun[] | null {
     const items: FardoRun[] = [];
     for (const row of parsed) {
       const source = row && typeof row === 'object' ? (row as { code?: string; bags?: string; fardos?: string }) : {};
-      const material = findBagMaterial(String(source.code || ''));
+      const material = findBagMaterial(String(source.code || ''), companyId);
       const bags = Number(String(source.bags || '').replace(',', '.'));
       const fardos = Number(String(source.fardos || '').replace(',', '.'));
       if (!material || !Number.isFinite(bags) || bags <= 0 || !Number.isFinite(fardos) || fardos <= 0) return null;
@@ -118,11 +118,15 @@ function typeWords(rest: string): string {
     .join(' ');
 }
 
-function pairRun(bag: QuantityPiece, fardo: QuantityPiece): { run?: FardoRun; note?: string } {
+function pairRun(
+  bag: QuantityPiece,
+  fardo: QuantityPiece,
+  materials: BagMaterial[] = BAG_MATERIALS,
+): { run?: FardoRun; note?: string } {
   const bagPhrase = typeWords(bag.rest);
   const fardoPhrase = typeWords(fardo.rest);
-  const bagType = bagPhrase ? lookupBagType(bagPhrase) : {};
-  const fardoType = fardoPhrase ? lookupBagType(fardoPhrase) : bagType;
+  const bagType = bagPhrase ? lookupBagType(bagPhrase, materials) : {};
+  const fardoType = fardoPhrase ? lookupBagType(fardoPhrase, materials) : bagType;
   if (!bagPhrase || bagType.ambiguous?.length) {
     return { note: bagType.ambiguous?.length ? ambiguityNote(bag.raw, bagType.ambiguous) : bag.raw };
   }

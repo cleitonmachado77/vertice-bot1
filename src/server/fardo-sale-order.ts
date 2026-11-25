@@ -14,7 +14,7 @@ export async function materializeFardoSale(input: {
   customerRaw: string;
   answer: string;
 }): Promise<FormDocument | null> {
-  const items = salesFromAnswer(input.answer);
+  const items = salesFromAnswer(input.answer, Number(input.companyOdooId || 0) || undefined);
   const customer = await resolveCatalogValue({
     kind: 'sale',
     fieldKey: 'customer',

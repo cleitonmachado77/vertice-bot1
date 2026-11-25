@@ -17,7 +17,7 @@ export async function materializeFardoProduction(input: {
   occurrenceDate: string;
   answer: string;
 }): Promise<FormDocument | null> {
-  const items = runsFromAnswer(input.answer);
+  const items = runsFromAnswer(input.answer, Number(input.companyOdooId || 0) || undefined);
   if (!items?.length) {
     console.warn(`forms-bot: ciclo ${input.cycleId} sem bags e fardos do mesmo tipo`);
     return null;
