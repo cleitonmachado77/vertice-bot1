@@ -110,19 +110,19 @@ Ou liberar o usuário da API (cleiton.adriano@uel.br) no grupo Administrador e r
 
   await setSetting(FLORESTOPOLIS_COMPANY_SETTING, String(companyId));
 
-  // Libera a empresa no usuário da API (multi-company).
+  // Libera a empresa no usuário autenticado e no login da API do Vertice (settings).
   const uid = await odooAuthenticate();
-  const [user] = await odooSearchRead<{ id: number; company_ids: number[]; company_id: unknown }>(
+  const apiLogin = (await import('../src/server/db.js')).getSetting('odoo_login');
+  const users = await odooSearchRead<{ id: number; login: string; company_ids: number[] }>(
     'res.users',
-    [['id', '=', uid]],
-    ['company_ids', 'company_id'],
-    { limit: 1 },
+    ['|', ['id', '=', uid], ['login', '=', apiLogin]],
+    ['login', 'company_ids'],
+    { limit: 5 },
   );
-  if (user && !user.company_ids.includes(companyId)) {
-    await odooWrite('res.users', [user.id], {
-      company_ids: [[4, companyId]],
-    });
-    console.log(`Usuário ${uid} liberado na empresa ${companyId}`);
+  for (const user of users) {
+    if (user.company_ids.includes(companyId)) continue;
+    await odooWrite('res.users', [user.id], { company_ids: [[4, companyId]] });
+    console.log(`Usuário ${user.login || user.id} liberado na empresa ${companyId}`);
   }
 
   console.log('Sincronizando empresas no Vertice…');
