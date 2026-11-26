@@ -107,7 +107,7 @@ test('tipo com um padrão vai direto às ações; com vários, lista os padrões
   const purchase = buildKindMenu('purchase', forms, none);
   assert.equal(purchase.node, 'form:forms-preset:p1');
   assert.equal(purchase.parent, 'main');
-  assert.equal(purchase.options[0].label, 'Registrar compras de hoje');
+  assert.equal(purchase.options[0].label, 'Registrar recebimento de hoje');
 
   const sales = buildKindMenu('sale', forms, none);
   assert.equal(sales.node, 'kind:sale');
@@ -145,7 +145,7 @@ test('formatação numerada com rodapé e “0) Voltar” no fim', () => {
   const text = formatMenu(node, { hint: 'Não entendi a opção.' });
   const lines = text.split('\n');
   assert.equal(lines[0], 'Não entendi a opção.');
-  assert.equal(lines[1], 'Vendas — escolha o formulário:');
+  assert.equal(lines[1], 'Entrega — escolha o formulário:');
   assert.equal(lines.at(-3), '0) Voltar');
   assert.equal(lines.at(-1), 'Digite o número da opção.');
 

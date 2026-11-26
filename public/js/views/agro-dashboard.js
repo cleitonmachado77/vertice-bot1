@@ -168,75 +168,11 @@ function formatDayShort(iso) {
   return `${match[3]}/${match[2]}`;
 }
 
-function digitsPhone(phone) {
-  return String(phone || '').replace(/\D/g, '');
-}
-
-function whatsappHref(phone) {
-  const digits = digitsPhone(phone);
-  if (!digits) return '';
-  const withCountry = digits.length >= 12 ? digits : digits.length >= 10 ? `55${digits}` : '';
-  return withCountry ? `https://wa.me/${withCountry}` : '';
-}
-
-function telHref(phone) {
-  const digits = digitsPhone(phone);
-  return digits ? `tel:+${digits.length >= 12 ? digits : digits.length >= 10 ? `55${digits}` : digits}` : '';
-}
-
-function printForecastContacts(contacts, period) {
-  const monthLabel = MONTHS[(period?.month || 1) - 1] || '';
-  const year = period?.year || '';
-  const rows = (contacts || [])
-    .map(
-      (item) => `
-      <tr>
-        <td>${escapeHtml(item.name || '—')}</td>
-        <td>${escapeHtml(item.phone || '—')}</td>
-        <td>${escapeHtml((item.products || []).join(', ') || '—')}</td>
-        <td>${escapeHtml(formatDay(item.nextDate))}</td>
-        <td>${escapeHtml((item.properties || []).join(', ') || '—')}</td>
-        <td>${escapeHtml(formatQty(item.qty))}</td>
-      </tr>`,
-    )
-    .join('');
-  const html = `<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8">
-<title>Produtores a contatar — ${escapeHtml(monthLabel)}/${escapeHtml(String(year))}</title>
-<style>
-  body { font-family: Georgia, "Times New Roman", serif; color: #1a1a1a; margin: 24px; }
-  h1 { font-size: 1.25rem; margin: 0 0 4px; }
-  p { color: #555; margin: 0 0 16px; font-size: 0.9rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  th, td { border: 1px solid #ccc; padding: 8px 10px; text-align: left; vertical-align: top; }
-  th { background: #f3f3f3; }
-</style></head><body>
-  <h1>Produtores a contatar</h1>
-  <p>Estimativa de produção · plantios em aberto · ${escapeHtml(monthLabel)}/${escapeHtml(String(year))}</p>
-  <table>
-    <thead>
-      <tr>
-        <th>Produtor</th><th>Telefone</th><th>Culturas</th>
-        <th>Próxima colheita</th><th>Propriedades</th><th>Estimativa</th>
-      </tr>
-    </thead>
-    <tbody>${rows || '<tr><td colspan="6">Nenhum produtor no período</td></tr>'}</tbody>
-  </table>
-  <script>window.onload = () => { window.print(); };<\/script>
-</body></html>`;
-  const popup = window.open('', '_blank', 'noopener,noreferrer,width=960,height=720');
-  if (!popup) return;
-  popup.document.open();
-  popup.document.write(html);
-  popup.document.close();
-}
-
-function renderForecastPanel(forecast, period) {
+function renderForecastPanel(forecast) {
   const panel = document.getElementById('agro-forecast-panel');
   if (!panel) return;
   const rows = forecast?.timeline || [];
-  const contacts = forecast?.contacts || [];
-  if (!rows.length && !contacts.length) {
+  if (!rows.length) {
     panel.hidden = true;
     panel.innerHTML = '';
     return;
@@ -244,7 +180,7 @@ function renderForecastPanel(forecast, period) {
   panel.hidden = false;
   panel.innerHTML = `
     <div class="agro-dash-forecast-table-wrap">
-      <p class="agro-dash-forecast-caption"><strong>Quando colher</strong> — data prevista (plantios em aberto)</p>
+      <p class="agro-dash-forecast-caption"><strong>Quando colher</strong> — data prevista (plantios em aberto). Contatos em Configurações › Produtores.</p>
       <table class="agro-dash-forecast-table">
         <thead>
           <tr>
@@ -276,55 +212,7 @@ function renderForecastPanel(forecast, period) {
             .join('') || '<tr><td colspan="6" class="muted">Sem colheitas previstas neste período</td></tr>'}
         </tbody>
       </table>
-    </div>
-    <div class="agro-dash-contacts" id="agro-forecast-contacts">
-      <header class="agro-dash-contacts-head">
-        <div>
-          <h4>Produtores a contatar</h4>
-          <p class="muted">Quem tem colheita prevista no período — telefone para contato</p>
-        </div>
-        <button type="button" class="btn-ghost" data-print-forecast-contacts ${
-          contacts.length ? '' : 'disabled'
-        }>Exportar / imprimir</button>
-      </header>
-      ${
-        contacts.length
-          ? `<ul class="agro-dash-contacts-list">
-        ${contacts
-          .map((item) => {
-            const tel = telHref(item.phone);
-            const wa = whatsappHref(item.phone);
-            return `<li class="agro-dash-contact-card">
-              <div class="agro-dash-contact-main">
-                <strong>${escapeHtml(item.name || '—')}</strong>
-                <span class="agro-forecast-date">${escapeHtml(formatDay(item.nextDate))}</span>
-              </div>
-              <p class="agro-sub">${escapeHtml((item.products || []).join(' · ') || '—')}</p>
-              <p class="agro-sub">${escapeHtml((item.properties || []).join(' · ') || '')}</p>
-              <div class="agro-dash-contact-actions">
-                ${
-                  item.phone
-                    ? `<span class="agro-dash-contact-phone">${escapeHtml(item.phone)}</span>`
-                    : '<span class="muted">Sem telefone</span>'
-                }
-                ${tel ? `<a class="btn-ghost agro-mini" href="${escapeHtml(tel)}">Ligar</a>` : ''}
-                ${
-                  wa
-                    ? `<a class="btn-ghost agro-mini" href="${escapeHtml(wa)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>`
-                    : ''
-                }
-              </div>
-            </li>`;
-          })
-          .join('')}
-      </ul>`
-          : '<p class="muted">Nenhum produtor com colheita prevista neste filtro.</p>'
-      }
     </div>`;
-
-  panel.querySelector('[data-print-forecast-contacts]')?.addEventListener('click', () => {
-    printForecastContacts(contacts, period);
-  });
 }
 
 function formatHa(value) {
@@ -699,7 +587,7 @@ function paintChartsSync(Chart, data) {
       else setChartEmpty(forecastCanvas, false);
     }
   }
-  renderForecastPanel(data.forecast || {}, data.period);
+  renderForecastPanel(data.forecast || {});
 
   const pairs = [
     ['planting', data.plantingByProduct || [], 'Plantado', '#3d8b6e', formatQty],

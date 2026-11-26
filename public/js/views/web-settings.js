@@ -176,6 +176,13 @@ function renderOdooSection(data) {
       </div>
       <label>API Key</label>
       <input name="odooApiKey" type="password" placeholder="${escapeHtml(data.odooApiKey || 'não configurado')}" />
+      <label>URL do E-learning (Odoo Slides)</label>
+      <input
+        name="odooElearningUrl"
+        value="${escapeHtml(data.odooElearningUrl || '')}"
+        placeholder="${escapeHtml(data.odooElearningResolved || 'https://…/slides')}"
+      />
+      <p class="muted">Vazio = usa a URL do Odoo + <code>/slides</code>. Aparece abaixo de Cadastros no Vértice RSU.</p>
       <p id="odoo-test-result" class="muted">${data.odooConfigured ? 'Credenciais salvas.' : 'Preencha banco, login e API Key.'}</p>
       <div class="row">
         <button class="btn" type="submit">Salvar</button>

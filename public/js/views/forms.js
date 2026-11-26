@@ -29,12 +29,58 @@ const TABS = [
     description: 'Indicadores da entidade: recebimento, separação, prensagem, entrega e estoque',
     entityOnly: true,
   },
-  { id: 'purchase', slug: 'compras', label: 'Compras', icon: 'cart', description: 'Solicitações de cotação e pedidos de compra' },
-  { id: 'product', slug: 'inventario', label: 'Inventário', icon: 'box', description: 'Produtos e controle de estoque' },
-  { id: 'production', slug: 'fabricacao', label: 'Fabricação', icon: 'factory', description: 'Registros de produção e prensagem' },
-  { id: 'sale', slug: 'vendas', label: 'Vendas', icon: 'sales', description: 'Cotações e pedidos de venda' },
+  {
+    id: 'purchase',
+    slug: 'recebimento',
+    label: 'Recebimento',
+    icon: 'cart',
+    formKind: 'purchase',
+    description: 'Solicitações de cotação e pedidos de compra',
+  },
+  {
+    id: 'product',
+    slug: 'separacao',
+    label: 'Separação',
+    icon: 'box',
+    formKind: 'product',
+    description: 'Separação de bags e controle de estoque',
+  },
+  {
+    id: 'production',
+    slug: 'prensagem',
+    label: 'Prensagem',
+    icon: 'factory',
+    formKind: 'production',
+    description: 'Registros de produção e prensagem de fardos',
+  },
+  {
+    id: 'entrega',
+    slug: 'entrega',
+    label: 'Entrega',
+    icon: 'truck',
+    formKind: 'sale',
+    segment: 'entrega',
+    description: 'Entregas operacionais (fardos) — site e celular',
+  },
+  {
+    id: 'vendas',
+    slug: 'vendas',
+    label: 'Vendas',
+    icon: 'sales',
+    formKind: 'sale',
+    segment: 'vendas',
+    siteOnly: true,
+    description: 'Registro de vendas da entrega, valores e emissão de NF no Odoo (somente site)',
+  },
   { id: 'cadastros', slug: 'cadastros', label: 'Cadastros', icon: 'folder', description: 'Produtos, clientes e fornecedores do Odoo' },
 ];
+
+/** Slugs antigos → novos (redirect no roteador). */
+export const FORMS_LEGACY_SLUGS = {
+  compras: 'recebimento',
+  inventario: 'separacao',
+  fabricacao: 'prensagem',
+};
 
 export function formsTabs() {
   return TABS.filter((tab) => !tab.entityOnly || isRsuDashboardAvailable()).map((tab) => ({
@@ -43,17 +89,47 @@ export function formsTabs() {
   }));
 }
 
+export function tabMeta(tabId) {
+  return TABS.find((tab) => tab.id === tabId) || null;
+}
+
+/** Kind Odoo/Forms por aba (entrega/vendas → sale). */
+export function formKindFromTab(tabId) {
+  const tab = tabMeta(tabId);
+  if (!tab) return tabId;
+  if (tab.id === 'dashboard' || tab.id === 'cadastros') return tab.id;
+  return tab.formKind || tab.id;
+}
+
+export function segmentFromTab(tabId) {
+  return tabMeta(tabId)?.segment || '';
+}
+
 let schemaCache = null;
 let catalogCache = { products: [], partners: [], refs: {}, at: 0 };
 /** Filtros da lista de registros (persistem entre refreshes da mesma aba). */
 let listFilters = { q: '', partner: '', date: '', kind: '' };
 /** Itens da lista atual — soft refresh atualiza sem remontar o shell (evita piscar). */
-let listSession = { kind: '', items: [], schema: null, catalog: null, token: null };
-/** Poll da lista enquanto a aba Forms (compras/vendas/inventário) está aberta. */
+let listSession = { kind: '', tabId: '', segment: '', items: [], schema: null, catalog: null, token: null };
+/** Poll da lista enquanto a aba Forms (recebimento/entrega/vendas/…) está aberta. */
 let stopListPoll = null;
 
-function rememberListSession(kind, schema, catalog, items, token) {
-  listSession = { kind, schema, catalog, items: items || [], token };
+function rememberListSession(kind, schema, catalog, items, token, meta = {}) {
+  listSession = {
+    kind,
+    tabId: meta.tabId || listSession.tabId || kind,
+    segment: meta.segment || listSession.segment || '',
+    schema,
+    catalog,
+    items: items || [],
+    token,
+  };
+}
+
+function formsListQuery(kind, segment = listSession.segment || '') {
+  let url = `/api/forms?kind=${encodeURIComponent(kind)}&lines=1`;
+  if (kind === 'sale' && segment) url += `&segment=${encodeURIComponent(segment)}`;
+  return url;
 }
 
 function stopFormsListPoll() {
@@ -104,14 +180,29 @@ export function tabFromSlug(slug) {
   ) {
     return 'cadastros';
   }
-  if (raw === 'prensagem') return 'production';
   if (raw === 'dashboard') return 'dashboard';
-  if (!raw) return isRsuDashboardAvailable() ? 'dashboard' : 'purchase';
-  return TABS.find((tab) => tab.slug === slug)?.id || (isRsuDashboardAvailable() ? 'dashboard' : 'purchase');
+  const base = raw.split('/')[0];
+  const mapped = FORMS_LEGACY_SLUGS[base] || base;
+  if (!mapped) return isRsuDashboardAvailable() ? 'dashboard' : 'purchase';
+  return TABS.find((tab) => tab.slug === mapped)?.id || (isRsuDashboardAvailable() ? 'dashboard' : 'purchase');
 }
 
 export function slugFromKind(kind) {
-  return TABS.find((tab) => tab.id === kind)?.slug || (isRsuDashboardAvailable() ? 'dashboard' : 'compras');
+  return TABS.find((tab) => tab.id === kind)?.slug || (isRsuDashboardAvailable() ? 'dashboard' : 'recebimento');
+}
+
+/** Resolve redirect de slug legado; retorna slug canônico ou o mesmo. */
+export function canonicalFormsSlug(slug) {
+  const raw = String(slug || '');
+  if (!raw) return raw;
+  if (raw === 'dados' || raw.startsWith('dados/')) {
+    return raw.replace(/^dados/, 'cadastros') || 'cadastros/produtos';
+  }
+  const parts = raw.split('/');
+  const mapped = FORMS_LEGACY_SLUGS[parts[0]];
+  if (!mapped) return raw;
+  parts[0] = mapped;
+  return parts.join('/');
 }
 
 async function loadSchema() {
@@ -142,13 +233,18 @@ function pageHeadHtml(activeKind) {
     <p class="muted">${escapeHtml(tab.description)}</p>`;
 }
 
-function topActions(kind, presets = []) {
-  if (kind === 'dashboard') return '';
-  if (kind === 'cadastros') {
+function topActions(tabId, presets = []) {
+  if (tabId === 'dashboard') return '';
+  if (tabId === 'cadastros') {
     return `<button class="btn" type="button" data-new>Novo</button>`;
   }
+  const tab = tabMeta(tabId);
+  const siteOnlyNote = tab?.siteOnly
+    ? `<span class="muted forms-site-only-note">Somente no site — não aparece no Bot</span>`
+    : '';
   return `
     ${presetsToolbarHtml(presets)}
+    ${siteOnlyNote}
     <button class="btn-ghost" type="button" data-export-all>Exportar Excel</button>
     <button class="btn" type="button" data-new>Novo registro</button>`;
 }
@@ -188,20 +284,20 @@ function ensureFormsShell(root, kind, presets = []) {
   return root.querySelector('#forms-body');
 }
 
-export async function renderForms(root, kind = 'dashboard', token = getNavToken(), options = {}) {
+export async function renderForms(root, tabId = 'dashboard', token = getNavToken(), options = {}) {
   const slug = options.slug || location.hash.replace('#/forms/', '');
   if (slug === 'dados' || slug.startsWith('dados/')) {
     location.replace(`#/forms/${slug.replace(/^dados/, 'cadastros') || 'cadastros/produtos'}`);
     return;
   }
-  if (kind === 'cadastros' && (slug === 'cadastros' || slug === '')) {
+  if (tabId === 'cadastros' && (slug === 'cadastros' || slug === '')) {
     location.replace('#/forms/cadastros/produtos');
     return;
   }
 
   stopFormsListPoll();
 
-  if (kind === 'dashboard') {
+  if (tabId === 'dashboard') {
     if (!isRsuDashboardAvailable()) {
       location.replace(formsHomeHash());
       return;
@@ -219,12 +315,14 @@ export async function renderForms(root, kind = 'dashboard', token = getNavToken(
 
   stopHubDashboard();
 
+  const formKind = formKindFromTab(tabId);
+  const segment = segmentFromTab(tabId);
   const soft = Boolean(options.soft && root.querySelector('.forms-pane'));
   if (!soft && !root.querySelector('.forms-pane')) {
     root.innerHTML = viewLoading('Abrindo Vértice RSU…');
   }
 
-  const body = ensureFormsShell(root, kind, []);
+  const body = ensureFormsShell(root, tabId, []);
   if (!body || !isNavActive(token)) return;
 
   document.body.classList.remove('forms-modal-open');
@@ -232,25 +330,27 @@ export async function renderForms(root, kind = 'dashboard', token = getNavToken(
   body.innerHTML = `<p class="muted forms-body-loading">Carregando…</p>`;
 
   try {
-    if (kind === 'cadastros') {
+    if (tabId === 'cadastros') {
       await renderEntitiesBody(body, entityFromSlug(slug), token, root);
-      bindShellActions(root, kind, null, null, [], token, []);      return;
+      bindShellActions(root, 'cadastros', null, null, [], token, []);
+      return;
     }
 
     const [schema, catalog, data, presets] = await Promise.all([
       loadSchema(),
       loadCatalog(false),
-      api(`/api/forms?kind=${encodeURIComponent(kind)}&lines=1`),
-      loadPresets(kind).catch(() => []),
+      api(formsListQuery(formKind, segment)),
+      loadPresets(formKind).catch(() => []),
     ]);
     if (!isNavActive(token)) return;
-    ensureFormsShell(root, kind, presets);
-    rememberListSession(kind, schema, catalog, data.items || [], token);
-    paintBody(body, kind, schema, catalog, data.items || [], null);
-    bindShellActions(root, kind, schema, catalog, data.items || [], token, presets);
-    bindFilters(root, kind, schema, catalog, data.items || [], token);
-    bindList(root, kind, schema, catalog, data.items || [], token);
-    startFormsListPoll(root, kind, schema, token);
+    const items = data.items || [];
+    ensureFormsShell(root, tabId, presets);
+    rememberListSession(formKind, schema, catalog, items, token, { tabId, segment });
+    paintBody(body, formKind, schema, catalog, items, null);
+    bindShellActions(root, formKind, schema, catalog, items, token, presets);
+    bindFilters(root, formKind, schema, catalog, items, token);
+    bindList(root, formKind, schema, catalog, items, token);
+    startFormsListPoll(root, formKind, schema, token);
   } finally {
     body.classList.remove('is-switching');
   }
@@ -604,16 +704,19 @@ function blankDraft(kind, schema) {
   const lineValues = {};
   for (const field of fields.lines || []) lineValues[field.key] = '';
   if (kind === 'production') header.production_date = new Date().toISOString().slice(0, 10);
+  if (kind === 'sale' && listSession.segment) header.sale_segment = listSession.segment;
   return {
     id: '',
     kind,
     title:
       kind === 'sale'
-        ? 'Cotação'
+        ? listSession.segment === 'entrega'
+          ? 'Entrega'
+          : 'Cotação'
         : kind === 'purchase'
           ? 'Solicitação'
           : kind === 'production'
-            ? 'Fabricação'
+            ? 'Prensagem'
             : 'Produto',
     status: kind === 'production' ? 'done' : 'draft',
     header,
@@ -642,7 +745,7 @@ function openNewRecord(root, kind, schema, catalog, items, token) {
 
 async function applyPresetsToolbar(root, kind, schema, catalog, items, token) {
   const next = await loadPresets(kind).catch(() => []);
-  ensureFormsShell(root, kind, next);
+  ensureFormsShell(root, listSession.tabId || kind, next);
   bindShellActions(root, kind, schema, catalog, items, token, next);
   return next;
 }
@@ -656,7 +759,7 @@ function showPresetsManager(root, kind, schema, catalog, items, token, presets) 
       });
     },
     onPresetsChanged: async (list) => {
-      ensureFormsShell(root, kind, list);
+      ensureFormsShell(root, listSession.tabId || kind, list);
       bindShellActions(root, kind, schema, catalog, items, token, list);
     },
   });
@@ -1167,7 +1270,7 @@ function listRow(item, activeId, schema, kind) {
     kind === 'product'
       ? item.title || item.header?.name || 'Sem título'
       : kind === 'production'
-        ? [item.title || 'Fabricação', productionInputLabel(item.header)].filter(Boolean).join(' · ')
+        ? [item.title || 'Prensagem', productionInputLabel(item.header)].filter(Boolean).join(' · ')
       : ref && partner
         ? `${ref} · ${partner}`
         : ref || partner || item.title || 'Sem título';
@@ -1245,7 +1348,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
           ? 'Preencha e salve para criar. Fechar sem salvar não cria o registro.'
           : 'Altere um campo para salvar. O envio ao Odoo é automático.');
 
-  // Compras, Vendas e Fabricação gravam dado real: o status é o do Odoo (só leitura).
+  // Recebimento, Entrega/Vendas e Prensagem gravam dado real: o status é o do Odoo (só leitura).
   const odooDrivenStatus = kind === 'purchase' || kind === 'sale' || kind === 'production';
   const statusControl =
     statuses.length === 0
@@ -1291,10 +1394,16 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
               : select;
           })();
 
+  const odooId = String(doc.header?.odoo_id || '').trim();
+  const odooOpen =
+    !isPreset && kind === 'sale' && odooId
+      ? `<a class="btn-ghost" href="#" data-open-odoo data-odoo-id="${escapeHtml(odooId)}" title="Abrir pedido no Odoo para NF">Abrir no Odoo</a>`
+      : '';
   const actions = isPreset
     ? `<button class="btn-ghost" type="button" data-preset-back>Voltar</button>
        <button class="btn" type="submit" data-save>Salvar padrão</button>`
-    : `<button class="btn" type="submit" data-save hidden>Salvar</button>
+    : `${odooOpen}
+       <button class="btn" type="submit" data-save hidden>Salvar</button>
        ${isNew ? '' : '<button class="btn-danger" type="button" data-delete>Excluir</button>'}
        <button class="btn-ghost" type="button" data-close-modal>Fechar</button>`;
 
@@ -1311,14 +1420,19 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
         )
         .join('');
 
-  const titleBlock = isPreset
-    ? `<label>Nome do padrão (botão)
-        <input name="preset_name" value="${escapeHtml(options.presetName || '')}" placeholder="ex.: Plastico" required maxlength="60" />
-      </label>
-      <div class="forms-bot-panel">
+  const saleSegment = String(doc.header?.sale_segment || listSession.segment || '').trim();
+  const saleSegmentHidden =
+    !isPreset && kind === 'sale' && saleSegment
+      ? `<input type="hidden" name="h_sale_segment" value="${escapeHtml(saleSegment)}" />`
+      : '';
+  const hideBotPanel = isPreset && listSession.segment === 'vendas';
+  const botPanelHtml = hideBotPanel
+    ? `<p class="muted">Vendas é somente no site — este padrão não é enviado pelo Vértice Bot.</p>
+       <input type="hidden" name="bot_enabled" value="" />`
+    : `<div class="forms-bot-panel">
         <label class="forms-preset-show forms-preset-bot">
           <input type="checkbox" name="bot_enabled" value="1"${options.botEnabled ? ' checked' : ''} />
-          <span>Enviar pelo Vertice Bot (WhatsApp)</span>
+          <span>Enviar pelo Vértice Bot (WhatsApp)</span>
         </label>
         <div class="forms-bot-schedule" data-bot-schedule${options.botEnabled ? '' : ' hidden'}>
           <label>Contato destinatário
@@ -1346,7 +1460,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
             </div>
             <button class="btn" type="button" data-bot-create-contact>Cadastrar e selecionar</button>
           </div>
-          <p class="muted">Fica sempre disponível no menu do WhatsApp deste contato. O lembrete sai no horário padrão, configurado em <a href="#/settings/menu">Vertice Bot › Configurações › Menu</a>.</p>
+          <p class="muted">Fica sempre disponível no menu do WhatsApp deste contato. O lembrete sai no horário padrão, configurado em <a href="#/settings/menu">Vértice Bot › Configurações › Menu</a>.</p>
           <label>Template Meta (janela 24h)
             <select name="bot_template_id">
               <option value="">Carregando templates…</option>
@@ -1364,7 +1478,12 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
           </div>
         </div>
         <div class="forms-bot-activity" data-bot-activity hidden></div>
-      </div>
+      </div>`;
+  const titleBlock = isPreset
+    ? `<label>Nome do padrão (botão)
+        <input name="preset_name" value="${escapeHtml(options.presetName || '')}" placeholder="ex.: Plastico" required maxlength="60" />
+      </label>
+      ${botPanelHtml}
       ${wrapPresetField(
         `<label>Título (no novo registro)
           <input name="title" value="${escapeHtml(doc.title || '')}" placeholder="Opcional" />
@@ -1409,6 +1528,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
         </div>
       </div>
       ${isPreset ? '' : `${sourceBadgeHtml(doc)}${syncBadgeHtml(doc)}`}
+      ${saleSegmentHidden}
       ${titleBlock}
       ${statusControl}
       ${hiddenHeaderHtml}
@@ -2157,6 +2277,23 @@ function bindEditor(root, kind, schema, catalog, items, doc, token) {
     }
   });
 
+  form.querySelector('[data-open-odoo]')?.addEventListener('click', async (event) => {
+    event.preventDefault();
+    const id = form.querySelector('[data-open-odoo]')?.getAttribute('data-odoo-id') || '';
+    if (!id) return;
+    try {
+      const settings = await api('/api/forms/odoo/settings');
+      const base = String(settings.odooUrl || '').replace(/\/$/, '');
+      if (!base) {
+        toast('Configure a URL do Odoo em Configurações');
+        return;
+      }
+      window.open(`${base}/web#id=${encodeURIComponent(id)}&model=sale.order&view_type=form`, '_blank', 'noopener');
+    } catch (error) {
+      toast(error.message || 'Não foi possível abrir o Odoo');
+    }
+  });
+
   form.querySelector('[data-add-line]')?.addEventListener('click', () => {
     const box = form.querySelector('#forms-lines');
     if (!box) return;
@@ -2239,6 +2376,8 @@ function collectPayload(form, fields) {
     const raw = String(data.get(`h_${field.key}`) || '');
     header[field.key] = field.date ? toIsoDate(raw) : raw;
   }
+  const saleSegment = String(data.get('h_sale_segment') || '').trim();
+  if (saleSegment) header.sale_segment = saleSegment;
   const lines = [...form.querySelectorAll('.forms-line')].map((node) => {
     const values = {};
     node.querySelectorAll('[data-line-key]').forEach((input) => {
@@ -2263,9 +2402,11 @@ function collectPayload(form, fields) {
  */
 async function refreshListQuiet(root, kind, schema, token, options = {}) {
   const keepEditor = Boolean(options.keepEditor);
+  const segment = listSession.segment || '';
+  const tabId = listSession.tabId || kind;
   const [catalog, data] = await Promise.all([
     loadCatalog(false),
-    api(`/api/forms?kind=${encodeURIComponent(kind)}&lines=1`),
+    api(formsListQuery(kind, segment)),
   ]);
   if (!isNavActive(token)) return;
   const items = data.items || [];
@@ -2276,7 +2417,7 @@ async function refreshListQuiet(root, kind, schema, token, options = {}) {
     return;
   }
   if (keepEditor && listFingerprint(items) === listFingerprint(listSession.items)) {
-    rememberListSession(kind, schema, catalog, items, token);
+    rememberListSession(kind, schema, catalog, items, token, { tabId, segment });
     return;
   }
   const activeId =
@@ -2284,7 +2425,7 @@ async function refreshListQuiet(root, kind, schema, token, options = {}) {
     (keepEditor
       ? getFormsEditor(root)?.querySelector('#forms-form')?.getAttribute('data-id') || ''
       : '');
-  rememberListSession(kind, schema, catalog, items, token);
+  rememberListSession(kind, schema, catalog, items, token, { tabId, segment });
   const filtered = filterItems(items, schema, kind, listFilters);
   list.innerHTML = listRowsHtml(filtered, activeId || null, schema, kind, items.length);
   if (count) {

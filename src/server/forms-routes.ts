@@ -14,6 +14,7 @@ import {
   SALE_LINE_FIELDS,
   SALE_ODOO_STATUSES,
   isFormKind,
+  isSaleSegment,
   type FormKind,
 } from './forms-fields.js';
 import { getFormsCatalog } from './forms-catalog.js';
@@ -151,13 +152,22 @@ function maskSecret(value: string): string {
   return `${value.slice(0, 4)}••••${value.slice(-4)}`;
 }
 
+function defaultElearningUrl(odooUrl: string): string {
+  const base = String(odooUrl || '').replace(/\/$/, '') || 'https://www.reciclarenda.com.br';
+  return `${base}/slides`;
+}
+
 function odooSettingsPayload() {
   const apiKey = getSetting('odoo_api_key');
+  const odooUrl = getSetting('odoo_url') || 'https://www.reciclarenda.com.br';
+  const elearningOverride = String(getSetting('odoo_elearning_url') || '').trim();
   return {
-    odooUrl: getSetting('odoo_url') || 'https://www.reciclarenda.com.br',
+    odooUrl,
     odooDb: getSetting('odoo_db'),
     odooLogin: getSetting('odoo_login'),
     odooApiKey: maskSecret(apiKey),
+    odooElearningUrl: elearningOverride,
+    odooElearningResolved: elearningOverride || defaultElearningUrl(odooUrl),
     odooConfigured: Boolean(
       getSetting('odoo_url') && getSetting('odoo_db') && getSetting('odoo_login') && apiKey,
     ),
@@ -290,6 +300,9 @@ export function registerFormsRoutes(): void {
       }
       if (typeof input.odooDb === 'string') await setSetting('odoo_db', text(input.odooDb));
       if (typeof input.odooLogin === 'string') await setSetting('odoo_login', text(input.odooLogin));
+      if (typeof input.odooElearningUrl === 'string') {
+        await setSetting('odoo_elearning_url', text(input.odooElearningUrl).replace(/\/$/, ''));
+      }
       const apiKey = text(input.odooApiKey);
       if (apiKey && !apiKey.includes('••••')) await setSetting('odoo_api_key', apiKey);
       json(ctx.res, 200, { ...odooSettingsPayload(), canEditOdoo: true });
@@ -653,7 +666,9 @@ export function registerFormsRoutes(): void {
       return;
     }
     const includeLines = text(ctx.query.get('lines')) === '1';
-    json(ctx.res, 200, { items: await listFormDocuments(kind, { includeLines }) });
+    const segmentRaw = text(ctx.query.get('segment'));
+    const segment = isSaleSegment(segmentRaw) ? segmentRaw : undefined;
+    json(ctx.res, 200, { items: await listFormDocuments(kind, { includeLines, segment }) });
   });
 
   route('POST', '/api/forms', async (ctx) => {

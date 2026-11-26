@@ -15,7 +15,12 @@ import {
 } from './company-switcher.js';
 import { renderHub, stopHubDashboard } from './views/hub.js';
 import { renderWebSettings } from './views/web-settings.js';
-import { formsTabs, renderForms, tabFromSlug } from './views/forms.js';
+import {
+  canonicalFormsSlug,
+  formsTabs,
+  renderForms,
+  tabFromSlug,
+} from './views/forms.js';
 import { AGRO_TABS, agroTabFromSlug, closeAgroModal, renderAgro, stopAgroDashboard } from './views/agro.js';
 import { renderOverview, stopOverview } from './views/overview.js';
 import { renderContacts, stopContacts } from './views/contacts.js';
@@ -36,29 +41,29 @@ const botRoutes = {
 
 const APPS = {
   web: {
-    crumb: 'Vertice WEB',
-    logo: '/logo-vertice-web.png',
+    crumb: 'Vértice Elo',
+    logo: '/logo-vertice-elo.png',
     shellClass: 'hub-shell',
     mainClass: 'main hub-main',
     mainId: 'hub-view',
   },
   forms: {
     crumb: 'Vértice RSU',
-    logo: '/logo-vertice-forms.png',
+    logo: '/logo-vertice-rsu.png',
     shellClass: 'forms-shell',
     mainClass: 'main forms-main',
     mainId: 'forms-view',
   },
   bot: {
-    crumb: 'Vertice Bot',
+    crumb: 'Vértice Bot',
     logo: '/logo-vertice-bot.png',
     shellClass: 'bot-shell',
     mainClass: 'main',
     mainId: 'view',
   },
   agro: {
-    crumb: 'Vertice Agro',
-    logo: '/logo-vertice-web.png',
+    crumb: 'Vértice Agro',
+    logo: '/logo-vertice-agro.png',
     shellClass: 'agro-shell',
     mainClass: 'main agro-main',
     mainId: 'agro-view',
@@ -129,11 +134,12 @@ function currentRoute() {
     };
   }
   if (raw === 'forms' || raw.startsWith('forms/')) {
-    const home = formsHomeHash().replace('#/forms/', '') || 'compras';
+    const home = formsHomeHash().replace('#/forms/', '') || 'recebimento';
     let slug = raw === 'forms' ? home : raw.slice('forms/'.length) || home;
-    if (slug === 'dados' || slug.startsWith('dados/')) {
-      slug = slug.replace(/^dados/, 'cadastros');
-      location.replace(`#/forms/${slug || 'cadastros/produtos'}`);
+    const canonical = canonicalFormsSlug(slug);
+    if (canonical !== slug) {
+      location.replace(`#/forms/${canonical || 'cadastros/produtos'}`);
+      slug = canonical;
     }
     if (slug === 'dashboard' && !isRsuDashboardAvailable()) {
       location.replace(formsHomeHash());
@@ -283,7 +289,7 @@ async function draw() {
 
   if (current.name === 'agro') {
     const agroTab = AGRO_TABS.find((tab) => tab.id === current.agroTab);
-    await mountChrome('agro', me, current.agroTab || 'dashboard', agroTab?.label || 'Vertice Agro');
+    await mountChrome('agro', me, current.agroTab || 'dashboard', agroTab?.label || 'Vértice Agro');
     const view = document.querySelector('#agro-view');
     if (!view || !isNavActive(token)) return;
     await renderAgro(view, current.agroTab || 'dashboard', token, { soft: softAgro });
@@ -330,9 +336,9 @@ function navItems(appKey, me) {
         label: hub ? 'Dashboard' : 'Início',
         icon: hub ? 'dashboard' : 'apps',
       },
-      adm && { key: 'bot', href: '#/overview', label: 'Vertice Bot', icon: 'bot' },
+      adm && { key: 'bot', href: '#/overview', label: 'Vértice Bot', icon: 'bot' },
       { key: 'forms', href: formsHomeHash(), label: 'Vértice RSU', icon: 'forms' },
-      { key: 'agro', href: '#/agro/dashboard', label: 'Vertice Agro', icon: 'sprout' },
+      { key: 'agro', href: '#/agro/dashboard', label: 'Vértice Agro', icon: 'sprout' },
       adm && { key: 'web-settings', href: '#/web/settings/usuarios', label: 'Configurações', icon: 'settings' },
     ].filter(Boolean);
   }
@@ -378,7 +384,7 @@ function topbarActionsHtml(me) {
   if (!isAdmSession(me)) return '<div id="entity-badge"></div>';
   return `
             <div id="company-switcher"></div>
-            <a class="icon-btn" href="#/web/settings/usuarios" data-settings-link title="Configurações do Vertice WEB" aria-label="Configurações">${icon('settings')}</a>`;
+            <a class="icon-btn" href="#/web/settings/usuarios" data-settings-link title="Configurações do Vértice Elo" aria-label="Configurações">${icon('settings')}</a>`;
 }
 
 function mountTopbarControls(me) {
@@ -425,14 +431,14 @@ function buildChrome(appKey, me, active, title) {
   const hubLink =
     appKey === 'web'
       ? ''
-      : `<a class="nav-hub" href="#/web" data-nav="hub" title="Voltar ao Vertice WEB">${icon('apps')}<span>Vertice WEB</span></a>`;
+      : `<a class="nav-hub" href="#/web" data-nav="hub" title="Voltar ao Vértice Elo">${icon('apps')}<span>Vértice Elo</span></a>`;
   const collapsed = sessionStorage.getItem('nav-collapsed') === '1';
   app.innerHTML = `
     <div class="shell ${cfg.shellClass}${collapsed ? ' collapsed' : ''}" data-app="${appKey}">
       <aside class="sidebar">
         <button class="sidebar-toggle" id="collapse" type="button" aria-label="Recolher menu">${icon('collapse')}</button>
         <div class="side-brand">
-          <a class="brand" href="#/web" title="Vertice WEB"><img class="brand-logo" src="${cfg.logo}" alt="${escapeHtml(cfg.crumb)}" /></a>
+          <a class="brand" href="#/web" title="Vértice Elo"><img class="brand-logo" src="${cfg.logo}" alt="${escapeHtml(cfg.crumb)}" /></a>
         </div>
         <nav class="side-nav">
           ${hubLink}
@@ -554,7 +560,7 @@ function renderLogin() {
         </div>
         <form class="gate-form" id="login-form">
           <div class="gate-form-head">
-            <p class="gate-kicker">Vertice WEB</p>
+            <p class="gate-kicker">Vértice Elo</p>
             <h1>Acesse sua conta</h1>
             <p class="gate-lead">Entre com seu e-mail e senha</p>
           </div>

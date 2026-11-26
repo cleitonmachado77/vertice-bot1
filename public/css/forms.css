@@ -35,6 +35,11 @@
   justify-content: flex-end;
 }
 
+.forms-site-only-note {
+  font-size: 0.82rem;
+  margin-right: 4px;
+}
+
 .forms-badge--bot {
   display: inline-block;
   margin: 0 0 10px;

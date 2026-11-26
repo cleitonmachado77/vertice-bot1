@@ -13,7 +13,7 @@ import {
 export { stopHubDashboard };
 
 /**
- * Vertice WEB (#/web):
+ * Vértice Elo (#/web):
  * - Reciclarenda: dashboard consolidado.
  * - Outras entidades: página institucional com os módulos disponíveis.
  */
@@ -66,7 +66,7 @@ function renderHubHome(root, me = null) {
   root.innerHTML = `
     <div class="view-pane hub-view">
       <header class="hub-hero">
-        <p class="hub-hero-kicker">Vertice WEB</p>
+        <p class="hub-hero-kicker">Vértice Elo</p>
         <h1>Olá${name ? `, ${escapeHtml(name)}` : ''}</h1>
       </header>
 
@@ -78,7 +78,7 @@ function renderHubHome(root, me = null) {
 }
 
 function appTile(mod) {
-  const logo = mod.logo || '/logo-vertice-web.png';
+  const logo = mod.logo || '/logo-vertice-elo.png';
   return `
     <a class="hub-app hub-app--${escapeHtml(mod.accent || 'default')}" href="${escapeHtml(mod.href)}" aria-label="${escapeHtml(mod.name)}">
       <span class="hub-app-body">

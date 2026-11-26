@@ -26,7 +26,7 @@ const COLLECTIONS = {
   entrega: 'deliveries',
   custos: 'costs',
 };
-const OPERATIONAL = new Set(['plantio', 'colheita', 'entrega', 'custos']);
+const OPERATIONAL = new Set(['plantio', 'colheita', 'entrega', 'vendas', 'custos']);
 
 let snapshot = null;
 let currentTab = 'dashboard';
@@ -208,9 +208,30 @@ function bind(root) {
       groupSelectedDeliveries(root);
       return;
     }
+    const openOdoo = event.target.closest('[data-open-odoo-sale]');
+    if (openOdoo) {
+      openAgroSaleInOdoo(openOdoo.getAttribute('data-open-odoo-sale'));
+      return;
+    }
     const remove = event.target.closest('[data-delete]');
     if (remove) removeRecord(remove.dataset.delete, remove.dataset.id);
   });
+}
+
+async function openAgroSaleInOdoo(odooId) {
+  const id = String(odooId || '').trim();
+  if (!id) return;
+  try {
+    const settings = await api('/api/forms/odoo/settings');
+    const base = String(settings.odooUrl || '').replace(/\/$/, '');
+    if (!base) {
+      toast('Configure a URL do Odoo em Configurações');
+      return;
+    }
+    window.open(`${base}/web#id=${encodeURIComponent(id)}&model=sale.order&view_type=form`, '_blank', 'noopener');
+  } catch (error) {
+    toast(error.message || 'Não foi possível abrir o Odoo');
+  }
 }
 
 function selectedGroupDeliveries(root) {
@@ -313,6 +334,12 @@ function updateToolbar(root) {
     return;
   }
   actions.removeAttribute('id');
+  if (currentTab === 'vendas') {
+    actions.innerHTML = `
+      <span class="muted forms-site-only-note">Somente no site — não aparece no Bot</span>
+      <a class="btn-ghost" href="#/agro/entrega">Ir para Entrega</a>`;
+    return;
+  }
   const presets =
     `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
   actions.innerHTML = `
@@ -348,14 +375,14 @@ export async function renderAgro(root, tab = 'dashboard', token = getNavToken(),
     } catch (error) {
       if (!isNavActive(token)) return;
       if (body) {
-        body.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Não foi possível carregar o Vertice Agro')}</p>`;
+        body.innerHTML = `<p class="muted">${escapeHtml(error.message || 'Não foi possível carregar o Vértice Agro')}</p>`;
       }
       return;
     }
   }
   if (!isNavActive(token)) return;
   if (body) body.innerHTML = bodyHtml(currentTab, snapshot);
-  if (currentTab === 'entrega') syncGroupSaleButton(root);
+  if (currentTab === 'vendas') syncGroupSaleButton(root);
   const pending = takePending(currentTab);
   if (!pending) return;
   if (pending.tab === 'colheita') openEditor('colheita', { plantingId: pending.plantingId });

@@ -39,7 +39,7 @@ export function isRsuDashboardAvailable() {
 
 /** Entrada padrão do Vértice RSU conforme o perfil. */
 export function formsHomeHash() {
-  return isRsuDashboardAvailable() ? '#/forms/dashboard' : '#/forms/compras';
+  return isRsuDashboardAvailable() ? '#/forms/dashboard' : '#/forms/recebimento';
 }
 
 /**

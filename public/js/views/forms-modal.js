@@ -1,4 +1,4 @@
-/** Modal compartilhado do Vértice RSU (Compras / Inventário / Vendas / Cadastros). */
+/** Modal compartilhado do Vértice RSU (Recebimento / Separação / Entrega / Vendas / Cadastros). */
 
 export function getFormsModal(root) {
   return (

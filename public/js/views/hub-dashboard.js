@@ -60,7 +60,7 @@ const SECTIONS = [
     tone: 'orange',
     color: '#f88828',
     icon: 'truck',
-    href: '#/forms/compras',
+    href: '#/forms/recebimento',
   },
   {
     id: 'separation',
@@ -71,7 +71,7 @@ const SECTIONS = [
     tone: 'teal',
     color: '#1aa897',
     icon: 'box',
-    href: '#/forms/inventario',
+    href: '#/forms/separacao',
     stacked: true,
   },
   {
@@ -83,7 +83,7 @@ const SECTIONS = [
     tone: 'violet',
     color: '#7c5cd6',
     icon: 'factory',
-    href: '#/forms/fabricacao',
+    href: '#/forms/prensagem',
     stacked: true,
   },
   {
@@ -95,7 +95,7 @@ const SECTIONS = [
     tone: 'amber',
     color: '#e07b20',
     icon: 'cart',
-    href: '#/forms/vendas',
+    href: '#/forms/entrega',
     stacked: true,
   },
   {

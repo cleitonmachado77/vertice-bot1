@@ -1,11 +1,11 @@
 import { formsHomeHash } from './company-switcher.js';
 
-/** Catálogo de apps do Vertice WEB. */
+/** Catálogo de apps do Vértice Elo. */
 export function availableModules() {
   return [
     {
       id: 'bot',
-      name: 'Vertice Bot',
+      name: 'Vértice Bot',
       description: 'Atendimento automatizado no WhatsApp, com passagem para humano',
       href: '#/overview',
       logo: '/logo-vertice-bot.png',
@@ -15,18 +15,18 @@ export function availableModules() {
     {
       id: 'forms',
       name: 'Vértice RSU',
-      description: 'Compras, inventário, fabricação e vendas integrados ao Odoo',
+      description: 'Recebimento, separação, prensagem, entrega e vendas integrados ao Odoo',
       href: formsHomeHash(),
-      logo: '/logo-vertice-forms.png',
+      logo: '/logo-vertice-rsu.png',
       accent: 'forms',
       available: true,
     },
     {
       id: 'agro',
-      name: 'Vertice Agro',
-      description: 'Plantio, colheita, entrega e custos da empresa ativa',
+      name: 'Vértice Agro',
+      description: 'Plantio, colheita, entrega, vendas e custos da empresa ativa',
       href: '#/agro/dashboard',
-      logo: '/logo-vertice-web.png',
+      logo: '/logo-vertice-agro.png',
       accent: 'agro',
       available: true,
     },

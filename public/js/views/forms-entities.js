@@ -108,6 +108,7 @@ export async function renderEntitiesBody(body, entity = 'produtos', token = getN
         (tab) =>
           `<a class="settings-tab${tab.id === entity ? ' active' : ''}" href="#/forms/cadastros/${tab.id}">${escapeHtml(tab.label)}</a>`,
       ).join('')}
+      <a class="settings-tab" href="#" data-elearning-link title="Abrir E-learning no Odoo">E-learning</a>
     </nav>
     <div class="forms-layout">
       <section class="card forms-list-card" id="entities-panel"></section>
@@ -132,6 +133,21 @@ export async function renderEntitiesBody(body, entity = 'produtos', token = getN
   body.querySelector('[data-entities-new]')?.addEventListener('click', () => {
     if (entity === 'produtos') openProductEditor(shellRoot, reloadList, null, token);
     else openPartnerEditor(shellRoot, reloadList, role, null, token);
+  });
+
+  body.querySelector('[data-elearning-link]')?.addEventListener('click', async (event) => {
+    event.preventDefault();
+    try {
+      const settings = await api('/api/forms/odoo/settings');
+      const url = String(settings.odooElearningResolved || '').trim();
+      if (!url) {
+        toast('Configure a URL do Odoo para abrir o E-learning');
+        return;
+      }
+      window.open(url, '_blank', 'noopener');
+    } catch (error) {
+      toast(error.message || 'Não foi possível abrir o E-learning');
+    }
   });
 
   if (entity === 'produtos') await paintProducts(panel, shellRoot, reloadList, token);

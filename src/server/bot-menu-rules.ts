@@ -114,14 +114,25 @@ export function isNewMenuSession(previousInboundAt: string, nowMs: number, gapHo
   return nowMs - at >= Math.max(0.25, gapHours) * 3_600_000;
 }
 
-/** Nome do padrão sem o prefixo “[Forms] Compras · ”. */
+/** Prefixos antigos de tela (antes do rename Recebimento/Separação/…). */
+const LEGACY_KIND_LABELS: Record<string, string[]> = {
+  purchase: ['Recebimento', 'Compras'],
+  product: ['Separação', 'Inventário', 'Inventario'],
+  production: ['Prensagem', 'Fabricação', 'Fabricacao'],
+  sale: ['Entrega', 'Vendas'],
+};
+
+/** Nome do padrão sem o prefixo “[Forms] Recebimento · ”. */
 export function menuFormName(rawName: string, kind: string): string {
   const withoutTag = String(rawName || '')
     .replace(/^\[(Forms|Agro)\]\s*/i, '')
     .trim();
-  const prefix = `${menuKindLabel(kind)} · `;
-  const name = withoutTag.startsWith(prefix) ? withoutTag.slice(prefix.length).trim() : withoutTag;
-  return name || menuKindLabel(kind);
+  const labels = LEGACY_KIND_LABELS[kind] || [menuKindLabel(kind)];
+  for (const label of labels) {
+    const prefix = `${label} · `;
+    if (withoutTag.startsWith(prefix)) return withoutTag.slice(prefix.length).trim() || menuKindLabel(kind);
+  }
+  return withoutTag || menuKindLabel(kind);
 }
 
 export function normalizeMenuForms(
@@ -155,7 +166,7 @@ function numbered(options: Omit<MenuOption, 'key'>[]): MenuOption[] {
   });
 }
 
-/** Padrões na ordem das telas (Compras, Inventário, Fabricação, Vendas), sem mostrar o nome da tela. */
+/** Padrões na ordem das telas (Recebimento, Separação, Prensagem, Entrega), sem mostrar o nome da tela. */
 function formsInMenuOrder(forms: MenuForm[]): MenuForm[] {
   return KIND_ORDER.flatMap((kind) => forms.filter((form) => form.kind === kind));
 }
@@ -212,7 +223,7 @@ export function buildGroupMenu(
   return {
     node: `group:${group}`,
     parent: 'main',
-    title: group === 'agro' ? 'Vertice Agro — escolha:' : 'Vertice RSU — escolha:',
+    title: group === 'agro' ? 'Vértice Agro — escolha:' : 'Vértice RSU — escolha:',
     options: numbered([
       ...formsInMenuOrder(ofGroup).map((form) => ({
         label: form.name,

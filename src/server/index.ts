@@ -38,7 +38,7 @@ await startMessageWorker();
 startLiveSync();
 startScheduler();
 startOdooPullScheduler();
-console.log(`Vertice WEB em http://localhost:${port}`);
+console.log(`Vértice Elo em http://localhost:${port}`);
 closePoolOnStop();
 
 function closePoolOnStop(): void {

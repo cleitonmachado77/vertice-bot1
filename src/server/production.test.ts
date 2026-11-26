@@ -241,7 +241,8 @@ test('resumo do bot com o número da ordem, conversão do Odoo e perda', () => {
 
 test('título espelha o número da ordem de produção', () => {
   assert.equal(documentTitle('production', { order_reference: 'C7/MO/00001', production_date: '2026-10-28' }), 'C7/MO/00001 · 28/10/2026');
-  assert.equal(documentTitle('production', { production_date: '2026-10-28' }), 'Fabricação 28/10/2026');
+  assert.equal(documentTitle('production', { production_date: '2026-10-28' }), 'Prensagem 28/10/2026');
+  assert.equal(shouldAutofillFormTitle('production', 'Prensagem 28/10/2026', { order_reference: 'C7/MO/00001' }), true);
   assert.equal(shouldAutofillFormTitle('production', 'Fabricação 28/10/2026', { order_reference: 'C7/MO/00001' }), true);
   assert.equal(shouldAutofillFormTitle('production', 'Prensagem 27/10/2026', {}), true);
   assert.equal(shouldAutofillFormTitle('production', 'Prensa do turno da tarde', {}), false);

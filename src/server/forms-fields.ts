@@ -32,11 +32,18 @@ export type FormField = {
 export const FORM_KINDS: FormKind[] = ['product', 'purchase', 'sale', 'production'];
 
 export const KIND_LABELS: Record<FormKind, string> = {
-  product: 'Inventário',
-  purchase: 'Compras',
-  sale: 'Vendas',
-  production: 'Fabricação',
+  product: 'Separação',
+  purchase: 'Recebimento',
+  sale: 'Entrega',
+  production: 'Prensagem',
 };
+
+/** Segmentos da aba sale no painel (Entrega operacional vs Vendas comerciais). */
+export type SaleSegment = 'entrega' | 'vendas';
+
+export function isSaleSegment(value: string): value is SaleSegment {
+  return value === 'entrega' || value === 'vendas';
+}
 
 export type FormStatusOption = { value: string; label: string };
 
@@ -366,14 +373,14 @@ function partnerName(kind: FormKind, header: Record<string, string>): string {
   return '';
 }
 
-/** “WH/MO/00003 · 28/10/2026” (número da ordem no Odoo + data); sem número: “Fabricação 28/10/2026”. */
+/** “WH/MO/00003 · 28/10/2026” (número da ordem no Odoo + data); sem número: “Prensagem 28/10/2026”. */
 function productionTitle(header: Record<string, string>): string {
   const raw = String(header.production_date || '').trim();
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
   const date = iso ? `${iso[3]}/${iso[2]}/${iso[1]}` : /^\d{2}\/\d{2}\/\d{4}$/.test(raw) ? raw : '';
   const ref = String(header.order_reference || '').trim();
   if (ref) return date ? `${ref} · ${date}` : ref;
-  return date ? `Fabricação ${date}` : 'Fabricação';
+  return date ? `Prensagem ${date}` : 'Prensagem';
 }
 
 /** Título padrão: Número + Fornecedor/Cliente (ex.: P00013 · Associação…). */

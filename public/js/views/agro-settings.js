@@ -42,7 +42,7 @@ function producerForm(item) {
     <header class="forms-editor-head">
       <div>
         <h2 id="agro-editor-title">${item?.id ? 'Editar produtor' : 'Novo produtor'}</h2>
-        <p class="muted">Cadastro central do produtor. O celular fica disponível para o Vertice Bot.</p>
+        <p class="muted">Cadastro central do produtor. O celular fica disponível para o Vértice Bot.</p>
       </div>
     </header>
     <form id="agro-settings-form" class="agro-form" data-kind="producer">
@@ -283,8 +283,26 @@ function paint(root) {
     </section>`;
 }
 
+function digitsPhone(phone) {
+  return String(phone || '').replace(/\D/g, '');
+}
+
+function whatsappHref(phone) {
+  const digits = digitsPhone(phone);
+  if (!digits) return '';
+  const withCountry = digits.length >= 12 ? digits : digits.length >= 10 ? `55${digits}` : '';
+  return withCountry ? `https://wa.me/${withCountry}` : '';
+}
+
+function telHref(phone) {
+  const digits = digitsPhone(phone);
+  return digits ? `tel:+${digits.length >= 12 ? digits : digits.length >= 10 ? `55${digits}` : digits}` : '';
+}
+
 function producerCard(producer) {
   const properties = producer.properties || [];
+  const tel = telHref(producer.phone);
+  const wa = whatsappHref(producer.phone);
   return `
     <article class="agro-producer-card" data-search="${escapeHtml(`${producer.name} ${producer.city} ${producer.state} ${producer.phone}`.toLowerCase())}">
       <header class="agro-producer-head">
@@ -293,6 +311,12 @@ function producerCard(producer) {
           <p class="agro-sub">${escapeHtml(place(producer.city, producer.state))} · Área total ${ha(producer.totalArea)} · Contato ${escapeHtml(producer.phone || '—')}</p>
         </div>
         <div class="agro-actions">
+          ${tel ? `<a class="btn-ghost agro-mini" href="${escapeHtml(tel)}">Ligar</a>` : ''}
+          ${
+            wa
+              ? `<a class="btn-ghost agro-mini" href="${escapeHtml(wa)}" target="_blank" rel="noopener noreferrer">WhatsApp</a>`
+              : ''
+          }
           <button class="btn agro-mini" type="button" data-settings-new="property" data-producer="${escapeHtml(producer.id)}">Nova propriedade</button>
           <button class="btn-ghost agro-mini" type="button" data-settings-edit="producer" data-id="${escapeHtml(producer.id)}">Editar</button>
           <button class="btn-ghost agro-mini" type="button" data-settings-delete="producer" data-id="${escapeHtml(producer.id)}">Excluir</button>

@@ -27,7 +27,15 @@ export const AGRO_TABS = [
     slug: 'entrega',
     label: 'Entrega',
     icon: 'truck',
-    description: 'Entrega nos locais cadastrados (Sacolão, escolas, Coara…). Gera pedido no Odoo',
+    description: 'Entrega nos locais cadastrados (Sacolão, escolas, Coara…) — registro operacional',
+  },
+  {
+    id: 'vendas',
+    slug: 'vendas',
+    label: 'Vendas',
+    icon: 'sales',
+    description: 'Transforma entregas em venda (valor e peso), gera pedido e NF no Odoo — somente site',
+    siteOnly: true,
   },
   { id: 'custos', slug: 'custos', label: 'Custos', icon: 'money', description: 'Registra os custos por área (talhão) da empresa ativa' },
   {
@@ -146,6 +154,17 @@ function stats(tab, data) {
       }),
     ].join('');
   }
+  if (tab === 'vendas') {
+    const deliveries = data.deliveries || [];
+    const withOrder = deliveries.filter((item) => item.odooOrderId);
+    const pending = deliveries.filter((item) => !item.odooOrderId);
+    const total = withOrder.reduce((sum, item) => sum + Number(item.totalValue || 0), 0);
+    return [
+      statCard({ label: 'Pedidos Odoo', value: withOrder.length, tone: 'blue', icon: 'sales' }),
+      statCard({ label: 'Aguardando venda', value: pending.length, tone: 'amber', icon: 'truck' }),
+      statCard({ label: 'Valor vendido', value: withOrder.length ? money(total) : '—', tone: 'green', icon: 'money' }),
+    ].join('');
+  }
   if (tab === 'custos') {
     const costs = data.costs || [];
     const total = costs.reduce((sum, item) => sum + Number(item.totalValue != null ? item.totalValue : item.quantity || 0), 0);
@@ -237,12 +256,8 @@ function listHtml(tab, data) {
           ? `Pedido ${item.odooOrderRef}`
           : item.odooOrderId
             ? `Pedido #${item.odooOrderId}`
-            : 'Pendente pedido';
-        const select = pending
-          ? `<input type="checkbox" data-group-delivery value="${escapeHtml(item.id)}" data-partner="${escapeHtml(item.partnerId || '')}" aria-label="Selecionar entrega">`
-          : '';
+            : 'Sem pedido — use Vendas';
         return `<tr data-search="${escapeHtml(search)}">
-          <td>${select}</td>
           <td>${dateBr(item.deliveredOn)}</td>
           <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)}</span></td>
           <td>${qty(item.quantity, item.unit)}</td>
@@ -256,9 +271,46 @@ function listHtml(tab, data) {
       })
       .join('');
     return table(
-      ['', 'Data', 'Produto', 'Quantidade', 'Local', 'Origem', 'Unitário', 'Total', 'Documento / Pedido'],
+      ['Data', 'Produto', 'Quantidade', 'Local', 'Origem', 'Unitário', 'Total', 'Documento / Pedido'],
       rows,
       'Nenhuma entrega registrada.',
+    );
+  }
+  if (tab === 'vendas') {
+    const rows = (data.deliveries || [])
+      .map((item) => {
+        const planting = (data.plantings || []).find((entry) => entry.id === item.plantingId);
+        const sigla = productSigla(data.catalog, planting?.productId || '', item.productName);
+        const search = `${item.propertyName} ${item.partnerName} ${sigla} ${item.productName} ${item.document} ${item.odooOrderRef}`.toLowerCase();
+        const pending = !item.odooOrderId;
+        const pedido = item.odooOrderRef
+          ? `Pedido ${item.odooOrderRef}`
+          : item.odooOrderId
+            ? `Pedido #${item.odooOrderId}`
+            : 'Aguardando pedido';
+        const select = pending
+          ? `<input type="checkbox" data-group-delivery value="${escapeHtml(item.id)}" data-partner="${escapeHtml(item.partnerId || '')}" aria-label="Selecionar para venda">`
+          : '';
+        const openOdoo = item.odooOrderId
+          ? `<button class="btn-ghost agro-mini" type="button" data-open-odoo-sale="${escapeHtml(item.odooOrderId)}">Abrir no Odoo</button>`
+          : '';
+        return `<tr data-search="${escapeHtml(search)}">
+          <td>${select}</td>
+          <td>${dateBr(item.deliveredOn)}</td>
+          <td>${escapeHtml(sigla)}<span class="agro-sub">${escapeHtml(item.productName)}</span></td>
+          <td>${qty(item.quantity, item.unit)}</td>
+          <td>${escapeHtml(item.partnerName)}</td>
+          <td>${money(item.unitPrice)}</td>
+          <td>${money(item.totalValue)}</td>
+          <td>${escapeHtml(item.document || '—')}<span class="agro-sub">${escapeHtml(pedido)}</span></td>
+          ${buttons('entrega', item.id, openOdoo, { allowDelete: false })}
+        </tr>`;
+      })
+      .join('');
+    return table(
+      ['', 'Data', 'Produto', 'Peso/Qtd', 'Local', 'Unitário', 'Total', 'NF / Pedido'],
+      rows,
+      'Nenhuma entrega para transformar em venda.',
     );
   }
   if (tab === 'custos') {
@@ -347,6 +399,22 @@ export function shell(tab) {
       <div id="agro-body"></div>
     </div>`;
   }
+  if (tab === 'vendas') {
+    return `
+    <div class="view-pane forms-pane agro-pane">
+      <div class="forms-toolbar">
+        <header class="page-head">
+          <h1>${escapeHtml(meta.label)}</h1>
+          <p class="muted">${escapeHtml(meta.description)}. Os registros seguem a empresa ativa do Odoo.</p>
+        </header>
+        <div class="row forms-top-actions">
+          <span class="muted forms-site-only-note">Somente no site — não aparece no Bot</span>
+          <a class="btn-ghost" href="#/agro/entrega">Ir para Entrega</a>
+        </div>
+      </div>
+      <div id="agro-body"></div>
+    </div>`;
+  }
   const presets = `<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
   return `
     <div class="view-pane forms-pane agro-pane">
@@ -367,6 +435,7 @@ export function shell(tab) {
 function emptyLabel(tab) {
   if (tab === 'colheita') return 'Nenhuma colheita registrada.';
   if (tab === 'entrega') return 'Nenhuma entrega registrada.';
+  if (tab === 'vendas') return 'Nenhuma entrega para transformar em venda.';
   if (tab === 'custos') return 'Nenhum custo registrado.';
   return 'Nenhum plantio nesta empresa.';
 }
@@ -375,16 +444,17 @@ export function bodyHtml(tab, data) {
   const rows =
     tab === 'colheita'
       ? data.harvests
-      : tab === 'entrega'
+      : tab === 'entrega' || tab === 'vendas'
         ? data.deliveries
         : tab === 'custos'
           ? data.costs
           : data.plantings;
   const groupBar =
-    tab === 'entrega'
+    tab === 'vendas'
       ? `<div class="row agro-group-bar">
           <button class="btn" type="button" data-group-sale disabled>Gerar pedido Odoo</button>
-          <span class="muted" data-group-hint>Selecione entregas do mesmo local (ainda sem pedido).</span>
+          <span class="muted" data-group-hint>Selecione entregas do mesmo local (ainda sem pedido) para registrar a venda.</span>
+          <span class="muted forms-site-only-note">Somente no site</span>
         </div>`
       : '';
   return `

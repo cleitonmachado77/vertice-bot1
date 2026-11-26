@@ -9,8 +9,36 @@ import {
   normalizeFormStatus,
   shouldAutofillFormTitle,
   type FormKind,
+  type SaleSegment,
 } from './forms-fields.js';
 import { syncSharedCatalog } from './forms-catalog.js';
+
+function nameKey(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+/** Entrega operacional: fardo / segmento entrega (legado sem segmento conta como entrega se tiver fardo). */
+export function isDeliverySaleDoc(doc: FormDocument): boolean {
+  const segment = String(doc.header?.sale_segment || '').trim();
+  if (segment === 'entrega') return true;
+  if (segment === 'vendas') return false;
+  if (String(doc.header?.fardo_type || '').trim()) return true;
+  return (doc.lines || []).some((line) => {
+    const product = String(line.values?.product || '');
+    const fardoType = String(line.values?.fardo_type || '').trim();
+    return Boolean(fardoType) || /fardo/.test(nameKey(product));
+  });
+}
+
+function matchesSaleSegment(doc: FormDocument, segment: SaleSegment): boolean {
+  if (segment === 'entrega') return isDeliverySaleDoc(doc);
+  // Vendas (site): lista todos os pedidos sale para registrar valor e abrir NF no Odoo.
+  return true;
+}
 
 export type FormDocument = {
   id: string;
@@ -84,7 +112,7 @@ function mapDoc(row: DocRow, lines: LineRow[] = []): FormDocument {
 
 export async function listFormDocuments(
   kind: FormKind,
-  options: { includeLines?: boolean } = {},
+  options: { includeLines?: boolean; segment?: SaleSegment } = {},
 ): Promise<FormDocument[]> {
   const companyId = getActiveCompanyId();
   const rows = await many<DocRow>(
@@ -94,8 +122,13 @@ export async function listFormDocuments(
     [kind, companyId],
   );
   if (!rows.length) return [];
-  if (options.includeLines === false) {
-    return rows.map((row) => mapDoc(row, []));
+  const needLines = options.includeLines !== false || (kind === 'sale' && Boolean(options.segment));
+  if (!needLines) {
+    const docs = rows.map((row) => mapDoc(row, []));
+    if (kind === 'sale' && options.segment) {
+      return docs.filter((doc) => matchesSaleSegment(doc, options.segment!));
+    }
+    return docs;
   }
   const ids = rows.map((row) => row.id);
   const lines = await many<LineRow>(
@@ -104,7 +137,11 @@ export async function listFormDocuments(
      ORDER BY sort_order ASC`,
     [ids],
   );
-  return rows.map((row) => mapDoc(row, lines));
+  const docs = rows.map((row) => mapDoc(row, lines));
+  if (kind === 'sale' && options.segment) {
+    return docs.filter((doc) => matchesSaleSegment(doc, options.segment!));
+  }
+  return docs;
 }
 
 export async function getFormDocument(id: string): Promise<FormDocument | undefined> {

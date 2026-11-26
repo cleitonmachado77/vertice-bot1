@@ -373,7 +373,7 @@
 
 .web-settings-view { width: min(880px, 100%); }
 .web-settings-hero { margin-bottom: 18px; text-align: left; }
-.web-settings-hero h1 { margin: 0; }
+.web-settings-hero h1 { margin: 0; color: #fff; }
 .web-settings-tabs { margin-bottom: 16px; }
 .web-settings-panel > .card,
 .web-settings-panel > form.card {

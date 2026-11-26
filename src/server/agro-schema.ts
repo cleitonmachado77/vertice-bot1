@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { many, one, run } from './db.js';
 
-/** Tabelas do Vertice Agro no mesmo Postgres do Vertice WEB, por empresa do Odoo. */
+/** Tabelas do Vértice Agro no mesmo Postgres do Vértice Elo, por empresa do Odoo. */
 
 let ready: Promise<void> | null = null;
 

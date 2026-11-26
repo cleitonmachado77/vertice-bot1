@@ -3,10 +3,10 @@ import { escapeHtml, panelLoading } from '../ui.js';
 import { getNavToken, isNavActive } from '../nav.js';
 
 const KIND_META = {
-  purchase: { label: 'Compras', href: '#/forms/compras' },
-  product: { label: 'Inventário', href: '#/forms/inventario' },
-  sale: { label: 'Vendas', href: '#/forms/vendas' },
-  production: { label: 'Fabricação', href: '#/forms/fabricacao' },
+  purchase: { label: 'Recebimento', href: '#/forms/recebimento' },
+  product: { label: 'Separação', href: '#/forms/separacao' },
+  sale: { label: 'Entrega', href: '#/forms/entrega' },
+  production: { label: 'Prensagem', href: '#/forms/prensagem' },
 };
 
 /** @type {string} */
@@ -66,7 +66,7 @@ async function renderAnalytics(root, token = getNavToken()) {
   for (const q of formsQuestionnaires) {
     const preset = q.sourcePresetId ? presetsById.get(q.sourcePresetId) : null;
     const kind = q.formKind || preset?.kind || '';
-    const meta = KIND_META[kind] || { label: kind || 'Forms', href: '#/forms/compras' };
+    const meta = KIND_META[kind] || { label: kind || 'Forms', href: '#/forms/recebimento' };
     if (q.sourcePresetId) seenPreset.add(q.sourcePresetId);
     activeRows.push({
       id: q.id,
@@ -83,7 +83,7 @@ async function renderAnalytics(root, token = getNavToken()) {
 
   for (const [presetId, preset] of presetsById) {
     if (seenPreset.has(presetId)) continue;
-    const meta = KIND_META[preset.kind] || { label: preset.kind, href: '#/forms/compras' };
+    const meta = KIND_META[preset.kind] || { label: preset.kind, href: '#/forms/recebimento' };
     activeRows.push({
       id: `preset:${presetId}`,
       name: preset.name,
