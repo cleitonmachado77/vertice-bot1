@@ -62,26 +62,97 @@ export const BAG_MATERIALS_FLORESTOPOLIS: BagMaterial[] = [
   { name: 'TETRA PARK', code: 'TEP', category: 'Papel' },
 ];
 
+/** Tipos da Reciclagem Sertanópolis (Bag/Fardo). */
+export const BAG_MATERIALS_SERTANOPOLIS: BagMaterial[] = [
+  { name: 'PL FINO CANELA', code: 'PFC', category: 'Plástico' },
+  { name: 'PL FINO COLORIDO', code: 'PLF', category: 'Plástico' },
+  { name: 'PL FINO PRETO', code: 'PFP', category: 'Plástico' },
+  { name: 'PP COLORIDO', code: 'PPC', category: 'Plástico' },
+  { name: 'PP PRETO', code: 'PPP', category: 'Plástico' },
+  { name: 'PAPEL BRANCO', code: 'PAB', category: 'Papel' },
+  { name: 'PAPELAO', code: 'PAP', category: 'Papel' },
+  { name: 'PEAD COLORIDO', code: 'PEC', category: 'Plástico' },
+  { name: 'PET BRANCA VERDE', code: 'PBV', category: 'Plástico' },
+  { name: 'PET OLEO', code: 'PEO', category: 'Plástico' },
+  { name: 'TERCEIRA', code: 'TER', category: 'Papel' },
+  { name: 'TETRA', code: 'TET', category: 'Papel' },
+];
+
+/** Tipos da Cooperjaty / Jataizinho (Bag/Fardo) — PDF Abreviações de Produtos. */
+export const BAG_MATERIALS_COOPERJATY: BagMaterial[] = [
+  { name: 'ALUMINIO', code: 'ALU', category: 'Metal Não Ferroso' },
+  { name: 'BERLIM', code: 'BER', category: 'Vidro' },
+  { name: 'BORDALEZA', code: 'BOR', category: 'Vidro' },
+  { name: 'BRANCO', code: 'BRA', category: 'Papel' },
+  { name: 'CL', code: 'CLS', category: 'Plástico' },
+  { name: 'CILINDRINHO', code: 'CIL', category: 'Vidro' },
+  { name: 'CRISTAL', code: 'CRI', category: 'Plástico' },
+  { name: 'FERRO', code: 'FER', category: 'Metal Ferroso' },
+  { name: 'GARRAFA DE CERVEJA', code: 'GAC', category: 'Vidro' },
+  { name: 'GRANADA', code: 'GRA', category: 'Vidro' },
+  { name: 'HEINEKEN', code: 'HEI', category: 'Vidro' },
+  { name: 'JAMEL LISA', code: 'JAL', category: 'Vidro' },
+  { name: 'JAMEL TIMBRADA', code: 'JAT', category: 'Vidro' },
+  { name: 'LEITE', code: 'LEI', category: 'Papel' },
+  { name: 'LITRINHO LISO', code: 'LIL', category: 'Vidro' },
+  { name: 'METAL', code: 'MET', category: 'Metal Não Ferroso' },
+  { name: 'MISTO', code: 'MIS', category: 'Papel' },
+  { name: 'P OLEO', code: 'POE', category: 'Plástico' },
+  { name: 'PAD', code: 'PAD', category: 'Plástico' },
+  { name: 'PP', code: 'PPL', category: 'Plástico' },
+  { name: 'PALMITO', code: 'PAL', category: 'Vidro' },
+  { name: 'PANELA', code: 'PAN', category: 'Metal Ferroso' },
+  { name: 'PAPELAO', code: 'PAP', category: 'Papel' },
+  { name: 'PET', code: 'PET', category: 'Plástico' },
+  { name: 'POTAO', code: 'POT', category: 'Vidro' },
+  { name: 'PRESIDENTE', code: 'PRE', category: 'Vidro' },
+  { name: 'S PRETO', code: 'SPR', category: 'Plástico' },
+  { name: 'SACOLINHA', code: 'SAC', category: 'Plástico' },
+  { name: 'VIDRO', code: 'VID', category: 'Vidro' },
+  { name: 'VINHO TUBINHO', code: 'VIT', category: 'Vidro' },
+  { name: 'ZAELAO', code: 'ZAE', category: 'Vidro' },
+];
+
 /** Setting gravado ao promover o parceiro Florestopolis a res.company. */
 export const FLORESTOPOLIS_COMPANY_SETTING = 'odoo_company_florestopolis_id';
+export const SERTANOPOLIS_COMPANY_SETTING = 'odoo_company_sertanopolis_id';
+export const COOPERJATY_COMPANY_SETTING = 'odoo_company_cooperjaty_id';
 
-/** Siglas da Recicla + exclusivas da Florestopolis (códigos compartilhados mantêm o nome da Recicla). */
+/** Ids Odoo conhecidos (fallback se o setting ainda não foi gravado). */
+const FLORESTOPOLIS_COMPANY_ID_FALLBACK = 22;
+const SERTANOPOLIS_COMPANY_ID_FALLBACK = 9;
+const COOPERJATY_COMPANY_ID_FALLBACK = 12;
+
+/** Siglas exclusivas + Recicla por último (códigos compartilhados mantêm o nome da Recicla). */
 const BY_CODE = new Map<string, BagMaterial>([
+  ...BAG_MATERIALS_COOPERJATY.map((item) => [item.code, item] as const),
+  ...BAG_MATERIALS_SERTANOPOLIS.map((item) => [item.code, item] as const),
   ...BAG_MATERIALS_FLORESTOPOLIS.map((item) => [item.code, item] as const),
   ...BAG_MATERIALS.map((item) => [item.code, item] as const),
 ]);
 
 /** Materiais cadastrados no Bag/Fardo da empresa (Recicla Brasil = padrão). */
 export function materialsForCompany(companyId: number): BagMaterial[] {
-  const florestId = Number(getFlorestopolisCompanyId() || 0);
-  if (companyId > 0 && florestId > 0 && companyId === florestId) {
-    return BAG_MATERIALS_FLORESTOPOLIS;
-  }
+  if (!companyId) return BAG_MATERIALS;
+  const florestId = Number(getFlorestopolisCompanyId() || FLORESTOPOLIS_COMPANY_ID_FALLBACK);
+  if (companyId === florestId) return BAG_MATERIALS_FLORESTOPOLIS;
+  const sertaId = Number(getSertanopolisCompanyId() || SERTANOPOLIS_COMPANY_ID_FALLBACK);
+  if (companyId === sertaId) return BAG_MATERIALS_SERTANOPOLIS;
+  const jatyId = Number(getCooperjatyCompanyId() || COOPERJATY_COMPANY_ID_FALLBACK);
+  if (companyId === jatyId) return BAG_MATERIALS_COOPERJATY;
   return BAG_MATERIALS;
 }
 
 export function getFlorestopolisCompanyId(): string {
   return String(getSetting(FLORESTOPOLIS_COMPANY_SETTING) || '').trim();
+}
+
+export function getSertanopolisCompanyId(): string {
+  return String(getSetting(SERTANOPOLIS_COMPANY_SETTING) || '').trim();
+}
+
+export function getCooperjatyCompanyId(): string {
+  return String(getSetting(COOPERJATY_COMPANY_SETTING) || '').trim();
 }
 
 export type BagCount = {

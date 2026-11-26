@@ -101,7 +101,7 @@ async function ensureBagValues(attributeId: number, materials: BagMaterial[]): P
     'product.attribute.value',
     [['attribute_id', '=', attributeId], ['name', 'in', labels]],
     ['name'],
-    { limit: 80 },
+    { limit: 120 },
   );
   const byName = new Map(existing.map((row) => [row.name, row.id]));
   const byCode = new Map<string, number>();
@@ -165,7 +165,7 @@ async function assignVariantCodes(
     'product.product',
     [['product_tmpl_id', '=', templateId]],
     ['product_template_attribute_value_ids'],
-    { limit: 80 },
+    { limit: 120 },
   );
   const ptavIds = variants.flatMap((row) => row.product_template_attribute_value_ids || []);
   const ptavs = ptavIds.length
@@ -173,7 +173,7 @@ async function assignVariantCodes(
         'product.template.attribute.value',
         [['id', 'in', ptavIds]],
         ['name', 'product_attribute_value_id'],
-        { limit: 80 },
+        { limit: 120 },
       )
     : [];
   const codeByValue = new Map<number, string>();
