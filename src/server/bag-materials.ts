@@ -78,6 +78,20 @@ export const BAG_MATERIALS_SERTANOPOLIS: BagMaterial[] = [
   { name: 'TETRA', code: 'TET', category: 'Papel' },
 ];
 
+/** Tipos da Ambiental Resíduos de Rolândia (Bag/Fardo). */
+export const BAG_MATERIALS_ROLANDIA: BagMaterial[] = [
+  { name: 'ALUMINIO', code: 'ALU', category: 'Metal Não Ferroso' },
+  { name: 'PEAD', code: 'PEA', category: 'Plástico' },
+  { name: 'PP', code: 'PPP', category: 'Plástico' },
+  { name: 'PAPEL TERCEIRA', code: 'PAT', category: 'Papel' },
+  { name: 'PAPELAO', code: 'PAP', category: 'Papel' },
+  { name: 'PET', code: 'PET', category: 'Plástico' },
+  { name: 'PLASTICO FINO', code: 'PLF', category: 'Plástico' },
+  { name: 'SUCATA', code: 'SUC', category: 'Metal Ferroso' },
+  { name: 'TETRA', code: 'TET', category: 'Papel' },
+  { name: 'VIDRO', code: 'VID', category: 'Vidro' },
+];
+
 /** Tipos da Cooperjaty / Jataizinho (Bag/Fardo) — PDF Abreviações de Produtos. */
 export const BAG_MATERIALS_COOPERJATY: BagMaterial[] = [
   { name: 'ALUMINIO', code: 'ALU', category: 'Metal Não Ferroso' },
@@ -117,17 +131,20 @@ export const BAG_MATERIALS_COOPERJATY: BagMaterial[] = [
 export const FLORESTOPOLIS_COMPANY_SETTING = 'odoo_company_florestopolis_id';
 export const SERTANOPOLIS_COMPANY_SETTING = 'odoo_company_sertanopolis_id';
 export const COOPERJATY_COMPANY_SETTING = 'odoo_company_cooperjaty_id';
+export const ROLANDIA_COMPANY_SETTING = 'odoo_company_rolandia_id';
 
 /** Ids Odoo conhecidos (fallback se o setting ainda não foi gravado). */
 const FLORESTOPOLIS_COMPANY_ID_FALLBACK = 22;
 const SERTANOPOLIS_COMPANY_ID_FALLBACK = 9;
 const COOPERJATY_COMPANY_ID_FALLBACK = 12;
+const ROLANDIA_COMPANY_ID_FALLBACK = 16;
 
 /** Siglas exclusivas + Recicla por último (códigos compartilhados mantêm o nome da Recicla). */
 const BY_CODE = new Map<string, BagMaterial>([
   ...BAG_MATERIALS_COOPERJATY.map((item) => [item.code, item] as const),
   ...BAG_MATERIALS_SERTANOPOLIS.map((item) => [item.code, item] as const),
   ...BAG_MATERIALS_FLORESTOPOLIS.map((item) => [item.code, item] as const),
+  ...BAG_MATERIALS_ROLANDIA.map((item) => [item.code, item] as const),
   ...BAG_MATERIALS.map((item) => [item.code, item] as const),
 ]);
 
@@ -140,6 +157,8 @@ export function materialsForCompany(companyId: number): BagMaterial[] {
   if (companyId === sertaId) return BAG_MATERIALS_SERTANOPOLIS;
   const jatyId = Number(getCooperjatyCompanyId() || COOPERJATY_COMPANY_ID_FALLBACK);
   if (companyId === jatyId) return BAG_MATERIALS_COOPERJATY;
+  const rolandiaId = Number(getRolandiaCompanyId() || ROLANDIA_COMPANY_ID_FALLBACK);
+  if (companyId === rolandiaId) return BAG_MATERIALS_ROLANDIA;
   return BAG_MATERIALS;
 }
 
@@ -153,6 +172,10 @@ export function getSertanopolisCompanyId(): string {
 
 export function getCooperjatyCompanyId(): string {
   return String(getSetting(COOPERJATY_COMPANY_SETTING) || '').trim();
+}
+
+export function getRolandiaCompanyId(): string {
+  return String(getSetting(ROLANDIA_COMPANY_SETTING) || '').trim();
 }
 
 export type BagCount = {
