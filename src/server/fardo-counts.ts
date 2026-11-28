@@ -1,6 +1,6 @@
 import { BAG_MATERIALS, findBagMaterial, lookupBagType, type BagMaterial } from './bag-materials.js';
 
-/** Padrão Produção de Fardos da Reciclabrasil. */
+/** Padrão Converter BAGS para Fardos da Reciclabrasil (antes: Produção de Fardos). */
 export const FARDO_PRODUCTION_PRESET_ID = 'be8a792d-97e5-4d71-a54d-c3e51e667ed5';
 
 export const FARDO_QUESTION =
@@ -22,7 +22,8 @@ export function isFardoProductionPreset(preset: { id?: string; kind?: string; na
   if (preset.kind && preset.kind !== 'production') return false;
   if (String(preset.id || '') === FARDO_PRODUCTION_PRESET_ID) return true;
   const name = fold(preset.name || '');
-  return name.includes('producao') && name.includes('fardo');
+  if (!name.includes('fardo')) return false;
+  return name.includes('producao') || name.includes('converter') || (name.includes('bag') && name.includes('convert'));
 }
 
 /** “10 bags de pts … 1 fardo de pts”. O fardo fica no mesmo tipo do bag. */

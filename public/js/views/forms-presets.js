@@ -1,5 +1,6 @@
 import { api } from '../api.js';
 import { escapeHtml, toast } from '../ui.js';
+import { findFardoPresets, foldName } from './forms-fardo.js';
 import {
   closeEditorModal,
   ensureFormsModal,
@@ -12,7 +13,8 @@ export async function loadPresets(kind) {
   return Array.isArray(data.items) ? data.items : [];
 }
 
-export function presetsToolbarHtml(presets) {
+export function presetsToolbarHtml(presets, kind = '') {
+  if (kind === 'production') return productionPresetsToolbarHtml(presets);
   const buttons = (presets || [])
     .map(
       (preset) =>
@@ -20,6 +22,102 @@ export function presetsToolbarHtml(presets) {
     )
     .join('');
   return `${buttons}<button class="btn-ghost" type="button" data-presets>Padrões</button>`;
+}
+
+function productionPresetsToolbarHtml(presets) {
+  const { comBags, semBags } = findFardoPresets(presets);
+  const used = new Set([comBags?.id, semBags?.id].filter(Boolean));
+  const parts = [];
+  if (comBags) {
+    parts.push(
+      `<button class="btn forms-preset-btn" type="button" data-preset-new="${escapeHtml(comBags.id)}" title="Converter bags em fardos${comBags.bot_enabled ? ' · Bot ativo' : ''}">Fardos com bags${comBags.bot_enabled ? ' · Bot' : ''}</button>`,
+    );
+  } else {
+    parts.push(
+      `<button class="btn forms-preset-btn" type="button" data-fardo-flow-new="converter_bags" title="Criar registro convertendo bags em fardos">Fardos com bags</button>`,
+    );
+  }
+  if (semBags) {
+    parts.push(
+      `<button class="btn forms-preset-btn" type="button" data-preset-new="${escapeHtml(semBags.id)}" title="Registrar fardos sem consumir bags${semBags.bot_enabled ? ' · Bot ativo' : ''}">Fardos sem bags${semBags.bot_enabled ? ' · Bot' : ''}</button>`,
+    );
+  } else {
+    parts.push(
+      `<button class="btn forms-preset-btn" type="button" data-fardo-flow-new="entrega_direta" title="Criar registro de fardos sem bags">Fardos sem bags</button>`,
+    );
+  }
+  const others = (presets || []).filter((preset) => !used.has(preset.id));
+  for (const preset of others) {
+    parts.push(
+      `<button class="btn-ghost forms-preset-btn" type="button" data-preset-new="${escapeHtml(preset.id)}" title="Novo com padrão ${escapeHtml(preset.name)}${preset.bot_enabled ? ' · Bot ativo' : ''}">${escapeHtml(preset.name)}${preset.bot_enabled ? ' · Bot' : ''}</button>`,
+    );
+  }
+  parts.push(`<button class="btn-ghost" type="button" data-presets>Padrões</button>`);
+  return parts.join('');
+}
+
+/** Modal rápido: novo padrão de Prensagem com bags / sem bags / em branco. */
+export function openProductionPresetChooser(root, hooks) {
+  ensureFormsModal(root);
+  const editor = getFormsEditor(root);
+  if (!editor) {
+    toast('Não foi possível abrir o seletor de padrões');
+    return;
+  }
+  editor.innerHTML = `
+    <div class="card-head forms-editor-head">
+      <div>
+        <h2 id="forms-editor-title">Novo padrão de Prensagem</h2>
+        <p class="muted">Escolha o fluxo de fardos. O Bot usa o mesmo padrão no WhatsApp.</p>
+      </div>
+      <div class="row">
+        <button class="btn-ghost" type="button" data-close-modal>Fechar</button>
+      </div>
+    </div>
+    <div class="forms-presets-list">
+      <div class="forms-presets-row">
+        <div>
+          <strong>Fardos com bags</strong>
+          <span class="muted">Converter BAGS para Fardos — consome bags e gera fardos</span>
+        </div>
+        <div class="row">
+          <button class="btn" type="button" data-fardo-preset-template="converter_bags">Usar este</button>
+        </div>
+      </div>
+      <div class="forms-presets-row">
+        <div>
+          <strong>Fardos sem bags</strong>
+          <span class="muted">Entrega de Fardos — registra só a produção de fardos</span>
+        </div>
+        <div class="row">
+          <button class="btn" type="button" data-fardo-preset-template="entrega_direta">Usar este</button>
+        </div>
+      </div>
+      <div class="forms-presets-row">
+        <div>
+          <strong>Em branco</strong>
+          <span class="muted">Prensagem genérica (ordem de fabricação livre)</span>
+        </div>
+        <div class="row">
+          <button class="btn-ghost" type="button" data-fardo-preset-template="blank">Criar</button>
+        </div>
+      </div>
+    </div>`;
+  openEditorModal(root);
+  editor.querySelector('[data-close-modal]')?.addEventListener('click', () => closeEditorModal(root));
+  editor.querySelectorAll('[data-fardo-preset-template]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const template = btn.getAttribute('data-fardo-preset-template') || 'blank';
+      hooks.openPresetFromTemplate(template);
+    });
+  });
+}
+
+export function productionPresetDisplayName(preset) {
+  const flow = foldName(preset?.name || '');
+  if (flow.includes('converter') || (flow.includes('bag') && flow.includes('fardo'))) return 'Fardos com bags';
+  if (flow.includes('entrega') && flow.includes('fardo')) return 'Fardos sem bags';
+  return preset?.name || 'Padrão';
 }
 
 /** Mesma regra do servidor (statusesFor): Inventário não tem status. */
@@ -151,6 +249,10 @@ export function openPresetsManager(root, kind, presets, hooks) {
     openEditorModal(root);
     editor.querySelector('[data-close-modal]')?.addEventListener('click', () => closeEditorModal(root));
     editor.querySelector('[data-preset-create]')?.addEventListener('click', () => {
+      if (kind === 'production' && typeof hooks.openProductionPresetChooser === 'function') {
+        hooks.openProductionPresetChooser();
+        return;
+      }
       hooks.openPresetEditor(null);
     });
     editor.querySelectorAll('[data-preset-edit]').forEach((btn) => {

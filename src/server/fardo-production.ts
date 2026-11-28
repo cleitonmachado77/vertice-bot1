@@ -41,15 +41,19 @@ export async function materializeFardoProduction(input: {
 /** Atualiza a pergunta do padrão e garante Bag e Fardo no Odoo. */
 export async function prepareFardoProduction(): Promise<void> {
   const preset = await getFormPresetById('be8a792d-97e5-4d71-a54d-c3e51e667ed5');
-  if (!preset) throw new Error('Padrão Produção de Fardos não encontrado');
+  if (!preset) throw new Error('Padrão Converter BAGS para Fardos não encontrado');
   const { run } = await import('./db.js');
+  await run(`UPDATE forms_presets SET name = $2, updated_at = NOW() WHERE id = $1`, [
+    preset.id,
+    'Converter BAGS para Fardos',
+  ]);
   const header = { ...preset.header, input_product: 'Bag', input_qty: '', input_uom: 'Unidade' };
   await run(`UPDATE forms_presets SET header_json = $2, updated_at = NOW() WHERE id = $1`, [
     preset.id,
     JSON.stringify(header),
   ]);
   const updated = await getFormPresetById(preset.id);
-  if (!updated) throw new Error('Padrão Produção de Fardos não encontrado');
+  if (!updated) throw new Error('Padrão Converter BAGS para Fardos não encontrado');
   const { syncFormsBotQuestionnaire } = await import('./forms-bot.js');
   await syncFormsBotQuestionnaire(updated);
   const companyId = Number(updated.company_odoo_id || 0);
@@ -72,6 +76,7 @@ async function saveFardoRun(input: {
     production_date: input.occurrenceDate || input.previous?.header.production_date || '',
     bag_type: input.item.code,
     bag_type_name: input.item.name,
+    fardo_flow: 'converter_bags',
     source: 'bot',
     source_cycle_id: input.cycleId,
     source_preset_id: input.sourcePresetId,

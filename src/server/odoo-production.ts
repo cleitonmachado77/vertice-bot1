@@ -237,6 +237,11 @@ async function writeHeader(id: string, header: Record<string, string>, extra: { 
 /** Envia o documento como mrp.production e aplica a transição pedida no status. */
 export async function pushProductionToOdoo(doc: FormDocument): Promise<FormDocument> {
   try {
+    const flow = String(doc.header.fardo_flow || '').trim();
+    if (flow === 'entrega_direta') {
+      const { pushFardoEntregaFromDoc } = await import('./fardo-entrega.js');
+      return await pushFardoEntregaFromDoc(doc);
+    }
     return await registerProduction(doc);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

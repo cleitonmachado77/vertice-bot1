@@ -11,11 +11,19 @@ import {
   openEditorModal,
 } from './forms-modal.js';
 import {
+  applyFardoDraftDefaults,
+  fardoEditorSubtitle,
+  fardoFlowLabel,
+  fardoFlowOf,
+  fardoPresetTemplates,
+} from './forms-fardo.js';
+import {
   collectPresetVisible,
   draftFromPreset,
   loadPresets,
   normalizePresetVisible,
   openPresetsManager,
+  openProductionPresetChooser,
   presetsToolbarHtml,
 } from './forms-presets.js';
 import { renderRsuDashboard, stopHubDashboard } from './hub.js';
@@ -51,7 +59,7 @@ const TABS = [
     label: 'Prensagem',
     icon: 'factory',
     formKind: 'production',
-    description: 'Registros de produção e prensagem de fardos',
+    description: 'Prensagem de fardos com bags (conversão) ou sem bags (produção direta)',
   },
   {
     id: 'entrega',
@@ -242,8 +250,9 @@ function topActions(tabId, presets = []) {
   const siteOnlyNote = tab?.siteOnly
     ? `<span class="muted forms-site-only-note">Somente no site — não aparece no Bot</span>`
     : '';
+  const formKind = formKindFromTab(tabId);
   return `
-    ${presetsToolbarHtml(presets)}
+    ${presetsToolbarHtml(presets, formKind)}
     ${siteOnlyNote}
     <button class="btn-ghost" type="button" data-export-all>Exportar Excel</button>
     <button class="btn" type="button" data-new>Novo registro</button>`;
@@ -601,6 +610,13 @@ function bindShellActions(root, kind, schema, catalog, items, token, presets = [
     });
   });
 
+  root.querySelectorAll('[data-fardo-flow-new]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const flow = button.getAttribute('data-fardo-flow-new') || '';
+      openNewFardoRecord(root, kind, schema, catalog, items, token, flow);
+    });
+  });
+
   root.querySelector('[data-presets]')?.addEventListener('click', () => {
     showPresetsManager(root, kind, schema, catalog, items, token, presets);
   });
@@ -758,11 +774,78 @@ function showPresetsManager(root, kind, schema, catalog, items, token, presets) 
         showPresetsManager(root, kind, schema, catalog, items, token, next);
       });
     },
+    openProductionPresetChooser: () => {
+      openProductionPresetChooser(root, {
+        openPresetFromTemplate: (templateKey) => {
+          openPresetEditorFromFardoTemplate(root, kind, schema, catalog, items, token, templateKey);
+        },
+      });
+    },
     onPresetsChanged: async (list) => {
       ensureFormsShell(root, listSession.tabId || kind, list);
       bindShellActions(root, kind, schema, catalog, items, token, list);
     },
   });
+}
+
+function openNewFardoRecord(root, kind, schema, catalog, items, token, flow) {
+  const templates = fardoPresetTemplates();
+  const template = templates[flow];
+  if (!template) {
+    openNewRecord(root, kind, schema, catalog, items, token);
+    return;
+  }
+  openNewFromPreset(root, kind, schema, catalog, items, token, {
+    name: template.name,
+    title: template.title,
+    status: template.status,
+    header: { ...template.header },
+    lines: template.lines.map((line) => ({ values: { ...line.values } })),
+    visible: {
+      ...template.visible,
+      header: [...template.visible.header],
+      lines: [...template.visible.lines],
+    },
+  });
+}
+
+function openPresetEditorFromFardoTemplate(root, kind, schema, catalog, items, token, templateKey) {
+  const onSaved = async () => {
+    const next = await applyPresetsToolbar(root, kind, schema, catalog, items, token);
+    showPresetsManager(root, kind, schema, catalog, items, token, next);
+  };
+  if (templateKey === 'blank') {
+    openPresetEditor(root, kind, schema, catalog, items, token, null, onSaved);
+    return;
+  }
+  const template = fardoPresetTemplates()[templateKey];
+  if (!template) {
+    toast('Modelo de padrão não encontrado');
+    return;
+  }
+  openPresetEditor(
+    root,
+    kind,
+    schema,
+    catalog,
+    items,
+    token,
+    {
+      name: template.name,
+      title: template.title,
+      status: template.status,
+      header: { ...template.header },
+      lines: template.lines.map((line) => ({ values: { ...line.values } })),
+      visible: {
+        ...template.visible,
+        header: [...template.visible.header],
+        lines: [...template.visible.lines],
+      },
+      bot_enabled: false,
+      bot_rules: {},
+    },
+    onSaved,
+  );
 }
 
 function openNewFromPreset(root, kind, schema, catalog, items, token, preset) {
@@ -771,7 +854,23 @@ function openNewFromPreset(root, kind, schema, catalog, items, token, preset) {
     return;
   }
   const fields = schema.fields[kind];
+  const flow = fardoFlowOf(preset);
   const { draft, hide } = draftFromPreset(blankDraft(kind, schema), preset, fields);
+  applyFardoDraftDefaults(draft, flow);
+  if (flow === 'entrega_direta') {
+    // Quantidade fica no cabeçalho; linhas são preenchidas no save.
+    hide.header = hide.header || new Set();
+    hide.header.add('input_product');
+    const lineKeys = new Set((fields.lines || []).map((field) => field.key));
+    hide.lines = [lineKeys];
+  }
+  if (flow === 'converter_bags') {
+    hide.header = hide.header || new Set();
+    // Produto de entrada fica fixo em Bag; o usuário informa tipo + qtds.
+    if (String(draft.header.input_product || '').toLowerCase() === 'bag') {
+      hide.header.add('input_product');
+    }
+  }
   ensureFormsModal(root);
   const editor = getFormsEditor(root);
   if (!editor) {
@@ -779,10 +878,13 @@ function openNewFromPreset(root, kind, schema, catalog, items, token, preset) {
     return;
   }
   root.querySelectorAll('.forms-list-item.active').forEach((el) => el.classList.remove('active'));
+  const flowLabel = fardoFlowLabel(flow);
   editor.innerHTML = editorHtml(draft, fields, kind, catalog, schema, {
     hide,
-    title: `Novo · ${preset.name}`,
-    subtitle: 'Só os campos marcados como “Mostrar” no padrão aparecem aqui. Salve para criar.',
+    title: flowLabel ? `Novo · Fardos ${flowLabel}` : `Novo · ${preset.name}`,
+    subtitle:
+      fardoEditorSubtitle(flow) ||
+      'Só os campos marcados como “Mostrar” no padrão aparecem aqui. Salve para criar.',
   });
   openEditorModal(root);
   bindEditor(root, kind, schema, catalog, items, draft, token);
@@ -823,7 +925,11 @@ function openPresetEditor(root, kind, schema, catalog, items, token, preset, onS
     botTemplateId: preset?.bot_template_id || '',
     botContactId: preset?.bot_contact_id || '',
     botRules: preset?.bot_rules || {},
-    title: preset ? `Editar padrão · ${preset.name}` : 'Novo padrão',
+    title: preset?.id
+      ? `Editar padrão · ${preset.name}`
+      : preset?.name
+        ? `Novo padrão · ${preset.name}`
+        : 'Novo padrão',
     subtitle:
       'Marque “Mostrar” nos campos que o formulário (e o Bot) devem usar. Valores preenchidos viram padrão e não são perguntados no WhatsApp.',
   });
@@ -1266,11 +1372,19 @@ function listRow(item, activeId, schema, kind) {
       : kind === 'sale'
         ? String(item.header?.customer || '').trim()
         : '';
+  const fardoFlow = kind === 'production' ? fardoFlowOf(item.header || {}) : '';
+  const fardoTag = fardoFlowLabel(fardoFlow);
   const headline =
     kind === 'product'
       ? item.title || item.header?.name || 'Sem título'
       : kind === 'production'
-        ? [item.title || 'Prensagem', productionInputLabel(item.header)].filter(Boolean).join(' · ')
+        ? [
+            item.title || (fardoTag ? `Fardos ${fardoTag}` : 'Prensagem'),
+            item.header?.bag_type ? String(item.header.bag_type).toUpperCase() : '',
+            productionInputLabel(item.header),
+          ]
+            .filter(Boolean)
+            .join(' · ')
       : ref && partner
         ? `${ref} · ${partner}`
         : ref || partner || item.title || 'Sem título';
@@ -1281,10 +1395,11 @@ function listRow(item, activeId, schema, kind) {
   } else if (item.header?.odoo_id && !ref) odoo = ` · Odoo #${item.header.odoo_id}`;
   const locked = isOrderLocked(item, kind) ? ' · bloqueado' : '';
   const botTag = String(item.header?.source || '') === 'bot' ? ' · Bot' : '';
+  const flowTag = fardoTag ? ` · ${fardoTag}` : '';
   const linesPreview = listLinesPreview(item, kind);
-  const fallbackMeta = `${kind === 'product' ? '' : `${statusLabel(schema, kind, item.status)} · `}${when}${odoo}${locked}${botTag}`;
+  const fallbackMeta = `${kind === 'product' ? '' : `${statusLabel(schema, kind, item.status)} · `}${when}${odoo}${locked}${botTag}${flowTag}`;
   const subtitle = linesPreview
-    ? `${linesPreview}${botTag}`
+    ? `${linesPreview}${botTag}${flowTag}`
     : fallbackMeta;
   return `
     <button class="forms-list-item${item.id === activeId ? ' active' : ''}" type="button" data-open="${escapeHtml(item.id)}">
@@ -1310,7 +1425,10 @@ function wrapPresetField(innerHtml, showName, checked) {
 function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
   const isPreset = options.mode === 'preset';
   const isNew = !doc?.id;
-  const hasLines = (fields.lines || []).length > 0;
+  const docFlow = fardoFlowOf(doc?.header || {});
+  const hasLines =
+    (fields.lines || []).length > 0 &&
+    !(options.hideLinesSection || (!isPreset && docFlow === 'entrega_direta'));
   const statuses = statusOptions(schema, kind);
   const currentStatus = String(doc.header?.odoo_state || doc.status || 'draft');
   const confirmed = !isNew && !isPreset && isOrderLocked(doc, kind);
@@ -1332,6 +1450,7 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
     options.title || (isPreset ? 'Padrão' : isNew ? 'Novo registro' : 'Editar registro');
   const subtitle =
     options.subtitle ||
+    fardoEditorSubtitle(docFlow) ||
     (kind === 'production' && !isPreset
       ? confirmed
         ? 'Ordem de produção concluída/cancelada no Odoo — não pode ser alterada. Para desfazer, use “Desmontar” na ordem no Odoo.'
@@ -1424,6 +1543,15 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
   const saleSegmentHidden =
     !isPreset && kind === 'sale' && saleSegment
       ? `<input type="hidden" name="h_sale_segment" value="${escapeHtml(saleSegment)}" />`
+      : '';
+  const fardoFlowValue = docFlow || String(doc.header?.fardo_flow || '').trim();
+  const fardoFlowHidden =
+    kind === 'production' && fardoFlowValue
+      ? `<input type="hidden" name="h_fardo_flow" value="${escapeHtml(fardoFlowValue)}" />`
+      : '';
+  const bagTypeField =
+    kind === 'production' && fardoFlowValue && !isPreset
+      ? bagTypeSelectHtml(doc.header?.bag_type || '', catalog, fardoFlowValue)
       : '';
   const hideBotPanel = isPreset && listSession.segment === 'vendas';
   const botPanelHtml = hideBotPanel
@@ -1529,17 +1657,23 @@ function editorHtml(doc, fields, kind, catalog, schema, options = {}) {
       </div>
       ${isPreset ? '' : `${sourceBadgeHtml(doc)}${syncBadgeHtml(doc)}`}
       ${saleSegmentHidden}
+      ${fardoFlowHidden}
       ${titleBlock}
       ${statusControl}
       ${hiddenHeaderHtml}
       ${
-        visibleHeader.length
+        visibleHeader.length || bagTypeField
           ? `<div class="forms-section">
         <h2>Dados principais</h2>
         <div class="grid-2">
+          ${bagTypeField}
           ${visibleHeader
             .map((field) => {
-              const input = headerInput(field, doc.header?.[field.key] || '', kind);
+              const input = headerInput(
+                relabelProductionField(field, docFlow),
+                doc.header?.[field.key] || '',
+                kind,
+              );
               if (!isPreset) return input;
               return wrapPresetField(input, `show_h_${field.key}`, showHeaderSet.has(field.key));
             })
@@ -1597,7 +1731,44 @@ function isProductionLocked(doc) {
 function productionInputLabel(header = {}) {
   const qty = numberOf(header.input_qty);
   if (qty <= 0) return '';
+  const flow = fardoFlowOf(header);
+  if (flow === 'entrega_direta') {
+    return `${qty.toLocaleString('pt-BR')} fardo`.replace(/\s+/g, ' ');
+  }
   return `${qty.toLocaleString('pt-BR')} ${header.input_uom || ''} de ${header.input_product || 'entrada'}`.replace(/\s+/g, ' ');
+}
+
+function relabelProductionField(field, flow) {
+  if (!flow || !field) return field;
+  if (flow === 'entrega_direta' && field.key === 'input_qty') {
+    return { ...field, label: 'Quantidade de fardos', placeholder: 'ex.: 3' };
+  }
+  if (flow === 'converter_bags' && field.key === 'input_qty') {
+    return { ...field, label: 'Quantidade de bags', placeholder: 'ex.: 10' };
+  }
+  return field;
+}
+
+function bagTypeSelectHtml(current, catalog, flow) {
+  const materials = Array.isArray(catalog?.bagMaterials) ? catalog.bagMaterials : [];
+  const options = materials.length
+    ? materials
+        .map(
+          (item) =>
+            `<option value="${escapeHtml(item.code)}"${item.code === String(current || '').toUpperCase() ? ' selected' : ''}>${escapeHtml(`${item.code} — ${item.name}`)}</option>`,
+        )
+        .join('')
+    : `<option value="${escapeHtml(String(current || '').toUpperCase())}">${escapeHtml(String(current || 'Sem tipos cadastrados'))}</option>`;
+  const hint =
+    flow === 'entrega_direta'
+      ? 'Tipo do fardo produzido'
+      : 'Tipo do bag/fardo (mesma sigla nos dois)';
+  return `<label>${escapeHtml(hint)} *
+      <select name="h_bag_type" required>
+        <option value="">Selecione…</option>
+        ${options}
+      </select>
+    </label>`;
 }
 
 /** Unidade do Odoo (catálogo uom: raiz da árvore + fator), aceitando plural (“bags” → “Bag”). */
@@ -2378,7 +2549,25 @@ function collectPayload(form, fields) {
   }
   const saleSegment = String(data.get('h_sale_segment') || '').trim();
   if (saleSegment) header.sale_segment = saleSegment;
-  const lines = [...form.querySelectorAll('.forms-line')].map((node) => {
+  const fardoFlow = String(data.get('h_fardo_flow') || '').trim();
+  if (fardoFlow) header.fardo_flow = fardoFlow;
+  const bagType = String(data.get('h_bag_type') || '').trim().toUpperCase();
+  if (bagType) {
+    header.bag_type = bagType;
+    const selected = form.querySelector('[name="h_bag_type"]')?.selectedOptions?.[0];
+    const label = String(selected?.textContent || '');
+    const namePart = label.includes('—') ? label.split('—').slice(1).join('—').trim() : '';
+    if (namePart) header.bag_type_name = namePart;
+  }
+  if (header.fardo_flow === 'entrega_direta') {
+    header.input_product = 'Fardo';
+    header.input_uom = header.input_uom || 'Unidade';
+  }
+  if (header.fardo_flow === 'converter_bags') {
+    header.input_product = header.input_product || 'Bag';
+    header.input_uom = header.input_uom || 'Unidade';
+  }
+  let lines = [...form.querySelectorAll('.forms-line')].map((node) => {
     const values = {};
     node.querySelectorAll('[data-line-key]').forEach((input) => {
       values[input.getAttribute('data-line-key')] = input.value || '';
@@ -2388,6 +2577,22 @@ function collectPayload(form, fields) {
       values,
     };
   });
+  if (header.fardo_flow === 'entrega_direta') {
+    const qty = String(header.input_qty || '').trim();
+    if (!lines.length) {
+      lines = [{ values: { product: 'Fardo', quantity: qty, uom: 'Unidade' } }];
+    } else {
+      lines = lines.map((line, index) => ({
+        ...line,
+        values: {
+          ...line.values,
+          product: 'Fardo',
+          uom: line.values.uom || 'Unidade',
+          quantity: index === 0 && qty ? qty : line.values.quantity,
+        },
+      }));
+    }
+  }
   return {
     title: String(data.get('title') || ''),
     status: String(data.get('status') || 'draft'),

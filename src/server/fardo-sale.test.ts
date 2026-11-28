@@ -33,11 +33,11 @@ test('sem estoque o fardo não entra na venda', () => {
   assert.match(checked.missing[0], /não há fardo/);
 });
 
-test('entrega de fardos pergunta o cliente e o peso do fardo em estoque', () => {
+test('venda de fardos pergunta o cliente e o peso do fardo em estoque', () => {
   const built = buildFormsBotQuestions({
     id: FARDO_DELIVERY_PRESET_ID,
     kind: 'sale',
-    name: 'Entrega de Fardos',
+    name: 'Venda de Fardos',
     header: { customer: '' },
     lines: [],
     visible: { title: true, status: false, header: ['customer'], lines: ['product', 'quantity', 'uom'] },

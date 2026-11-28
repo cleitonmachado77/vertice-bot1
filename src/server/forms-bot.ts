@@ -12,6 +12,7 @@ import {
   FORMS_BOT_LINES_MORE_FIELD,
   FARDO_RUN_FIELD,
   FARDO_SALE_FIELD,
+  FARDO_ENTREGA_FIELD,
   CONFIRM_QUESTION_BODY,
   FORMS_BOT_CONFIRM_FIELD,
   formsBotQuestionnaireId,
@@ -21,6 +22,11 @@ import { materializeBagSeparation } from './bag-separation.js';
 import { BAG_COUNT_QUESTION, ensureBagMaterials, isBagSeparationPreset } from './bag-materials.js';
 import { materializeFardoProduction } from './fardo-production.js';
 import { FARDO_QUESTION, isFardoProductionPreset } from './fardo-counts.js';
+import {
+  FARDO_ENTREGA_QUESTION,
+  isFardoEntregaPreset,
+  materializeFardoEntrega,
+} from './fardo-entrega.js';
 import { FARDO_SALE_QUESTION, isFardoDeliveryPreset } from './fardo-sale.js';
 import { materializeFardoSale } from './fardo-sale-order.js';
 import { planBotLines } from './forms-bot-lines.js';
@@ -135,6 +141,12 @@ export function buildFormsBotQuestions(preset: FormPreset): {
   questions: { id?: string; body: string; expectedType: string; exportField: string; fixedValue?: string }[];
   defaultValues: Record<string, string>;
 } {
+  if (isFardoEntregaPreset(preset)) {
+    return {
+      questions: [{ body: FARDO_ENTREGA_QUESTION, expectedType: 'any', exportField: FARDO_ENTREGA_FIELD }],
+      defaultValues: { input_product: 'Fardo', input_uom: 'Unidade' },
+    };
+  }
   if (isFardoProductionPreset(preset)) {
     return {
       questions: [{ body: FARDO_QUESTION, expectedType: 'any', exportField: FARDO_RUN_FIELD }],
@@ -325,7 +337,12 @@ export async function syncFormsBotQuestionnaire(preset: FormPreset): Promise<Que
       [questionnaireId, latestRevision.id, new Date().toISOString()],
     );
   }
-  if (isBagSeparationPreset(preset) || isFardoProductionPreset(preset) || isFardoDeliveryPreset(preset)) {
+  if (
+    isBagSeparationPreset(preset) ||
+    isFardoProductionPreset(preset) ||
+    isFardoEntregaPreset(preset) ||
+    isFardoDeliveryPreset(preset)
+  ) {
     const companyId = Number(preset.company_odoo_id || 0);
     if (companyId) {
       void ensureBagMaterials(companyId).catch((error) => {
@@ -514,7 +531,8 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
     previous &&
     questionnaire.formKind === 'production' &&
     isProductionLocked(previous) &&
-    !isFardoProductionPreset({ id: questionnaire.sourcePresetId, kind: questionnaire.formKind })
+    !isFardoProductionPreset({ id: questionnaire.sourcePresetId, kind: questionnaire.formKind }) &&
+    !isFardoEntregaPreset({ id: questionnaire.sourcePresetId, kind: questionnaire.formKind })
   ) {
     // Ordem concluída/cancelada não muda: a correção é “Desmontar” no Odoo + nova fabricação.
     console.warn(`forms-bot: fabricação ${previous.id} já lançada no estoque — ciclo ${cycleId} não altera`);
@@ -548,6 +566,20 @@ export async function materializeFormsFromCycle(cycleId: string): Promise<FormDo
       occurrenceDate: cycle.occurrence_date,
       customerRaw: String(customer?.answer_text || ''),
       answer: String(sale?.answer_text || ''),
+    });
+  }
+  if (isFardoEntregaPreset(preset)) {
+    const answer = answers.find((row) =>
+      questionnaire.questions.some(
+        (question) => question.id === row.question_id && question.export_field === FARDO_ENTREGA_FIELD,
+      ),
+    );
+    return materializeFardoEntrega({
+      cycleId,
+      companyOdooId,
+      sourcePresetId: questionnaire.sourcePresetId,
+      occurrenceDate: cycle.occurrence_date,
+      answer: String(answer?.answer_text || ''),
     });
   }
   if (isFardoProductionPreset(preset)) {

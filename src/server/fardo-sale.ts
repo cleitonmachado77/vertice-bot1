@@ -12,7 +12,7 @@ import { odooExecuteKw } from './odoo-client.js';
 import { missingQuestions, type CycleAnswer } from './questionnaire-cycles.js';
 import type { Questionnaire, QuestionnaireQuestion } from './questionnaires.js';
 
-/** Padrão Entrega de Fardos da Reciclabrasil. */
+/** Padrão Venda de Fardos da Reciclabrasil (antes: Entrega de Fardos — saída com peso). */
 export const FARDO_DELIVERY_PRESET_ID = 'ff297445-83fb-4dc2-89f8-3b30976a5d95';
 
 export const FARDO_SALE_QUESTION = 'Qual fardo do estoque e qual o peso? (ex.: pts 87 kg)';
@@ -32,7 +32,9 @@ export function isFardoDeliveryPreset(preset: { id?: string; kind?: string; name
   if (preset.kind && preset.kind !== 'sale') return false;
   if (String(preset.id || '') === FARDO_DELIVERY_PRESET_ID) return true;
   const name = fold(preset.name || '');
-  return name.includes('entrega') && name.includes('fardo');
+  if (!name.includes('fardo')) return false;
+  // Nome antigo “Entrega de Fardos” (sale) ainda conta até a migração para “Venda”.
+  return name.includes('venda') || name.includes('entrega');
 }
 
 /** “pts 87 kg” ou “1 plástico seco 87 kg”. O peso é o que foi pesado naquele fardo. */
@@ -156,7 +158,7 @@ export async function answerFardoSale(input: {
       kind: 'answers',
       accepted: [{ questionId: question.id, text: markNewValue(JSON.stringify({ understood: available })), type: 'text' }],
       summary: text,
-      detail: 'entrega de fardos parcial',
+      detail: 'venda de fardos parcial',
     };
   }
   const summary = available.map((item) => `${item.fardos} fardo ${item.code}, ${item.weight} kg`).join(', ');
@@ -170,7 +172,7 @@ export async function answerFardoSale(input: {
       },
     ],
     summary,
-    detail: 'entrega de fardos',
+    detail: 'venda de fardos',
   };
 }
 

@@ -3,6 +3,7 @@ import { headerFieldsFor, lineFieldsFor, type FormKind } from './forms-fields.js
 export const FORMS_BOT_LINES_FIELD = '__lines__';
 export const FARDO_RUN_FIELD = 'fardo_run';
 export const FARDO_SALE_FIELD = 'fardo_sale';
+export const FARDO_ENTREGA_FIELD = 'fardo_entrega';
 /** Confirmação: mais itens ou encerrar linhas do Forms Bot. */
 export const FORMS_BOT_LINES_MORE_FIELD = '__lines_more__';
 /** Confirmação final (1 confirmar, 2 corrigir) quando o padrão pede revisão antes de registrar. */
@@ -110,7 +111,7 @@ export function isFormsBotExportField(kind: FormKind, exportField: string): bool
   if (key === FORMS_BOT_LINES_FIELD || key === FORMS_BOT_LINES_MORE_FIELD) {
     return lineFieldsFor(kind).length > 0;
   }
-  if (key === FARDO_RUN_FIELD) return kind === 'production';
+  if (key === FARDO_RUN_FIELD || key === FARDO_ENTREGA_FIELD) return kind === 'production';
   if (key === FARDO_SALE_FIELD) return kind === 'sale';
   if (key === FORMS_BOT_CONFIRM_FIELD) return true;
   return (

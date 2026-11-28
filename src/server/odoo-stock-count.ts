@@ -1,4 +1,4 @@
-import { bagVariantRef, ensureBagMaterials } from './bag-materials.js';
+import { bagVariantRef, ensureBagMaterials, fardoVariantRef } from './bag-materials.js';
 import { run } from './db.js';
 import type { FormDocument } from './forms.js';
 import { odooCreate, odooExecuteKw, odooSearchRead, odooWrite } from './odoo-client.js';
@@ -49,6 +49,19 @@ export async function addBagTypeStock(
   if (!bagVariantRef(companyId, code)) await ensureBagMaterials(companyId);
   const ref = bagVariantRef(companyId, code);
   if (!ref) throw new Error(`Tipo ${code} não está no produto Bag`);
+  const balance = await applyInventoryDelta(companyId, ref.variantId, add);
+  return { ...ref, balance };
+}
+
+/** Soma unidades no tipo do produto Fardo (variante da sigla), sem consumir Bag. */
+export async function addFardoTypeStock(
+  companyId: number,
+  code: string,
+  add: number,
+): Promise<{ templateId: number; variantId: number; balance: number }> {
+  if (!fardoVariantRef(companyId, code)) await ensureBagMaterials(companyId);
+  const ref = fardoVariantRef(companyId, code);
+  if (!ref) throw new Error(`Tipo ${code} não está no produto Fardo`);
   const balance = await applyInventoryDelta(companyId, ref.variantId, add);
   return { ...ref, balance };
 }

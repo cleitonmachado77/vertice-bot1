@@ -15,6 +15,7 @@ import {
 } from '../src/server/forms-presets.js';
 import { createLocalContact, findContactByPhone } from '../src/server/local-contact.js';
 import { normalizeWhatsappPhone } from '../src/server/phone.js';
+import { canonicalRsuPresetName, RSU_SOURCE_PRESET_IDS } from '../src/server/rsu-fardo-menu.js';
 
 const COMPANY_ID = '22';
 const SEND_TIME = '17:00';
@@ -23,13 +24,8 @@ const ERICA_NAME = 'Erica - ATAF - Florestopolis';
 /** Celular BR: DDD 43 + 9º dígito + 9604-3977. */
 const ERICA_PHONE_RAW = '43 99604-3977';
 
-/** Padrões da Recicla Brasil (empresa 7) a espelhar. */
-const SOURCE_PRESET_IDS = [
-  '34673f79-a413-4832-940e-7f6427c9e070', // Separação de Bags
-  'be8a792d-97e5-4d71-a54d-c3e51e667ed5', // Produção de Fardos
-  'ff297445-83fb-4dc2-89f8-3b30976a5d95', // Entrega de Fardos
-  '368672c7-ea66-46d5-ba6f-123753f4683a', // Recebimento de Materiais
-] as const;
+/** Padrões da Recicla Brasil (empresa 7) a espelhar — formato canônico RSU. */
+const SOURCE_PRESET_IDS = RSU_SOURCE_PRESET_IDS;
 
 loadEnv();
 await initDatabase();
@@ -68,9 +64,10 @@ try {
       continue;
     }
 
+    const presetName = canonicalRsuPresetName(sourceId, source.name);
     const payload: FormPresetInput = {
       kind: source.kind,
-      name: source.name,
+      name: presetName,
       title: source.title,
       status: source.status,
       header: { ...source.header },
@@ -95,7 +92,7 @@ try {
       `SELECT id FROM forms_presets
        WHERE company_odoo_id = $1 AND kind = $2 AND lower(name) = lower($3)
        LIMIT 1`,
-      [COMPANY_ID, source.kind, source.name],
+      [COMPANY_ID, source.kind, presetName],
     );
 
     let saved: FormPreset;

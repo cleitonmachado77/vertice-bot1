@@ -6,6 +6,7 @@ import {
   type BagCount,
 } from './bag-materials.js';
 import { FARDO_PRODUCTION_PRESET_ID, fardoClarification, interpretFardoRuns, type FardoRun } from './fardo-counts.js';
+import { answerFardoEntrega } from './fardo-entrega.js';
 import { answerFardoSale } from './fardo-sale.js';
 import { isFormsBotQuestionnaire } from './forms-bot-agenda.js';
 import {
@@ -309,6 +310,8 @@ export async function tryFormsBotCapture(input: {
   if (bagCapture) return bagCapture;
   const fardoCapture = captureFardoRun(input);
   if (fardoCapture) return fardoCapture;
+  const entregaCapture = await answerFardoEntrega(input);
+  if (entregaCapture) return entregaCapture;
   const saleCapture = await answerFardoSale(input);
   if (saleCapture) return saleCapture;
 
@@ -608,7 +611,7 @@ function captureBagCount(input: {
   };
 }
 
-/** Produção de Fardos: “10 pts, 1 fardo” — o fardo sai no mesmo tipo do bag. */
+/** Converter BAGS para Fardos: “10 pts, 1 fardo” — o fardo sai no mesmo tipo do bag. */
 function captureFardoRun(input: {
   inbound: string;
   questionnaire: Questionnaire;

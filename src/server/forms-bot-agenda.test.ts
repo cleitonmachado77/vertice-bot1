@@ -124,8 +124,8 @@ test('nome do padrão não escolhe a agenda; o número escolhe', () => {
 test('número na oferta escolhe o item da lista, não um formulário já fechado', () => {
   const agenda = [
     item({ id: '1', kind: 'purchase', name: 'Compras · SEPARAÇÃO', sendTime: '08:00' }),
-    item({ id: '2', kind: 'sale', name: 'Fabricação · Produção de Fardos', sendTime: '09:00' }),
-    item({ id: '3', kind: 'sale', name: 'Vendas · Entrega de Fardos', sendTime: '10:00' }),
+    item({ id: '2', kind: 'sale', name: 'Fabricação · Converter BAGS para Fardos', sendTime: '09:00' }),
+    item({ id: '3', kind: 'sale', name: 'Vendas · Venda de Fardos', sendTime: '10:00' }),
     item({ id: '4', kind: 'product', name: 'Inventário · Separação de Bags', sendTime: '11:00' }),
   ];
   const picked = parseFormsBotAgendaIntent('4', agenda, { awaitingOffer: true });

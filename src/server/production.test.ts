@@ -132,7 +132,7 @@ test('padrão de Fabricação: pergunta a entrada (unidade do Odoo junto) e os p
   assert.equal(built.defaultValues.input_uom, 'Bag');
 
   const fardos = buildFormsBotQuestions(
-    preset({ id: FARDO_PRODUCTION_PRESET_ID, name: 'Produção de Fardos' }),
+    preset({ id: FARDO_PRODUCTION_PRESET_ID, name: 'Converter BAGS para Fardos' }),
   );
   assert.deepEqual(
     fardos.questions.map((item) => item.exportField),

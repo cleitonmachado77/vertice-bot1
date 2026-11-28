@@ -41,13 +41,14 @@ function contactSchedules(settings) {
 }
 
 function previewText(settings) {
+  // Formato canônico RSU bag/fardo (mesmos nomes dos padrões / seeds).
   const lines = [
     `Bom dia, Cleiton! ${settings.intro || 'O que deseja fazer hoje?'}`,
     '',
-    '1) Separação — pendente hoje',
-    '2) Separação de Bags — pendente hoje',
-    '3) Produção de Fardos',
-    '4) Entrega de Fardos — em andamento',
+    '1) Separação de Bags',
+    '2) Converter BAGS para Fardos',
+    '3) Entrega de Fardos',
+    '4) Venda de Fardos',
   ];
   if (settings.attendant) lines.push('5) Falar com um atendente');
   lines.push('', 'Responda com o número da opção. Digite *menu* a qualquer momento para voltar aqui.');

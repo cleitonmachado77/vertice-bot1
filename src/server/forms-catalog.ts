@@ -136,6 +136,7 @@ export async function getFormsCatalog(options: { backfill?: boolean } = {}): Pro
   products: CatalogProduct[];
   partners: CatalogPartner[];
   refs: Record<OdooRefType, OdooRefItem[]>;
+  bagMaterials: Array<{ code: string; name: string; category: string }>;
   activeCompanyId: string;
   activeCountryId: string;
 }> {
@@ -166,10 +167,17 @@ export async function getFormsCatalog(options: { backfill?: boolean } = {}): Pro
     uom: odooLabelPt(item.uom),
     category: odooLabelPt(item.category),
   }));
+  const { materialsForCompany } = await import('./bag-materials.js');
+  const bagMaterials = materialsForCompany(Number(companyId || 0) || 0).map((item) => ({
+    code: item.code,
+    name: item.name,
+    category: item.category,
+  }));
   return {
     products: productsPt,
     partners,
     refs,
+    bagMaterials,
     activeCompanyId: companyId,
     activeCountryId: countryId,
   };
